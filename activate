@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+
+_script_path="${BASH_SOURCE[0]:-$0}"
+_project_root="$(cd "$(dirname "${_script_path}")" && pwd)"
+_venv_dir="${_project_root}/venv"
+
+if [[ ! -d "$_venv_dir" ]]; then
+  echo "Missing venv at ${_venv_dir}. Run the generator first." >&2
+  return 1
+fi
+
+# shellcheck disable=SC1090
+. "${_venv_dir}/bin/activate"
+
+export PROJECT_ROOT="${_project_root}"
+export PYTHONPATH="${_project_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
+
+if [[ -f "${_project_root}/devtools/aliases.sh" ]]; then
+  # shellcheck disable=SC1090
+  . "${_project_root}/devtools/aliases.sh"
+fi
