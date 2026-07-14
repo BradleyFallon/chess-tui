@@ -45,9 +45,15 @@ Application mode and renderer mode are independent, so combinations such as
 - Hover a move to highlight it or click it to submit it.
 - Correct answers advance automatically after 600 ms; `Enter` skips the delay.
 - Mismatches show the canonical answer and wait for `Enter`.
+- After a mismatch, press `E` to make the selected move correct for the current
+  quiz session.
 - Press `L` to switch between the packaged London and Caro-Kann demo flows.
-- At the frontier, press `A` for the unsaved mock continuation form, `S` to
-  restart, or `F` to exit.
+- At the frontier, press `A` to set a default response after any opponent move.
+- After setting the default, press `A` to add an exception for one specific
+  opponent move or `D` to edit the default. These preview rules are unsaved.
+- Continuation fields open inline beside or below the board; the board remains
+  visible while editing.
+- Press `S` to restart from the frontier or `F` to exit.
 
 Quiz demo data is local and read-only. It does not start, connect to, or persist
 data in ChessFlow.
@@ -67,20 +73,24 @@ unless all of these requirements are met:
   `pixel-mask`.
 
 The `pixel-mask` renderer uses fixed 8x8 pixel masks mapped directly to 8x4
-terminal-cell squares and never scales. When the terminal cannot fit its 67x35
-layout, the application automatically uses responsive Unicode rendering and
-restores `pixel-mask` when enough space is available again. Explicit `unicode`
-and `legacy-sprite` selections do not switch modes. The responsive renderers
-choose from 7x3, 5x2, and 3x1-cell presets. Reported pixel dimensions improve
-their aspect selection but are optional. If even the Unicode board is too
-large, the application displays the exact size requirement and recovers when
-resized. Retro artwork and both piece palettes are stored in
+terminal-cell squares and never scales. Chess TUI responds to terminal
+dimensions by selecting a landscape, portrait, or compact quiz arrangement. It
+never changes the selected piece renderer automatically. When that renderer
+cannot fit, the current game or quiz session remains intact and resumes after
+the terminal is enlarged. The responsive renderers choose from 7x3, 5x2, and
+3x1-cell presets. Reported pixel dimensions improve their aspect selection but
+are optional. Retro artwork and both piece palettes are stored in
 `src/chess_tui/assets/pieces/retro-8.toml`. Masks use `_` for transparency, `A`
 for outline/shadow, and `B` for fill/highlight. Each side defines only its `A`
 and `B` colors. Redirected output is unsupported.
 Terminal applications cannot query whether a selected font visually contains a
 Unicode glyph; use a terminal font that includes the standard chess and
 block-drawing symbols.
+
+Quiz layouts use the board and controls side by side in landscape mode, place
+the controls below the board in portrait mode, and show condensed choices in
+compact mode. A terminal that cannot fit the compact arrangement displays the
+selected renderer's resize requirement without discarding session state.
 
 ## Project tree
 

@@ -1,7 +1,7 @@
 name = "London Demo"
 side = "white"
-frontier_fen = "rnbqkb1r/ppp1pppp/5n2/3p4/3P1B2/5N2/PPP1PPPP/RN1QKB1R b KQkq - 3 3"
-frontier_line = ["d4", "d5", "Bf4", "Nf6", "Nf3"]
+frontier_fen = "rnbqkb1r/ppp1pppp/5n2/3p4/3P1B2/4P3/PPP2PPP/RN1QKBNR b KQkq - 0 3"
+frontier_line = ["d4", "d5", "Bf4", "Nf6", "e3"]
 
 [[states]]
 id = "london-1"
@@ -60,9 +60,9 @@ id = "london-3"
 fen = "rnbqkb1r/ppp1pppp/5n2/3p4/3P1B2/8/PPP1PPPP/RN1QKBNR w KQkq - 2 3"
 line = ["d4", "d5", "Bf4", "Nf6"]
 prompt = "Continue natural development."
-correct = "g1f3"
-explanation = "Nf3 supports the center and prepares castling."
-advance = ["g1f3"]
+correct = "e2e3"
+explanation = "e3 reinforces d4 and opens the diagonal for the light-squared bishop."
+advance = ["e2e3"]
 
 [[states.choices]]
 id = "a"

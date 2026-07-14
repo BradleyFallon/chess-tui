@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Protocol, runtime_checkable
 
 from .models import QuizSessionState
 
@@ -17,3 +17,10 @@ class QuizSession(Protocol):
     async def restart(self) -> QuizSessionState: ...
 
     async def close(self) -> None: ...
+
+
+@runtime_checkable
+class EditableQuizSession(Protocol):
+    async def update_correct_answer(
+        self, question_id: str, choice_id: str
+    ) -> QuizSessionState: ...

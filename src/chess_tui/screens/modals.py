@@ -6,9 +6,9 @@ from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.events import Key
 from textual.screen import ModalScreen
-from textual.widgets import Button, Input, Select, Static
+from textual.widgets import Static
 
-from ..sessions.demo import DemoFlowSummary
+from ..sessions.models import FlowSummary
 
 
 class FlowPickerModal(ModalScreen[str | None]):
@@ -18,7 +18,7 @@ class FlowPickerModal(ModalScreen[str | None]):
     FlowPickerModal .selected { color: #fffdf5; background: #405e42; }
     """
 
-    def __init__(self, flows: tuple[DemoFlowSummary, ...], current_id: str) -> None:
+    def __init__(self, flows: tuple[FlowSummary, ...], current_id: str) -> None:
         super().__init__()
         self.flows = flows
         self.index = next(
@@ -60,40 +60,3 @@ class FlowPickerModal(ModalScreen[str | None]):
             marker = "▶" if index == self.index else " "
             option.update(f"{marker} {flow.name:<22} {flow.side.title()}")
             option.set_class(index == self.index, "selected")
-
-
-class ContinuationModal(ModalScreen[dict[str, str] | None]):
-    CSS = """
-    ContinuationModal { align: center middle; background: #0008; }
-    ContinuationModal > #form { width: 58; height: auto; padding: 1 2; background: #172019; border: solid #9eaf74; }
-    ContinuationModal Input, ContinuationModal Select { margin-bottom: 1; }
-    """
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="form"):
-            yield Static("ADD CONTINUATION — DEMO ONLY")
-            yield Input(placeholder="Opponent SAN move", id="opponent")
-            yield Input(placeholder="Your SAN response", id="response")
-            yield Select(
-                (("Default", "default"), ("Exact", "exact")),
-                value="default",
-                allow_blank=False,
-                id="selection",
-            )
-            yield Input(placeholder="Optional note", id="note")
-            yield Button("Preview", id="submit", variant="primary")
-            yield Button("Cancel", id="cancel")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "cancel":
-            self.dismiss(None)
-            return
-        selection = self.query_one("#selection", Select).value
-        self.dismiss(
-            {
-                "opponent": self.query_one("#opponent", Input).value,
-                "response": self.query_one("#response", Input).value,
-                "selection": str(selection),
-                "note": self.query_one("#note", Input).value,
-            }
-        )

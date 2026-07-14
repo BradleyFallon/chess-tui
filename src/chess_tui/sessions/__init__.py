@@ -1,25 +1,36 @@
 """Quiz session presentation contracts and local providers."""
 
-from .base import QuizSession
-from .demo import DemoFlowSummary, DemoQuizSession, list_demo_flows
+from .base import EditableQuizSession, QuizSession
+from .demo import DemoQuizProvider, DemoQuizSession, list_demo_flows
 from .models import (
+    ContinuationDraft,
+    FlowSummary,
+    FrontierKind,
     FrontierState,
     MoveChoice,
     QuizFeedback,
     QuizPhase,
     QuizQuestion,
     QuizSessionState,
+    RuleType,
 )
+from .provider import QuizProvider
 
 __all__ = [
-    "DemoFlowSummary",
+    "ContinuationDraft",
+    "DemoQuizProvider",
     "DemoQuizSession",
+    "EditableQuizSession",
+    "FlowSummary",
+    "FrontierKind",
     "FrontierState",
     "MoveChoice",
     "QuizFeedback",
     "QuizPhase",
     "QuizQuestion",
+    "QuizProvider",
     "QuizSession",
     "QuizSessionState",
+    "RuleType",
     "list_demo_flows",
 ]

@@ -385,7 +385,11 @@ class ChessTui(App[None]):
         super().__init__()
         from .screens.local_game import LocalGameScreen
         from .screens.quiz import QuizScreen
-        from .sessions.demo import DemoQuizSession, list_demo_flows
+        from .sessions.demo import (
+            DemoQuizProvider,
+            DemoQuizSession,
+            list_demo_flows,
+        )
 
         self.mode = AppMode(mode)
         selected_renderer = renderer or create_piece_renderer(RendererMode.PIXEL_MASK)
@@ -397,9 +401,13 @@ class ChessTui(App[None]):
         if self.mode is AppMode.LOCAL_GAME:
             self.initial_screen = LocalGameScreen(position, selected_renderer)
         else:
+            provider = DemoQuizProvider()
             flow = list_demo_flows()[0]
             self.initial_screen = QuizScreen(
-                DemoQuizSession(flow.id), flow, selected_renderer
+                provider,
+                flow,
+                DemoQuizSession(flow.id),
+                selected_renderer,
             )
 
     def on_mount(self) -> None:
@@ -415,7 +423,7 @@ class ChessTui(App[None]):
 
     @property
     def preferred_renderer(self) -> PieceRenderer:
-        return self.initial_screen.renderer_controller.preferred
+        return self.initial_screen.renderer_controller.active
 
     @property
     def status(self):

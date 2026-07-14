@@ -50,9 +50,58 @@ class QuizPhase(str, Enum):
 
 
 @dataclass(frozen=True, slots=True)
+class FlowSummary:
+    id: str
+    name: str
+    side: str
+
+    def __post_init__(self) -> None:
+        if not self.id or not self.name:
+            raise ValueError("Flow summary requires an id and name.")
+        if self.side not in {"white", "black"}:
+            raise ValueError("Flow side must be white or black.")
+
+
+class FrontierKind(str, Enum):
+    NEEDS_FIRST_RULE = "needs-first-rule"
+    NEEDS_OPPONENT_CONTINUATION = "needs-opponent-continuation"
+    NEEDS_USER_RESPONSE = "needs-user-response"
+
+
+@dataclass(frozen=True, slots=True)
 class FrontierState:
+    kind: FrontierKind
+    fen: str
     line_san: tuple[str, ...]
-    message: str = "The packaged demo line ends here."
+    opponent_move_san: str | None = None
+    message: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.kind is FrontierKind.NEEDS_USER_RESPONSE and not self.opponent_move_san:
+            raise ValueError("A user-response frontier requires an opponent move.")
+
+
+class RuleType(str, Enum):
+    EXACT = "exact"
+    DEFAULT = "default"
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuationDraft:
+    response_move_san: str
+    rule_type: RuleType
+    opponent_move_san: str | None = None
+    note: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.response_move_san.strip():
+            raise ValueError("Continuation response move is required.")
+        if self.rule_type is RuleType.DEFAULT and self.opponent_move_san is not None:
+            raise ValueError("A default continuation cannot target an opponent move.")
+        if self.rule_type is RuleType.EXACT and not (
+            self.opponent_move_san and self.opponent_move_san.strip()
+        ):
+            raise ValueError("An exact continuation requires an opponent move.")
 
 
 @dataclass(frozen=True, slots=True)

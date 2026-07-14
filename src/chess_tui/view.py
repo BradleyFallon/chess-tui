@@ -4,9 +4,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
+from typing import TYPE_CHECKING
 
 from .board import ParsedFen, parse_fen
 from .game import GameController
+
+if TYPE_CHECKING:
+    from .sessions.models import QuizSessionState
 
 
 class BoardInputMode(str, Enum):
@@ -54,10 +58,5 @@ def board_view_from_game(controller: GameController) -> BoardViewState:
     )
 
 
-def board_view_from_quiz_state(state: object) -> BoardViewState:
-    """Adapt any quiz presentation state exposing a FEN string."""
-
-    fen = getattr(state, "fen", None)
-    if not isinstance(fen, str):
-        raise TypeError("Quiz state must expose a FEN string.")
-    return BoardViewState(position=parse_fen(fen))
+def board_view_from_quiz_state(state: QuizSessionState) -> BoardViewState:
+    return BoardViewState(position=parse_fen(state.fen))

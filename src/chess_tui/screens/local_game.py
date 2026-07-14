@@ -51,7 +51,7 @@ class LocalGameScreen(Screen[None]):
 
     @property
     def preferred_renderer(self) -> PieceRenderer:
-        return self.renderer_controller.preferred
+        return self.renderer_controller.active
 
     def compose(self) -> ComposeResult:
         yield self.board
@@ -123,6 +123,4 @@ class LocalGameScreen(Screen[None]):
             side = "White" if self.controller.position.active_color == "w" else "Black"
             text = f"{side} to move | click a piece | F flip | Q quit"
         renderer_text = f"Renderer: {self.renderer.mode.value}"
-        if self.renderer_controller.fallback_active:
-            renderer_text += " (pixel-mask fallback)"
         self.status.update(f"{renderer_text} | {text}")

@@ -14,8 +14,11 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
 from Chessnut import Game
 
 from ..board import parse_fen
+from .base import QuizSession
 from .errors import SessionProtocolError, SessionUnavailableError
 from .models import (
+    FlowSummary,
+    FrontierKind,
     FrontierState,
     MoveChoice,
     QuizFeedback,
@@ -25,13 +28,6 @@ from .models import (
 )
 
 DEMO_FLOW_IDS = ("london-demo", "caro-kann-demo")
-
-
-@dataclass(frozen=True, slots=True)
-class DemoFlowSummary:
-    id: str
-    name: str
-    side: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,14 +52,47 @@ class _DemoStep:
 
 @dataclass(frozen=True, slots=True)
 class _DemoFlow:
-    summary: DemoFlowSummary
+    summary: FlowSummary
     steps: tuple[_DemoStep, ...]
     frontier_fen: str
     frontier_line: tuple[str, ...]
 
 
-def list_demo_flows() -> tuple[DemoFlowSummary, ...]:
+def list_demo_flows() -> tuple[FlowSummary, ...]:
     return tuple(_load_flow(flow_id).summary for flow_id in DEMO_FLOW_IDS)
+
+
+class DemoQuizProvider:
+    def __init__(self, active_flow_id: str = "london-demo") -> None:
+        if active_flow_id not in DEMO_FLOW_IDS:
+            raise SessionUnavailableError(f"Unknown demo flow: {active_flow_id!r}.")
+        self._active_flow_id = active_flow_id
+        self._closed = False
+
+    async def list_flows(self) -> tuple[FlowSummary, ...]:
+        self._require_open()
+        return list_demo_flows()
+
+    async def active_flow(self) -> FlowSummary:
+        self._require_open()
+        return _load_flow(self._active_flow_id).summary
+
+    async def select_flow(self, flow_id: str) -> FlowSummary:
+        self._require_open()
+        summary = _load_flow(flow_id).summary
+        self._active_flow_id = flow_id
+        return summary
+
+    async def create_session(self, flow_id: str) -> QuizSession:
+        self._require_open()
+        return DemoQuizSession(flow_id)
+
+    async def close(self) -> None:
+        self._closed = True
+
+    def _require_open(self) -> None:
+        if self._closed:
+            raise SessionUnavailableError("The demo provider is closed.")
 
 
 class DemoQuizSession:
@@ -73,6 +102,7 @@ class DemoQuizSession:
         self.flow = _load_flow(flow_id)
         self._step_index = 0
         self._state: QuizSessionState | None = None
+        self._correct_overrides: dict[str, str] = {}
         self._closed = False
 
     async def start(self) -> QuizSessionState:
@@ -95,7 +125,7 @@ class DemoQuizSession:
         except StopIteration as exc:
             raise SessionProtocolError(f"Unknown choice id: {choice_id!r}.") from exc
 
-        expected = step.correct_choice
+        expected = self._expected_choice(step)
         correct = selected.id == expected.id
         phase = QuizPhase.CORRECT_FEEDBACK if correct else QuizPhase.MISMATCH_FEEDBACK
         self._state = QuizSessionState(
@@ -107,7 +137,44 @@ class DemoQuizSession:
                 correct=correct,
                 selected_san=selected.san,
                 expected_san=expected.san,
-                explanation=step.explanation,
+                explanation=(
+                    step.explanation
+                    if expected.uci == step.correct_uci
+                    else f"{expected.san} is the expected move for this quiz session."
+                ),
+            ),
+        )
+        return self._state
+
+    async def update_correct_answer(
+        self, question_id: str, choice_id: str
+    ) -> QuizSessionState:
+        self._require_open()
+        if self._state is None or self._state.phase is not QuizPhase.MISMATCH_FEEDBACK:
+            raise SessionProtocolError("Only a mismatched answer can be edited.")
+        step = self.flow.steps[self._step_index]
+        if question_id != step.id:
+            raise SessionProtocolError(
+                f"Stale question id {question_id!r}; expected {step.id!r}."
+            )
+        try:
+            selected = next(choice for choice in step.choices if choice.id == choice_id)
+        except StopIteration as exc:
+            raise SessionProtocolError(f"Unknown choice id: {choice_id!r}.") from exc
+
+        self._correct_overrides[step.id] = selected.uci
+        self._state = QuizSessionState(
+            phase=QuizPhase.CORRECT_FEEDBACK,
+            fen=step.fen,
+            line_san=step.line_san,
+            question=step.question,
+            feedback=QuizFeedback(
+                correct=True,
+                selected_san=selected.san,
+                expected_san=selected.san,
+                explanation=(
+                    f"The expected move is now {selected.san} for this quiz session."
+                ),
             ),
         )
         return self._state
@@ -119,6 +186,24 @@ class DemoQuizSession:
             QuizPhase.MISMATCH_FEEDBACK,
         }:
             raise SessionProtocolError("There is no feedback to continue from.")
+        step = self.flow.steps[self._step_index]
+        expected = self._expected_choice(step)
+        if expected.uci != step.correct_uci:
+            game = Game(step.fen)
+            game.apply_move(expected.uci)
+            line_san = (*step.line_san, expected.san)
+            self._state = QuizSessionState(
+                phase=QuizPhase.FRONTIER,
+                fen=game.get_fen(),
+                line_san=line_san,
+                frontier=FrontierState(
+                    kind=FrontierKind.NEEDS_FIRST_RULE,
+                    fen=game.get_fen(),
+                    line_san=line_san,
+                    message="The edited line needs an opponent continuation.",
+                ),
+            )
+            return self._state
         self._step_index += 1
         if self._step_index < len(self.flow.steps):
             self._state = self._question_state()
@@ -127,7 +212,12 @@ class DemoQuizSession:
                 phase=QuizPhase.FRONTIER,
                 fen=self.flow.frontier_fen,
                 line_san=self.flow.frontier_line,
-                frontier=FrontierState(self.flow.frontier_line),
+                frontier=FrontierState(
+                    kind=FrontierKind.NEEDS_FIRST_RULE,
+                    fen=self.flow.frontier_fen,
+                    line_san=self.flow.frontier_line,
+                    message="The packaged demo line ends here.",
+                ),
             )
         return self._state
 
@@ -146,6 +236,10 @@ class DemoQuizSession:
             line_san=step.line_san,
             question=step.question,
         )
+
+    def _expected_choice(self, step: _DemoStep) -> MoveChoice:
+        correct_uci = self._correct_overrides.get(step.id, step.correct_uci)
+        return next(choice for choice in step.choices if choice.uci == correct_uci)
 
     def _require_open(self) -> None:
         if self._closed:
@@ -203,7 +297,7 @@ def _decode_flow(flow_id: str, data: dict[str, Any]) -> _DemoFlow:
             )
         )
     return _DemoFlow(
-        summary=DemoFlowSummary(
+        summary=FlowSummary(
             id=flow_id,
             name=_text(data, "name"),
             side=_text(data, "side"),
