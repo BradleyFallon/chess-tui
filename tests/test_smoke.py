@@ -10,7 +10,7 @@ from chess_tui import runtime
 from chess_tui.board import PIECE_GLYPHS, PIECE_SPRITES
 from chess_tui.cli import build_parser, main
 from chess_tui.runtime import (
-    REQUIRED_CHESSNUT_VERSION,
+    REQUIRED_PYTHON_CHESS_VERSION,
     REQUIRED_RICH_VERSION,
     REQUIRED_TEXTUAL_VERSION,
     RuntimeRequirementError,
@@ -60,14 +60,14 @@ def test_runtime_rejects_wrong_textual_version(
         validate_textual_runtime(cast(TextIO, FakeTty("utf-8")))
 
 
-def test_runtime_rejects_wrong_chessnut_version(
+def test_runtime_rejects_wrong_python_chess_version(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def fake_version(package: str) -> str:
         versions = {
             "rich": REQUIRED_RICH_VERSION,
             "textual": REQUIRED_TEXTUAL_VERSION,
-            "Chessnut": "0.0.0",
+            "python-chess": "0.0.0",
         }
         return versions[package]
 
@@ -75,7 +75,7 @@ def test_runtime_rejects_wrong_chessnut_version(
 
     with pytest.raises(
         RuntimeRequirementError,
-        match=f"Chessnut {REQUIRED_CHESSNUT_VERSION} is required",
+        match=f"Python-chess {REQUIRED_PYTHON_CHESS_VERSION} is required",
     ):
         validate_textual_runtime(cast(TextIO, FakeTty("utf-8")))
 
@@ -130,6 +130,25 @@ def test_cli_parser_accepts_quiz_demo_mode() -> None:
     args = build_parser().parse_args(["--mode", "quiz-demo"])
 
     assert args.mode == "quiz-demo"
+
+
+def test_cli_parser_accepts_author_mode_with_flow() -> None:
+    args = build_parser().parse_args(
+        ["--mode", "author", "--flow", "flows/london.toml"]
+    )
+
+    assert args.mode == "author"
+    assert str(args.flow) == "flows/london.toml"
+
+
+def test_cli_requires_flow_for_author_mode(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--mode", "author"])
+
+    assert exc_info.value.code == 2
+    assert "--flow is required" in capsys.readouterr().err
 
 
 def test_cli_renderer_flag_overrides_environment(
@@ -197,6 +216,28 @@ def test_cli_passes_quiz_demo_mode_to_app(
 
     assert main(["--mode", "quiz-demo"]) == 0
     assert captured == [AppMode.QUIZ_DEMO]
+
+
+def test_cli_passes_author_flow_to_app(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: list[tuple[AppMode, str]] = []
+    monkeypatch.setattr(
+        "chess_tui.cli.validate_textual_runtime",
+        lambda stream, *, renderer_mode=None: object(),
+    )
+
+    def fake_run(
+        position,
+        *,
+        renderer=None,
+        mode=AppMode.LOCAL_GAME,
+        flow_path=None,
+    ) -> None:
+        captured.append((mode, str(flow_path)))
+
+    monkeypatch.setattr("chess_tui.cli.run_chess_app", fake_run)
+
+    assert main(["--mode", "author", "--flow", "flows/london.toml"]) == 0
+    assert captured == [(AppMode.AUTHOR, "flows/london.toml")]
 
 
 def test_package_smoke() -> None:

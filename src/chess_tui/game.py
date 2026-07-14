@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from Chessnut import Game
+import chess
 
 from .board import FILES, ParsedFen, format_fen, parse_fen
 
@@ -67,7 +67,7 @@ class GameController:
 
     def __init__(self, position: ParsedFen) -> None:
         self.original_fen = format_fen(position)
-        self._game = Game(self.original_fen)
+        self._board = chess.Board(self.original_fen)
         self.position = position
         self.interaction = BoardInteraction()
         self._update_checked_king()
@@ -87,9 +87,9 @@ class GameController:
             return False
 
         legal_moves = tuple(
-            ChessMove.from_uci(move)
-            for move in self._game.get_moves()
-            if move.startswith(square_name(square))
+            ChessMove.from_uci(move.uci())
+            for move in self._board.legal_moves
+            if move.from_square == square
         )
         if not legal_moves:
             self.clear_selection()
@@ -136,8 +136,8 @@ class GameController:
         if move is None:
             return None
 
-        self._game.apply_move(move.uci)
-        self.position = parse_fen(self._game.get_fen())
+        self._board.push(chess.Move.from_uci(move.uci))
+        self.position = parse_fen(self._board.fen(en_passant="fen"))
         hover_square = self.interaction.hover_square
         self.interaction = BoardInteraction(
             hover_square=hover_square,
@@ -163,25 +163,9 @@ class GameController:
     def is_capture(self, move: ChessMove) -> bool:
         """Return whether a legal move captures a piece, including en passant."""
 
-        if self.piece_at(move.to_square) != ".":
-            return True
-        piece = self.piece_at(move.from_square)
-        return piece.lower() == "p" and move.from_square % 8 != move.to_square % 8
+        return self._board.is_capture(chess.Move.from_uci(move.uci))
 
     def _update_checked_king(self) -> None:
-        board_text = "".join("".join(row) for row in self.position.board)
-        if board_text.count("K") != 1 or board_text.count("k") != 1:
-            self.interaction.checked_king = None
-            return
-        if self._game.status not in {Game.CHECK, Game.CHECKMATE}:
-            self.interaction.checked_king = None
-            return
-
-        king = "K" if self.position.active_color == "w" else "k"
-        row_index, file_index = next(
-            (row_index, file_index)
-            for row_index, row in enumerate(self.position.board)
-            for file_index, piece in enumerate(row)
-            if piece == king
+        self.interaction.checked_king = (
+            self._board.king(self._board.turn) if self._board.is_check() else None
         )
-        self.interaction.checked_king = ((7 - row_index) * 8) + file_index

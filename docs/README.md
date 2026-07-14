@@ -34,3 +34,16 @@ The quiz screen chooses landscape, portrait, or compact arrangements as the
 terminal changes. Renderer selection is strict: a screen that is too small
 shows a resize requirement and restores the same renderer and session state
 when enlarged.
+
+## Local White-flow authoring
+
+`chess-tui --mode author --flow flows/london.toml` uses a separate authoring
+state machine. The TOML file contains numbered White defaults and readable SAN
+histories for exact-position exceptions. `WhitePolicy` derives normalized
+position keys and resolves exceptions before defaults; `FlowStore` validates
+and atomically saves changes with a backup.
+
+The author screen uses python-chess as its rules authority. White plays or edits
+the recommendation, while Black moves are selected manually to explore a line.
+The screen emits default/exception edit intent to `WhiteFlowAuthor`; policy and
+persistence semantics do not live in the Textual screen.

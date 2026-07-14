@@ -11,7 +11,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib  # pyright: ignore[reportMissingImports]
 
-from Chessnut import Game
+import chess
 
 from ..board import parse_fen
 from .base import QuizSession
@@ -189,16 +189,16 @@ class DemoQuizSession:
         step = self.flow.steps[self._step_index]
         expected = self._expected_choice(step)
         if expected.uci != step.correct_uci:
-            game = Game(step.fen)
-            game.apply_move(expected.uci)
+            game = chess.Board(step.fen)
+            game.push(chess.Move.from_uci(expected.uci))
             line_san = (*step.line_san, expected.san)
             self._state = QuizSessionState(
                 phase=QuizPhase.FRONTIER,
-                fen=game.get_fen(),
+                fen=game.fen(en_passant="fen"),
                 line_san=line_san,
                 frontier=FrontierState(
                     kind=FrontierKind.NEEDS_FIRST_RULE,
-                    fen=game.get_fen(),
+                    fen=game.fen(en_passant="fen"),
                     line_san=line_san,
                     message="The edited line needs an opponent continuation.",
                 ),
@@ -313,7 +313,8 @@ def _validate_flow(flow: _DemoFlow) -> None:
     for index, step in enumerate(flow.steps):
         parse_fen(step.fen)
         question = step.question
-        legal_moves = set(Game(step.fen).get_moves())
+        board = chess.Board(step.fen)
+        legal_moves = {move.uci() for move in board.legal_moves}
         illegal = sorted(
             choice.uci for choice in question.choices if choice.uci not in legal_moves
         )
@@ -329,17 +330,18 @@ def _validate_flow(flow: _DemoFlow) -> None:
         if not step.advance_uci or step.advance_uci[0] != step.correct_uci:
             raise ValueError(f"{step.id} advance must begin with its correct move")
 
-        game = Game(step.fen)
-        for move in step.advance_uci:
-            if move not in game.get_moves():
+        board = chess.Board(step.fen)
+        for move_uci in step.advance_uci:
+            move = chess.Move.from_uci(move_uci)
+            if move not in board.legal_moves:
                 raise ValueError(f"{step.id} advance contains illegal move {move!r}")
-            game.apply_move(move)
+            board.push(move)
         expected_fen = (
             flow.steps[index + 1].fen
             if index + 1 < len(flow.steps)
             else flow.frontier_fen
         )
-        if parse_fen(game.get_fen()) != parse_fen(expected_fen):
+        if parse_fen(board.fen(en_passant="fen")) != parse_fen(expected_fen):
             raise ValueError(f"{step.id} advance does not reach the next fixture FEN")
 
 

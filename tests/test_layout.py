@@ -36,3 +36,16 @@ def test_quiz_layout_scales_terminal_pixel_metrics_to_board_area() -> None:
 
     assert layout.mode is QuizLayoutMode.LANDSCAPE
     assert layout.board_geometry == BoardGeometry(8, 4)
+
+
+def test_author_debug_row_still_allows_compact_pixel_layout() -> None:
+    layout = choose_quiz_layout(
+        Size(70, 40),
+        None,
+        RendererMode.PIXEL_MASK,
+        additional_chrome_rows=1,
+        compact_panel_rows=3,
+    )
+
+    assert layout.mode is QuizLayoutMode.COMPACT
+    assert layout.board_geometry == BoardGeometry(8, 4)

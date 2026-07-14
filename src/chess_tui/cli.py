@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import argparse
 import os
+from pathlib import Path
 import sys
 
 from . import DEFAULT_STARTING_FEN, __version__
 from .board import FenError, parse_fen
+from .flow import FlowError
 from .modes import AppMode
 from .renderers.mode import RendererMode
 from .runtime import RuntimeRequirementError, validate_textual_runtime
@@ -17,7 +19,7 @@ from .tui import run_chess_app
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chess-tui",
-        description="Play local chess or run a fixture-backed move quiz.",
+        description="Play local chess, run a quiz, or author a White flow.",
     )
     parser.add_argument(
         "--fen",
@@ -29,6 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
         choices=[mode.value for mode in AppMode],
         default=AppMode.LOCAL_GAME.value,
         help="Application mode (defaults to local-game).",
+    )
+    parser.add_argument(
+        "--flow",
+        type=Path,
+        default=None,
+        help="White-flow TOML file (required for author mode).",
     )
     parser.add_argument(
         "--renderer",
@@ -71,6 +79,12 @@ def main(argv: list[str] | None = None) -> int:
         print(__version__)
         return 0
 
+    mode = AppMode(args.mode)
+    if mode is AppMode.AUTHOR and args.flow is None:
+        parser.error("--flow is required when --mode author is selected")
+    if mode is not AppMode.AUTHOR and args.flow is not None:
+        parser.error("--flow is only supported with --mode author")
+
     try:
         position = parse_fen(args.fen)
     except FenError as exc:
@@ -83,7 +97,10 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout,
             renderer_mode=renderer_mode,
         )
-        run_chess_app(position, renderer=renderer, mode=AppMode(args.mode))
-    except RuntimeRequirementError as exc:
+        if mode is AppMode.AUTHOR:
+            run_chess_app(position, renderer=renderer, mode=mode, flow_path=args.flow)
+        else:
+            run_chess_app(position, renderer=renderer, mode=mode)
+    except (RuntimeRequirementError, FlowError) as exc:
         parser.exit(2, f"{parser.prog}: error: {exc}\n")
     return 0

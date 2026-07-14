@@ -8,3 +8,4 @@ from enum import Enum
 class AppMode(str, Enum):
     LOCAL_GAME = "local-game"
     QUIZ_DEMO = "quiz-demo"
+    AUTHOR = "author"

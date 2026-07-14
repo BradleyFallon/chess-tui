@@ -13,7 +13,7 @@ from .renderers.mode import RendererMode
 
 REQUIRED_TEXTUAL_VERSION = "8.2.8"
 REQUIRED_RICH_VERSION = "15.0.0"
-REQUIRED_CHESSNUT_VERSION = "0.4.1"
+REQUIRED_PYTHON_CHESS_VERSION = "1.999"
 
 
 class RuntimeRequirementError(RuntimeError):
@@ -33,7 +33,7 @@ def validate_textual_runtime(
 
     _require_distribution("rich", REQUIRED_RICH_VERSION)
     _require_distribution("textual", REQUIRED_TEXTUAL_VERSION)
-    _require_distribution("Chessnut", REQUIRED_CHESSNUT_VERSION)
+    _require_distribution("python-chess", REQUIRED_PYTHON_CHESS_VERSION)
 
     try:
         import textual

@@ -1,4 +1,4 @@
-Chessnut==0.4.1
+python-chess==1.999
 rich==15.0.0
 textual==8.2.8
 tomli>=2.0.1; python_version < "3.11"

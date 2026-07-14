@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from rich.segment import Segment
 from rich.style import Style
 from textual.app import App
@@ -372,7 +373,7 @@ class ChessBoard(Widget):
 
 
 class ChessTui(App[None]):
-    """Top-level shell routing local-game and fixture quiz modes."""
+    """Top-level shell routing local-game, quiz, and author modes."""
 
     def __init__(
         self,
@@ -381,10 +382,12 @@ class ChessTui(App[None]):
         mode: AppMode = AppMode.LOCAL_GAME,
         renderer: PieceRenderer | None = None,
         fen: str | None = None,
+        flow_path: Path | None = None,
     ) -> None:
         super().__init__()
         from .screens.local_game import LocalGameScreen
         from .screens.quiz import QuizScreen
+        from .screens.author import AuthorScreen
         from .sessions.demo import (
             DemoQuizProvider,
             DemoQuizSession,
@@ -400,7 +403,7 @@ class ChessTui(App[None]):
 
         if self.mode is AppMode.LOCAL_GAME:
             self.initial_screen = LocalGameScreen(position, selected_renderer)
-        else:
+        elif self.mode is AppMode.QUIZ_DEMO:
             provider = DemoQuizProvider()
             flow = list_demo_flows()[0]
             self.initial_screen = QuizScreen(
@@ -409,6 +412,10 @@ class ChessTui(App[None]):
                 DemoQuizSession(flow.id),
                 selected_renderer,
             )
+        else:
+            if flow_path is None:
+                raise ValueError("author mode requires a flow_path")
+            self.initial_screen = AuthorScreen(flow_path, selected_renderer)
 
     def on_mount(self) -> None:
         self.push_screen(self.initial_screen)
@@ -457,8 +464,9 @@ def run_chess_app(
     *,
     renderer: PieceRenderer | None = None,
     mode: AppMode = AppMode.LOCAL_GAME,
+    flow_path: Path | None = None,
 ) -> None:
     """Run the selected application mode."""
 
-    app = ChessTui(position, mode=mode, renderer=renderer)
+    app = ChessTui(position, mode=mode, renderer=renderer, flow_path=flow_path)
     app.run()

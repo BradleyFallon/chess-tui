@@ -11,6 +11,7 @@ update-deps
 chess-tui --help
 chess-tui --mode local-game
 chess-tui --mode quiz-demo
+chess-tui --mode author --flow flows/london.toml
 chess-tui --renderer pixel-mask
 chess-tui --renderer unicode
 chess-tui --renderer legacy-sprite
@@ -58,17 +59,38 @@ Application mode and renderer mode are independent, so combinations such as
 Quiz demo data is local and read-only. It does not start, connect to, or persist
 data in ChessFlow.
 
+## Author controls
+
+Author mode edits one local White-flow TOML file. White recommendations resolve
+an exact-position exception first, then the numbered default for that White
+step.
+
+- Play White's recommended move, or another legal move, on the board.
+- On Black's turn, manually play any legal response to explore that branch.
+- When White differs from the policy, save an exact-position exception or
+  replace the numbered default.
+- `Ctrl+N` restarts the line from the flow's starting FEN.
+- `Ctrl+R` reloads and validates hand edits without discarding the active policy
+  when the file is invalid.
+- `Escape` cancels a pending move or rule decision, and `Q` quits.
+- A minimal debug line shows the current author phase, turn, White step, ply,
+  active rule source, and error state.
+
+Flow files store readable SAN histories. Position matching derives piece
+placement, side to move, castling rights, and en-passant state while ignoring
+move clocks. Saves are atomic and preserve the previous file as `<flow>.bak`.
+
 ## Runtime contract
 
 The viewer validates its rendering modes strictly. Startup fails with an error
 unless all of these requirements are met:
 
-- Chessnut 0.4.1, Textual 8.2.8, and Rich 15.0.0 are installed.
+- python-chess 1.999, Textual 8.2.8, and Rich 15.0.0 are installed.
 - Standard output is an interactive UTF-8 TTY.
 - The selected renderer's glyphs or masks pass strict startup validation.
 - `pixel-mask` requires at least 67 columns by 35 rows, including the status line.
 - The selected renderer is one of `pixel-mask`, `unicode`, or `legacy-sprite`.
-- The selected application mode is `local-game` or `quiz-demo`.
+- The selected application mode is `local-game`, `quiz-demo`, or `author`.
 - The CLI flag `--renderer` overrides `CHESS_TUI_RENDERER`; the default mode is
   `pixel-mask`.
 
@@ -124,6 +146,7 @@ Copy this block when providing the project structure to an LLM:
 |       |-- cli.py                     # Command-line interface
 |       |-- game.py                    # Legal moves and interaction state
 |       |-- modes.py                   # Top-level application modes
+|       |-- flow/                      # Persistent White-flow policy and storage
 |       |-- screens/                   # Local-game and quiz screens
 |       |-- sessions/                  # Quiz presentation models and providers
 |       |-- widgets/                   # Reusable quiz interaction widgets
@@ -138,6 +161,8 @@ Copy this block when providing the project structure to an LLM:
 |   |   `-- fens.json                  # Sample positions used by tests
 |   |-- test_board.py                 # FEN parsing and rendering coverage
 |   |-- test_game.py                  # Move controller coverage
+|   |-- test_flow.py                  # Persistent flow policy and storage coverage
+|   |-- test_author.py                # Author-screen workflow coverage
 |   |-- test_quiz.py                  # Quiz screen and widget behavior
 |   |-- test_sessions.py              # Fixture provider and model validation
 |   `-- test_smoke.py                 # Minimal package behavior tests
@@ -177,7 +202,7 @@ Copy this block when providing the project structure to an LLM:
   `python -m chess_tui` invoke the command-line interface.
 - `src/chess_tui/cli.py` - defines command-line arguments and the CLI's
   `main()` function.
-- `src/chess_tui/game.py` - adapts Chessnut into typed move and interaction
+- `src/chess_tui/game.py` - adapts python-chess into typed move and interaction
   state without coupling chess legality to the renderer.
 - `src/chess_tui/view.py` - defines immutable board presentation state shared
   by local-game and quiz providers.

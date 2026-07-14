@@ -49,10 +49,16 @@ def choose_quiz_layout(
     terminal_cells: Size,
     terminal_pixels: Size | None,
     renderer_mode: RendererMode,
+    *,
+    additional_chrome_rows: int = 0,
+    portrait_panel_rows: int = PORTRAIT_PANEL_ROWS,
+    compact_panel_rows: int = COMPACT_PANEL_ROWS,
 ) -> QuizLayout:
     """Choose a screen arrangement without changing the selected renderer."""
 
-    chrome_rows = HEADER_ROWS + STATUS_ROWS
+    if min(additional_chrome_rows, portrait_panel_rows, compact_panel_rows) < 0:
+        raise ValueError("Layout row counts cannot be negative.")
+    chrome_rows = HEADER_ROWS + STATUS_ROWS + additional_chrome_rows
     attempts = (
         (
             QuizLayoutMode.LANDSCAPE,
@@ -65,14 +71,14 @@ def choose_quiz_layout(
             QuizLayoutMode.PORTRAIT,
             Size(
                 terminal_cells.width,
-                terminal_cells.height - chrome_rows - PORTRAIT_PANEL_ROWS,
+                terminal_cells.height - chrome_rows - portrait_panel_rows,
             ),
         ),
         (
             QuizLayoutMode.COMPACT,
             Size(
                 terminal_cells.width,
-                terminal_cells.height - chrome_rows - COMPACT_PANEL_ROWS,
+                terminal_cells.height - chrome_rows - compact_panel_rows,
             ),
         ),
     )
@@ -96,7 +102,7 @@ def choose_quiz_layout(
     detail = "\n\n".join(failures)
     raise TerminalCapabilityError(
         "The selected renderer cannot fit in the current terminal "
-        "with the quiz controls visible.\n\n"
+        "with the screen controls visible.\n\n"
         f"Renderer: {renderer_mode.value}\n"
         f"Terminal: {terminal_cells.width}x{terminal_cells.height}\n\n"
         f"{detail}\n\n"

@@ -1,0 +1,23 @@
+version = 1
+name = "London System"
+start_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+
+[[defaults]]
+step = 1
+move = "d4"
+note = "Control the center."
+
+[[defaults]]
+step = 2
+move = "Bf4"
+note = "Develop the dark-squared bishop outside the pawn chain."
+
+[[defaults]]
+step = 3
+move = "e3"
+note = "Support d4 and prepare normal development."
+
+[[defaults]]
+step = 4
+move = "Nf3"
+note = "Develop the king's knight and guard e5."
