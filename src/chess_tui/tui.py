@@ -5,16 +5,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from rich.segment import Segment
 from rich.style import Style
-from textual.app import App, ComposeResult
-from textual.events import Click, Leave, MouseMove, Resize
+from textual.app import App
+from textual.events import Click, Leave, MouseMove
 from textual.geometry import Size
 from textual.message import Message
 from textual.strip import Strip
 from textual.widget import Widget
-from textual.widgets import Static
 
-from .board import FILES, ParsedFen
-from .game import BoardInteraction, GameController, square_name
+from .board import DEFAULT_STARTING_FEN, FILES, ParsedFen, format_fen, parse_fen
+from .game import square_name
+from .modes import AppMode
 from .renderers.base import PieceRenderer, center_cells
 from .renderers.colors import (
     CAPTURE_SQUARE,
@@ -27,17 +27,15 @@ from .renderers.colors import (
     PENDING_SOURCE,
     PENDING_TARGET,
     SELECTED_SQUARE,
-    SCREEN_BACKGROUND,
-    STATUS_BACKGROUND,
 )
 from .renderers.factory import create_piece_renderer
-from .renderers.errors import RendererStartupError
 from .renderers.mode import RendererMode
 from .renderers.pixel_mask import (
     PIXEL_MASK_SQUARE_HEIGHT,
     PIXEL_MASK_SQUARE_WIDTH,
 )
 from .runtime import TerminalCapabilityError
+from .view import BoardInputMode, BoardViewState
 
 BOARD_LEFT_MARGIN = 3
 SQUARE_PRESETS = ((7, 3), (5, 2), (3, 1))
@@ -201,12 +199,14 @@ class ChessBoard(Widget):
         self,
         position: ParsedFen,
         renderer: PieceRenderer | None = None,
+        *,
+        input_mode: BoardInputMode = BoardInputMode.MOVE_ENTRY,
     ) -> None:
         super().__init__()
-        self.position = position
-        self.interaction = BoardInteraction()
+        self.view_state = BoardViewState(position=position)
         self.geometry: BoardGeometry | None = None
         self.flipped = False
+        self.input_mode = input_mode
         self.renderer = (
             renderer
             if renderer is not None
@@ -231,15 +231,13 @@ class ChessBoard(Widget):
 
     def update_view(
         self,
-        position: ParsedFen,
-        interaction: BoardInteraction,
+        view_state: BoardViewState,
         *,
         flipped: bool,
     ) -> None:
-        """Apply the controller's current renderer-facing state."""
+        """Apply renderer-neutral board presentation state."""
 
-        self.position = position
-        self.interaction = interaction
+        self.view_state = view_state
         self.flipped = flipped
         self.refresh()
 
@@ -251,14 +249,16 @@ class ChessBoard(Widget):
 
     def on_mouse_move(self, event: MouseMove) -> None:
         square = self.square_at(event.x, event.y)
-        if square != self.interaction.hover_square:
+        if square != self.view_state.hover_square:
             self.post_message(self.SquareHovered(square))
 
     def on_leave(self, event: Leave) -> None:
-        if self.interaction.hover_square is not None:
+        if self.view_state.hover_square is not None:
             self.post_message(self.SquareHovered(None))
 
     def on_click(self, event: Click) -> None:
+        if self.input_mode is BoardInputMode.READ_ONLY:
+            return
         square = self.square_at(event.x, event.y)
         if square is not None:
             event.stop()
@@ -302,8 +302,8 @@ class ChessBoard(Widget):
                 square_height=geometry.square_height,
                 background=background,
                 visual_state=visual_state,
-                quiet_target=square in self.interaction.quiet_targets,
-                capture_target=square in self.interaction.capture_targets,
+                quiet_target=square in self.view_state.quiet_targets,
+                capture_target=square in self.view_state.capture_targets,
             )
             segments.extend(rendered_rows[square_row])
 
@@ -320,10 +320,10 @@ class ChessBoard(Widget):
     def _piece_at(self, square: int) -> str:
         rank = square // 8
         file_index = square % 8
-        return self.position.board[7 - rank][file_index]
+        return self.view_state.position.board[7 - rank][file_index]
 
     def _square_visual_state(self, square: int) -> str:
-        interaction = self.interaction
+        interaction = self.view_state
         if square == interaction.checked_king:
             return "check"
         pending_move = interaction.pending_move
@@ -349,7 +349,7 @@ class ChessBoard(Widget):
         return "normal"
 
     def _square_background(self, square: int) -> str:
-        interaction = self.interaction
+        interaction = self.view_state
         if square == interaction.checked_king:
             return CHECK_SQUARE
         pending_move = interaction.pending_move
@@ -372,184 +372,85 @@ class ChessBoard(Widget):
 
 
 class ChessTui(App[None]):
-    """Display and interact with a FEN-backed chess position."""
-
-    CSS = f"""
-    Screen {{
-        align: center middle;
-        background: {SCREEN_BACKGROUND};
-    }}
-    ChessBoard {{
-        pointer: pointer;
-    }}
-    #status {{
-        dock: bottom;
-        width: 100%;
-        height: auto;
-        color: {LABEL_COLOR};
-        background: {STATUS_BACKGROUND};
-        text-align: center;
-    }}
-    """
-    BINDINGS = [
-        ("q", "quit", "Quit"),
-        ("f", "flip_board", "Flip"),
-        ("enter", "confirm_move", "Confirm"),
-        ("escape", "cancel_move", "Cancel"),
-    ]
+    """Top-level shell routing local-game and fixture quiz modes."""
 
     def __init__(
         self,
-        position: ParsedFen,
+        position: ParsedFen | None = None,
         *,
+        mode: AppMode = AppMode.LOCAL_GAME,
         renderer: PieceRenderer | None = None,
+        fen: str | None = None,
     ) -> None:
         super().__init__()
-        self.preferred_renderer = (
-            renderer
-            if renderer is not None
-            else create_piece_renderer(RendererMode.PIXEL_MASK)
-        )
-        self.renderer = self.preferred_renderer
-        self._unicode_fallback: PieceRenderer | None = None
-        self.controller = GameController(position)
-        self.board = ChessBoard(position, renderer=self.renderer)
-        self.status = Static("", id="status", markup=False)
-        self.failure: TerminalCapabilityError | None = None
-        self.flipped = False
-        self._geometry_error: str | None = None
+        from .screens.local_game import LocalGameScreen
+        from .screens.quiz import QuizScreen
+        from .sessions.demo import DemoQuizSession, list_demo_flows
 
-    def compose(self) -> ComposeResult:
-        yield self.board
-        yield self.status
+        self.mode = AppMode(mode)
+        selected_renderer = renderer or create_piece_renderer(RendererMode.PIXEL_MASK)
+        if position is None:
+            position = parse_fen(fen or DEFAULT_STARTING_FEN)
+        elif fen is not None and format_fen(position) != format_fen(parse_fen(fen)):
+            raise ValueError("position and fen describe different positions")
+
+        if self.mode is AppMode.LOCAL_GAME:
+            self.initial_screen = LocalGameScreen(position, selected_renderer)
+        else:
+            flow = list_demo_flows()[0]
+            self.initial_screen = QuizScreen(
+                DemoQuizSession(flow.id), flow, selected_renderer
+            )
 
     def on_mount(self) -> None:
-        self._sync_view()
+        self.push_screen(self.initial_screen)
 
-    def on_resize(self, event: Resize) -> None:
-        try:
-            renderer, geometry = self._renderer_and_geometry(event)
-        except TerminalCapabilityError as exc:
-            self.failure = exc
-            self._geometry_error = str(exc)
-            self.board.unconfigure()
-            self._update_status()
-            return
-        self._activate_renderer(renderer)
-        self.failure = None
-        self._geometry_error = None
-        self.board.configure(geometry)
-        self._update_status()
+    @property
+    def board(self) -> ChessBoard:
+        return self.initial_screen.board
 
-    def _renderer_and_geometry(
-        self, event: Resize
-    ) -> tuple[PieceRenderer, BoardGeometry]:
-        """Choose geometry, falling back from pixel-mask to Unicode when needed."""
+    @property
+    def renderer(self) -> PieceRenderer:
+        return self.initial_screen.renderer
 
-        preferred = self.preferred_renderer
-        pixel_failure: str | None = None
-        try:
-            geometry = calculate_geometry(
-                event.size,
-                event.pixel_size,
-                reserved_rows=1,
-                renderer_mode=preferred.mode,
-            )
-            return preferred, geometry
-        except TerminalCapabilityError as pixel_error:
-            if preferred.mode is not RendererMode.PIXEL_MASK:
-                raise
-            pixel_failure = str(pixel_error)
+    @property
+    def preferred_renderer(self) -> PieceRenderer:
+        return self.initial_screen.renderer_controller.preferred
 
-        fallback = self._unicode_fallback
-        if fallback is None:
-            try:
-                fallback = create_piece_renderer(RendererMode.UNICODE)
-            except RendererStartupError as exc:
-                raise TerminalCapabilityError(
-                    f"{pixel_failure}\n\nUnicode fallback is unavailable: {exc}"
-                ) from exc
-            self._unicode_fallback = fallback
-        try:
-            geometry = calculate_geometry(
-                event.size,
-                event.pixel_size,
-                reserved_rows=1,
-                renderer_mode=fallback.mode,
-            )
-        except TerminalCapabilityError as unicode_error:
-            raise TerminalCapabilityError(
-                f"{pixel_failure}\n\nUnicode fallback also failed:\n{unicode_error}"
-            ) from unicode_error
-        return fallback, geometry
+    @property
+    def status(self):
+        return self.initial_screen.status
 
-    def _activate_renderer(self, renderer: PieceRenderer) -> None:
-        if renderer is self.renderer:
-            return
-        self.renderer = renderer
-        self.board.renderer = renderer
-        self.board.refresh()
+    @property
+    def failure(self):
+        return self.initial_screen.failure
 
-    def on_chess_board_square_hovered(self, message: ChessBoard.SquareHovered) -> None:
-        self.controller.set_hover(message.square)
-        self._sync_view()
+    @property
+    def controller(self):
+        from .screens.local_game import LocalGameScreen
 
-    def on_chess_board_square_clicked(self, message: ChessBoard.SquareClicked) -> None:
-        self.controller.handle_square(message.square)
-        self._sync_view()
+        if not isinstance(self.initial_screen, LocalGameScreen):
+            raise AttributeError("Quiz mode does not expose a local game controller.")
+        return self.initial_screen.controller
 
-    def action_flip_board(self) -> None:
-        self.flipped = not self.flipped
-        self._sync_view()
+    @property
+    def flipped(self) -> bool:
+        from .screens.local_game import LocalGameScreen
 
-    def action_confirm_move(self) -> None:
-        self.controller.confirm_move()
-        self._sync_view()
-
-    def action_cancel_move(self) -> None:
-        self.controller.clear_selection()
-        self._sync_view()
-
-    def _sync_view(self) -> None:
-        self.board.update_view(
-            self.controller.position,
-            self.controller.interaction,
-            flipped=self.flipped,
+        return (
+            self.initial_screen.flipped
+            if isinstance(self.initial_screen, LocalGameScreen)
+            else False
         )
-        self._update_status()
-
-    def _update_status(self) -> None:
-        if self._geometry_error is not None:
-            self.status.update(self._geometry_error)
-            return
-
-        interaction = self.controller.interaction
-        if interaction.pending_move is not None:
-            move = interaction.pending_move
-            text = (
-                f"{square_name(move.from_square)} -> {square_name(move.to_square)} "
-                "| ENTER confirm | ESC cancel"
-            )
-        elif interaction.selected_square is not None:
-            text = (
-                f"{square_name(interaction.selected_square)} selected | "
-                "choose a highlighted destination | ESC cancel"
-            )
-        else:
-            side = "White" if self.controller.position.active_color == "w" else "Black"
-            text = f"{side} to move | click a piece | F flip | Q quit"
-        renderer_text = f"Renderer: {self.renderer.mode.value}"
-        if self.renderer is not self.preferred_renderer:
-            renderer_text += " (pixel-mask fallback)"
-        self.status.update(f"{renderer_text} | {text}")
 
 
 def run_chess_app(
     position: ParsedFen,
     *,
     renderer: PieceRenderer | None = None,
+    mode: AppMode = AppMode.LOCAL_GAME,
 ) -> None:
-    """Run the Textual application and propagate strict capability failures."""
+    """Run the selected application mode."""
 
-    app = ChessTui(position, renderer=renderer)
+    app = ChessTui(position, mode=mode, renderer=renderer)
     app.run()

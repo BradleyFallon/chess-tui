@@ -1,0 +1,1 @@
+"""Packaged local quiz fixtures."""

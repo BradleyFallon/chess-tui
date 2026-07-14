@@ -5,7 +5,7 @@ from typing import TextIO, cast
 import pytest
 import textual
 
-from chess_tui import DEFAULT_STARTING_FEN, RendererMode, parse_fen
+from chess_tui import AppMode, DEFAULT_STARTING_FEN, RendererMode, parse_fen
 from chess_tui import runtime
 from chess_tui.board import PIECE_GLYPHS, PIECE_SPRITES
 from chess_tui.cli import build_parser, main
@@ -126,6 +126,12 @@ def test_cli_parser_accepts_explicit_renderer_mode() -> None:
     assert args.renderer == "legacy-sprite"
 
 
+def test_cli_parser_accepts_quiz_demo_mode() -> None:
+    args = build_parser().parse_args(["--mode", "quiz-demo"])
+
+    assert args.mode == "quiz-demo"
+
+
 def test_cli_renderer_flag_overrides_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -138,8 +144,9 @@ def test_cli_renderer_flag_overrides_environment(
         captured.append(RendererMode(renderer_mode))
         return object()
 
-    def fake_run(position, *, renderer=None):
+    def fake_run(position, *, renderer=None, mode=AppMode.LOCAL_GAME):
         assert renderer is not None
+        assert mode is AppMode.LOCAL_GAME
 
     monkeypatch.setenv("CHESS_TUI_RENDERER", "unicode")
     monkeypatch.setattr("chess_tui.cli.validate_textual_runtime", fake_validate)
@@ -164,11 +171,32 @@ def test_cli_environment_renderer_is_used_when_flag_missing(
     monkeypatch.setenv("CHESS_TUI_RENDERER", "unicode")
     monkeypatch.setattr("chess_tui.cli.validate_textual_runtime", fake_validate)
     monkeypatch.setattr(
-        "chess_tui.cli.run_chess_app", lambda position, *, renderer=None: None
+        "chess_tui.cli.run_chess_app",
+        lambda position, *, renderer=None, mode=AppMode.LOCAL_GAME: None,
     )
 
     assert main([]) == 0
     assert captured == [RendererMode.UNICODE]
+
+
+def test_cli_passes_quiz_demo_mode_to_app(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: list[AppMode] = []
+
+    monkeypatch.setattr(
+        "chess_tui.cli.validate_textual_runtime",
+        lambda stream, *, renderer_mode=None: object(),
+    )
+    monkeypatch.setattr(
+        "chess_tui.cli.run_chess_app",
+        lambda position, *, renderer=None, mode=AppMode.LOCAL_GAME: captured.append(
+            mode
+        ),
+    )
+
+    assert main(["--mode", "quiz-demo"]) == 0
+    assert captured == [AppMode.QUIZ_DEMO]
 
 
 def test_package_smoke() -> None:

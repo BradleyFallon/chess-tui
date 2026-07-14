@@ -17,7 +17,7 @@ from chess_tui.board import (
     PIXEL_SPRITE_HEIGHT,
     PIXEL_SPRITE_WIDTH,
 )
-from chess_tui.game import BoardInteraction, ChessMove
+from chess_tui.game import ChessMove
 from chess_tui.renderers.base import center_cells
 from chess_tui.renderers.colors import DARK_SQUARE, LIGHT_SQUARE
 from chess_tui.renderers.factory import create_piece_renderer
@@ -40,6 +40,7 @@ from chess_tui.tui import (
     display_coordinates_to_square,
     square_to_display_coordinates,
 )
+from chess_tui.view import BoardViewState, MoveView
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "fens.json"
 GLYPHS = frozenset(PIECE_GLYPHS.values())
@@ -189,7 +190,10 @@ def test_pixel_mask_last_move_uses_only_a_one_pixel_outline() -> None:
 def test_last_move_squares_keep_their_checkerboard_backgrounds() -> None:
     board = ChessBoard(parse_fen(DEFAULT_STARTING_FEN))
     move = ChessMove.from_uci("b1c3")
-    board.interaction = BoardInteraction(last_move=move)
+    board.view_state = BoardViewState(
+        position=board.view_state.position,
+        last_move=MoveView(move.from_square, move.to_square),
+    )
 
     assert board._square_visual_state(move.from_square) == "last-move"
     assert board._square_visual_state(move.to_square) == "last-move"

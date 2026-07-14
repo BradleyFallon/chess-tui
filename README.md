@@ -9,6 +9,8 @@ moves, and renders chess pieces on a responsive checkerboard.
 source ./activate
 update-deps
 chess-tui --help
+chess-tui --mode local-game
+chess-tui --mode quiz-demo
 chess-tui --renderer pixel-mask
 chess-tui --renderer unicode
 chess-tui --renderer legacy-sprite
@@ -24,7 +26,10 @@ editable mode with its `dev` dependencies and finishes with `pip check`.
 After activation, `chess-tui` resolves to the installed console script at
 `venv/bin/chess-tui`, which runs `chess_tui.cli:main` from the editable source.
 
-## Controls
+Application mode and renderer mode are independent, so combinations such as
+`chess-tui --mode quiz-demo --renderer unicode` are supported.
+
+## Local-game controls
 
 - Click a piece to select it and show its legal destinations.
 - Click a highlighted destination to create a pending move.
@@ -32,6 +37,20 @@ After activation, `chess-tui` resolves to the installed console script at
 - Press `Escape` to cancel selection or a pending move.
 - Press `F` to flip the board.
 - Press `Q` to quit.
+
+## Quiz-demo controls
+
+- Press `A`, `S`, `D`, or `F` to highlight a move without submitting it.
+- Press `Up` or `Down` to move the highlight and `Enter` to confirm.
+- Hover a move to highlight it or click it to submit it.
+- Correct answers advance automatically after 600 ms; `Enter` skips the delay.
+- Mismatches show the canonical answer and wait for `Enter`.
+- Press `L` to switch between the packaged London and Caro-Kann demo flows.
+- At the frontier, press `A` for the unsaved mock continuation form, `S` to
+  restart, or `F` to exit.
+
+Quiz demo data is local and read-only. It does not start, connect to, or persist
+data in ChessFlow.
 
 ## Runtime contract
 
@@ -43,6 +62,7 @@ unless all of these requirements are met:
 - The selected renderer's glyphs or masks pass strict startup validation.
 - `pixel-mask` requires at least 67 columns by 35 rows, including the status line.
 - The selected renderer is one of `pixel-mask`, `unicode`, or `legacy-sprite`.
+- The selected application mode is `local-game` or `quiz-demo`.
 - The CLI flag `--renderer` overrides `CHESS_TUI_RENDERER`; the default mode is
   `pixel-mask`.
 
@@ -93,6 +113,11 @@ Copy this block when providing the project structure to an LLM:
 |       |-- board.py                   # FEN parsing and board helpers
 |       |-- cli.py                     # Command-line interface
 |       |-- game.py                    # Legal moves and interaction state
+|       |-- modes.py                   # Top-level application modes
+|       |-- screens/                   # Local-game and quiz screens
+|       |-- sessions/                  # Quiz presentation models and providers
+|       |-- widgets/                   # Reusable quiz interaction widgets
+|       |-- view.py                    # Renderer-neutral board display state
 |       |-- renderers/                 # Explicit piece renderer modes
 |       |-- runtime.py                 # Strict dependency/capability checks
 |       |-- tui.py                     # Textual board widget and application
@@ -103,6 +128,8 @@ Copy this block when providing the project structure to an LLM:
 |   |   `-- fens.json                  # Sample positions used by tests
 |   |-- test_board.py                 # FEN parsing and rendering coverage
 |   |-- test_game.py                  # Move controller coverage
+|   |-- test_quiz.py                  # Quiz screen and widget behavior
+|   |-- test_sessions.py              # Fixture provider and model validation
 |   `-- test_smoke.py                 # Minimal package behavior tests
 |-- tox.ini                            # Multi-version test environments
 `-- venv/                              # Generated local Python environment
@@ -142,6 +169,12 @@ Copy this block when providing the project structure to an LLM:
   `main()` function.
 - `src/chess_tui/game.py` - adapts Chessnut into typed move and interaction
   state without coupling chess legality to the renderer.
+- `src/chess_tui/view.py` - defines immutable board presentation state shared
+  by local-game and quiz providers.
+- `src/chess_tui/sessions/` - defines the narrow quiz provider protocol,
+  presentation models, strict errors, and packaged fixture implementation.
+- `src/chess_tui/screens/` - contains independent local-game and quiz UI state
+  machines selected by the application shell.
 - `src/chess_tui/runtime.py` - validates the pinned UI dependencies, UTF-8 TTY,
   and Unicode cell widths before the application starts.
 - `src/chess_tui/tui.py` - implements the Textual line-rendered chess board,
@@ -165,5 +198,6 @@ Copy this block when providing the project structure to an LLM:
 ## Customize me
 
 - Use `chess_tui.parse_fen()` to validate and normalize FEN strings.
-- The CLI accepts `--fen` and opens the standard starting position by default.
+- The CLI accepts `--mode`, `--renderer`, and `--fen`; local-game opens the
+  standard starting position by default.
 - Add dependencies under `[project.dependencies]` in `pyproject.toml`.

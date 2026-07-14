@@ -8,6 +8,7 @@ import sys
 
 from . import DEFAULT_STARTING_FEN, __version__
 from .board import FenError, parse_fen
+from .modes import AppMode
 from .renderers.mode import RendererMode
 from .runtime import RuntimeRequirementError, validate_textual_runtime
 from .tui import run_chess_app
@@ -16,12 +17,18 @@ from .tui import run_chess_app
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chess-tui",
-        description="Render a chess position from FEN in the terminal.",
+        description="Play local chess or run a fixture-backed move quiz.",
     )
     parser.add_argument(
         "--fen",
         default=DEFAULT_STARTING_FEN,
-        help="FEN string to render (defaults to the standard starting position).",
+        help=("Local-game FEN to render (defaults to the standard starting position)."),
+    )
+    parser.add_argument(
+        "--mode",
+        choices=[mode.value for mode in AppMode],
+        default=AppMode.LOCAL_GAME.value,
+        help="Application mode (defaults to local-game).",
     )
     parser.add_argument(
         "--renderer",
@@ -76,7 +83,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout,
             renderer_mode=renderer_mode,
         )
-        run_chess_app(position, renderer=renderer)
+        run_chess_app(position, renderer=renderer, mode=AppMode(args.mode))
     except RuntimeRequirementError as exc:
         parser.exit(2, f"{parser.prog}: error: {exc}\n")
     return 0

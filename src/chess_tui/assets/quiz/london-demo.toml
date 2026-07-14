@@ -1,0 +1,82 @@
+name = "London Demo"
+side = "white"
+frontier_fen = "rnbqkb1r/ppp1pppp/5n2/3p4/3P1B2/5N2/PPP1PPPP/RN1QKB1R b KQkq - 3 3"
+frontier_line = ["d4", "d5", "Bf4", "Nf6", "Nf3"]
+
+[[states]]
+id = "london-1"
+fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+line = []
+prompt = "Select White's first move."
+correct = "d2d4"
+explanation = "Claim central space and prepare the London structure."
+advance = ["d2d4", "d7d5"]
+
+[[states.choices]]
+id = "a"
+san = "e4"
+uci = "e2e4"
+[[states.choices]]
+id = "s"
+san = "d4"
+uci = "d2d4"
+[[states.choices]]
+id = "d"
+san = "Nf3"
+uci = "g1f3"
+[[states.choices]]
+id = "f"
+san = "c4"
+uci = "c2c4"
+
+[[states]]
+id = "london-2"
+fen = "rnbqkbnr/ppp1pppp/8/3p4/3P4/8/PPP1PPPP/RNBQKBNR w KQkq d6 0 2"
+line = ["d4", "d5"]
+prompt = "Develop the London bishop."
+correct = "c1f4"
+explanation = "Develop the bishop before playing e3."
+advance = ["c1f4", "g8f6"]
+
+[[states.choices]]
+id = "a"
+san = "Bf4"
+uci = "c1f4"
+[[states.choices]]
+id = "s"
+san = "Nf3"
+uci = "g1f3"
+[[states.choices]]
+id = "d"
+san = "c4"
+uci = "c2c4"
+[[states.choices]]
+id = "f"
+san = "e3"
+uci = "e2e3"
+
+[[states]]
+id = "london-3"
+fen = "rnbqkb1r/ppp1pppp/5n2/3p4/3P1B2/8/PPP1PPPP/RN1QKBNR w KQkq - 2 3"
+line = ["d4", "d5", "Bf4", "Nf6"]
+prompt = "Continue natural development."
+correct = "g1f3"
+explanation = "Nf3 supports the center and prepares castling."
+advance = ["g1f3"]
+
+[[states.choices]]
+id = "a"
+san = "Nf3"
+uci = "g1f3"
+[[states.choices]]
+id = "s"
+san = "e3"
+uci = "e2e3"
+[[states.choices]]
+id = "d"
+san = "c3"
+uci = "c2c3"
+[[states.choices]]
+id = "f"
+san = "Nc3"
+uci = "b1c3"
