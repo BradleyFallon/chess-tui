@@ -1,19 +1,47 @@
 #!/usr/bin/env bash
 
-_script_path="${BASH_SOURCE[0]:-$0}"
+if [[ -n "${ZSH_VERSION:-}" ]]; then
+  eval '_script_path=${(%):-%x}'
+elif [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+  _script_path="${BASH_SOURCE[0]}"
+else
+  _script_path="$0"
+fi
 _project_root="$(cd "$(dirname "${_script_path}")" && pwd)"
-_venv_dir="${_project_root}/venv"
-
-if [[ ! -d "$_venv_dir" ]]; then
-  echo "Missing venv at ${_venv_dir}. Run the generator first." >&2
-  return 1
+_venv_dir=""
+if [[ -d "${_project_root}/venv" ]]; then
+  _venv_dir="${_project_root}/venv"
+elif [[ -d "${_project_root}/src/venv" ]]; then
+  _venv_dir="${_project_root}/src/venv"
+else
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -m venv "${_project_root}/venv"
+    _venv_dir="${_project_root}/venv"
+  elif command -v python >/dev/null 2>&1; then
+    python -m venv "${_project_root}/venv"
+    _venv_dir="${_project_root}/venv"
+  else
+    echo "Python not found. Install Python 3 to create a virtual environment." >&2
+    return 1
+  fi
 fi
 
-# shellcheck disable=SC1090
-. "${_venv_dir}/bin/activate"
+if [[ "${VIRTUAL_ENV:-}" != "${_venv_dir}" ]]; then
+  # shellcheck disable=SC1090
+  . "${_venv_dir}/bin/activate"
+fi
+
+# A copied venv may have a stale absolute path in bin/activate. The interpreter
+# itself is relocatable, so force this project's paths after sourcing it.
+export VIRTUAL_ENV="${_venv_dir}"
+export PATH="${_venv_dir}/bin:${PATH}"
+hash -r 2>/dev/null || true
 
 export PROJECT_ROOT="${_project_root}"
-export PYTHONPATH="${_project_root}/src${PYTHONPATH:+:${PYTHONPATH}}"
+case ":${PYTHONPATH:-}:" in
+  *":${_project_root}/src:"*) ;;
+  *) export PYTHONPATH="${_project_root}/src${PYTHONPATH:+:${PYTHONPATH}}" ;;
+esac
 
 if [[ -f "${_project_root}/devtools/aliases.sh" ]]; then
   # shellcheck disable=SC1090

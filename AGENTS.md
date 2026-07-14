@@ -17,3 +17,5 @@ Common commands:
 
 - `chess-tui` - run the package CLI
 - `check-setup` - verify the environment and package import
+- `update-deps` - install or update the project and development dependencies
+- `fix-deps` - compatibility alias for `update-deps`
