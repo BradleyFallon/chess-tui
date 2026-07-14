@@ -93,6 +93,13 @@ class AuthorBoardController:
     def position(self) -> ParsedFen:
         return parse_fen(self.board.fen(en_passant="fen"))
 
+    @property
+    def pending_san(self) -> str | None:
+        pending = self.interaction.pending_move
+        if pending is None:
+            return None
+        return self.board.san(chess.Move.from_uci(pending.uci))
+
     def reset(self, board: chess.Board) -> None:
         self.board = board.copy(stack=False)
         self.interaction = BoardInteraction()
@@ -112,14 +119,22 @@ class AuthorBoardController:
         pending = self.interaction.pending_move
         if pending is None:
             return None
-        move = chess.Move.from_uci(pending.uci)
+        return self._commit_move(chess.Move.from_uci(pending.uci))
+
+    def confirm_san(self, san: str) -> ConfirmedAuthorMove:
+        """Parse and commit a typed legal SAN move."""
+
+        return self._commit_move(self.board.parse_san(san))
+
+    def _commit_move(self, move: chess.Move) -> ConfirmedAuthorMove:
         san = self.board.san(move)
         color = self.board.turn
         self.board.push(move)
         hover = self.interaction.hover_square
-        self.interaction = BoardInteraction(hover_square=hover, last_move=pending)
+        committed = ChessMove.from_uci(move.uci())
+        self.interaction = BoardInteraction(hover_square=hover, last_move=committed)
         self._update_checked_king()
-        return ConfirmedAuthorMove(pending, san, color)
+        return ConfirmedAuthorMove(committed, san, color)
 
     def clear_selection(self) -> None:
         self.interaction.selected_square = None

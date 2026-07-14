@@ -8,18 +8,21 @@ from pathlib import Path
 
 import chess
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical
-from textual.events import Key, Resize
+from textual.events import DescendantBlur, DescendantFocus, Key, Resize
 from textual.screen import Screen
 from textual.widgets import Button, Input, Static
 
 from ..flow import (
     AuthorBoardController,
+    ConfirmedAuthorMove,
     FlowError,
     Recommendation,
     RuleUnavailableError,
     WhiteFlowAuthor,
 )
+from ..input_mode import InputMode, InputModeController
 from ..layout import QuizLayoutMode, choose_quiz_layout
 from ..renderers.base import PieceRenderer
 from ..renderers.colors import LABEL_COLOR, SCREEN_BACKGROUND, STATUS_BACKGROUND
@@ -56,6 +59,7 @@ class PendingRuleChange:
 
 
 class AuthorScreen(Screen[None]):
+    AUTO_FOCUS = ""
     CSS = f"""
     AuthorScreen {{ background: {SCREEN_BACKGROUND}; }}
     AuthorScreen > #author-header {{
@@ -66,6 +70,7 @@ class AuthorScreen(Screen[None]):
     AuthorScreen #board-stage {{ align: center middle; }}
     AuthorScreen #author-side {{ padding: 1 2; }}
     AuthorScreen #author-panel {{ height: auto; }}
+    AuthorScreen #move-entry {{ height: 3; margin-top: 1; }}
     AuthorScreen #note {{ display: none; height: 3; margin-top: 1; }}
     AuthorScreen #decision-actions {{ display: none; height: 3; margin-top: 1; }}
     AuthorScreen #decision-actions Button {{ width: 1fr; height: 3; min-width: 12; }}
@@ -93,17 +98,19 @@ class AuthorScreen(Screen[None]):
         width: 100%; height: 3; padding: 0;
     }}
     AuthorScreen.layout-compact #author-panel {{ height: 1; }}
+    AuthorScreen.layout-compact #move-entry {{ height: 1; margin: 0; border: none; }}
     AuthorScreen.layout-compact #note {{ height: 1; margin: 0; border: none; }}
     AuthorScreen.layout-compact #decision-actions {{ height: 1; margin: 0; }}
     AuthorScreen.layout-compact #decision-actions Button {{ height: 1; min-width: 8; }}
     AuthorScreen.layout-too-small > #author-layout {{ display: none; }}
     """
     BINDINGS = [
-        ("q", "app.quit", "Quit"),
-        ("ctrl+r", "reload_flow", "Reload"),
-        ("ctrl+n", "restart_line", "Restart"),
+        Binding("q", "request_quit", "Quit"),
+        Binding("i", "focus_available_input", "Type"),
+        Binding("ctrl+r", "reload_flow", "Reload"),
+        Binding("ctrl+n", "restart_line", "Restart"),
         ("enter", "confirm_move", "Confirm"),
-        ("escape", "cancel", "Cancel"),
+        Binding("escape", "cancel", "Cancel", priority=True),
     ]
 
     def __init__(self, flow_path: Path, renderer: PieceRenderer) -> None:
@@ -120,11 +127,15 @@ class AuthorScreen(Screen[None]):
         )
         self.header = Static("", id="author-header")
         self.panel = Static("", id="author-panel", markup=False)
+        self.move_input = Input(
+            placeholder="Type a move in SAN, then press Enter", id="move-entry"
+        )
         self.note_input = Input(placeholder="Why?", id="note")
         self.note_input.disabled = True
         self.actions = Horizontal(id="decision-actions")
         self.debug_status = Static("", id="debug-status", markup=False)
         self.status = Static("", id="author-status", markup=False)
+        self.input = InputModeController()
         self.phase = AuthorPhase.LOADING
         self.layout_mode: QuizLayoutMode | None = None
         self.history: list[str] = []
@@ -133,6 +144,9 @@ class AuthorScreen(Screen[None]):
         self.failure: Exception | None = None
         self._geometry_error: str | None = None
         self._reload_error: str | None = None
+        self._move_error: str | None = None
+        self._text_value_before: str | None = None
+        self._quit_confirmation = False
 
     @property
     def renderer(self) -> PieceRenderer:
@@ -145,6 +159,7 @@ class AuthorScreen(Screen[None]):
                 yield self.board
             with Vertical(id="author-side"):
                 yield self.panel
+                yield self.move_input
                 yield self.note_input
                 with self.actions:
                     yield Button("Save default", id="save-default", variant="primary")
@@ -190,10 +205,40 @@ class AuthorScreen(Screen[None]):
 
     def on_chess_board_square_clicked(self, message: ChessBoard.SquareClicked) -> None:
         if self.phase in {AuthorPhase.WHITE_MOVE, AuthorPhase.BLACK_MOVE}:
+            if self.input.mode is InputMode.TEXT:
+                self._leave_text_mode()
             self.controller.handle_square(message.square)
+            pending_san = self.controller.pending_san
+            if pending_san is not None:
+                self.move_input.value = pending_san
             self._sync_board()
 
+    def on_descendant_focus(self, event: DescendantFocus) -> None:
+        field = event.widget
+        if isinstance(field, Input) and field in {self.move_input, self.note_input}:
+            self._enter_text_mode(field)
+
+    def on_descendant_blur(self, event: DescendantBlur) -> None:
+        field = event.widget
+        if (
+            isinstance(field, Input)
+            and field in {self.move_input, self.note_input}
+            and self.input.field_blurred(field)
+        ):
+            self._text_value_before = None
+            self._update_status()
+
     def on_key(self, event: Key) -> None:
+        if not self.input.handles_global_shortcuts:
+            return
+        if self._quit_confirmation:
+            return
+        if event.key.lower() == "r":
+            event.stop()
+            self.action_restart_line()
+            return
+        if self.phase in {AuthorPhase.WHITE_MOVE, AuthorPhase.BLACK_MOVE}:
+            return
         if self.phase not in {
             AuthorPhase.CHOOSE_RULE_CHANGE,
             AuthorPhase.ERROR,
@@ -202,7 +247,7 @@ class AuthorScreen(Screen[None]):
         actions = {
             "s": "save-default",
             "e": "add-exception",
-            "r": "replace-exception",
+            "x": "replace-exception",
             "d": "replace-default",
             "c": "cancel",
         }
@@ -213,6 +258,25 @@ class AuthorScreen(Screen[None]):
         if button.display:
             event.stop()
             button.press()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input is self.note_input:
+            event.stop()
+            self._leave_text_mode()
+            return
+        if event.input is not self.move_input:
+            return
+        event.stop()
+        move_text = event.value.strip()
+        if move_text:
+            self._confirm_typed_move(move_text)
+        else:
+            self.action_confirm_move()
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input is self.move_input and self._move_error is not None:
+            self._move_error = None
+            self._update_status()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         action = event.button.id
@@ -225,6 +289,29 @@ class AuthorScreen(Screen[None]):
         elif action == "replace-default":
             self._save_default()
 
+    def action_focus_available_input(self) -> None:
+        if not self.input.handles_global_shortcuts or self._quit_confirmation:
+            return
+        if self.phase in {AuthorPhase.WHITE_MOVE, AuthorPhase.BLACK_MOVE}:
+            self._enter_text_mode(self.move_input)
+        elif self.phase in {AuthorPhase.CHOOSE_RULE_CHANGE, AuthorPhase.ERROR}:
+            self._enter_text_mode(self.note_input)
+
+    def action_request_quit(self) -> None:
+        if not self.input.handles_global_shortcuts:
+            return
+        if self._quit_confirmation:
+            self.app.exit()
+            return
+        if self.pending_change is None:
+            self.app.exit()
+            return
+        self._quit_confirmation = True
+        self.panel.update(
+            "UNSAVED RULE CHANGE\n\n[Q] Quit without saving    [Esc] Return"
+        )
+        self._update_status()
+
     def action_confirm_move(self) -> None:
         if self.phase not in {AuthorPhase.WHITE_MOVE, AuthorPhase.BLACK_MOVE}:
             return
@@ -234,6 +321,30 @@ class AuthorScreen(Screen[None]):
         confirmed = self.controller.confirm_move()
         if confirmed is None:
             return
+        self._finish_confirmed_move(confirmed, board_before, history_before)
+
+    def _confirm_typed_move(self, move_text: str) -> None:
+        if self.phase not in {AuthorPhase.WHITE_MOVE, AuthorPhase.BLACK_MOVE}:
+            return
+        self._reload_error = None
+        board_before = self.controller.board.copy(stack=False)
+        history_before = tuple(self.history)
+        try:
+            confirmed = self.controller.confirm_san(move_text)
+        except ValueError:
+            self._move_error = f"{move_text!r} is not a legal SAN move"
+            self._update_status()
+            return
+        self.move_input.value = ""
+        self._finish_confirmed_move(confirmed, board_before, history_before)
+
+    def _finish_confirmed_move(
+        self,
+        confirmed: ConfirmedAuthorMove,
+        board_before: chess.Board,
+        history_before: tuple[str, ...],
+    ) -> None:
+        self._move_error = None
         self.history.append(confirmed.san)
         self._sync_board()
         if confirmed.color is chess.BLACK:
@@ -271,6 +382,14 @@ class AuthorScreen(Screen[None]):
         self._show_rule_decision()
 
     def action_cancel(self) -> None:
+        if self.input.mode is InputMode.TEXT:
+            self._leave_text_mode(restore=True)
+            return
+        if self._quit_confirmation:
+            self._quit_confirmation = False
+            self._refresh_panel()
+            self._update_status()
+            return
         self._reload_error = None
         pending = self.pending_change
         if pending is not None:
@@ -284,9 +403,13 @@ class AuthorScreen(Screen[None]):
             self._sync_board()
 
     def action_restart_line(self) -> None:
+        if not self.input.handles_global_shortcuts:
+            return
         self._restart()
 
     def action_reload_flow(self) -> None:
+        if not self.input.handles_global_shortcuts:
+            return
         try:
             self.author.reload()
         except FlowError as error:
@@ -300,11 +423,15 @@ class AuthorScreen(Screen[None]):
         self._refresh_turn()
 
     def _restart(self) -> None:
+        self._leave_text_mode()
         self.controller.reset(chess.Board(self.author.flow.start_fen))
         self.history.clear()
         self.pending_change = None
+        self.move_input.value = ""
         self.note_input.value = ""
         self._reload_error = None
+        self._move_error = None
+        self._quit_confirmation = False
         self._enter_white_turn()
 
     def _enter_white_turn(self) -> None:
@@ -330,30 +457,61 @@ class AuthorScreen(Screen[None]):
 
     def _show_rule_decision(self) -> None:
         self.phase = AuthorPhase.CHOOSE_RULE_CHANGE
+        self.move_input.display = False
+        self.move_input.disabled = True
         self.note_input.disabled = False
         self.note_input.display = True
         self.actions.display = True
         pending = self.pending_change
         assert pending is not None
-        self.query_one("#save-default", Button).display = (
-            pending.decision is RuleDecision.DEFINE_DEFAULT
+        self._set_button_available(
+            "save-default", pending.decision is RuleDecision.DEFINE_DEFAULT
         )
-        self.query_one("#add-exception", Button).display = (
-            pending.decision is RuleDecision.DIFFERENT_FROM_DEFAULT
+        self._set_button_available(
+            "add-exception", pending.decision is RuleDecision.DIFFERENT_FROM_DEFAULT
         )
-        self.query_one("#replace-exception", Button).display = (
-            pending.decision is RuleDecision.DIFFERENT_FROM_EXCEPTION
+        self._set_button_available(
+            "replace-exception",
+            pending.decision is RuleDecision.DIFFERENT_FROM_EXCEPTION,
         )
-        self.query_one("#replace-default", Button).display = (
-            pending.decision is not RuleDecision.DEFINE_DEFAULT
+        self._set_button_available(
+            "replace-default", pending.decision is not RuleDecision.DEFINE_DEFAULT
         )
+        self._set_button_available("cancel", True)
+        self._enter_text_mode(self.note_input)
         self._refresh_panel()
         self._update_status()
 
     def _hide_decision(self) -> None:
+        self._leave_text_mode()
         self.note_input.display = False
         self.note_input.disabled = True
         self.actions.display = False
+        for button in self.actions.query(Button):
+            button.disabled = True
+        self.move_input.display = True
+        self.move_input.disabled = False
+
+    def _enter_text_mode(self, field: Input) -> None:
+        if self.input.active_field is not field:
+            self._text_value_before = field.value
+        self.input.enter_text(field)
+        self._update_status()
+
+    def _leave_text_mode(self, *, restore: bool = False) -> None:
+        field = self.input.active_field
+        if restore and isinstance(field, Input) and self._text_value_before is not None:
+            field.value = self._text_value_before
+        self.input.leave_text()
+        self._text_value_before = None
+        self._move_error = None
+        if self.is_mounted:
+            self._update_status()
+
+    def _set_button_available(self, button_id: str, available: bool) -> None:
+        button = self.query_one(f"#{button_id}", Button)
+        button.display = available
+        button.disabled = not available
 
     def _save_default(self) -> None:
         pending = self.pending_change
@@ -503,19 +661,30 @@ class AuthorScreen(Screen[None]):
         if self._geometry_error is not None:
             self.status.update(self._geometry_error.replace("\n", " "))
             return
+        if self._quit_confirmation:
+            self.status.update("[NAV] Q QUIT WITHOUT SAVING · ESC RETURN")
+            return
+        if self._move_error is not None:
+            self.status.update(
+                f"[TEXT: MOVE] INVALID MOVE: {self._move_error} · ESC CANCEL"
+            )
+            return
+        if self.input.mode is InputMode.TEXT:
+            if self.input.active_field is self.note_input:
+                self.status.update("[TEXT: NOTE] TYPE NOTE · ENTER DONE · ESC CANCEL")
+            else:
+                self.status.update("[TEXT: MOVE] TYPE SAN · ENTER SUBMIT · ESC CANCEL")
+            return
         instructions = {
-            AuthorPhase.WHITE_MOVE: "PLAY WHITE · ENTER CONFIRM",
-            AuthorPhase.BLACK_MOVE: "PLAY BLACK · ENTER CONFIRM",
-            AuthorPhase.CHOOSE_RULE_CHANGE: "CHOOSE RULE CHANGE",
+            AuthorPhase.WHITE_MOVE: "PLAY WHITE · I TYPE SAN · ENTER CONFIRM",
+            AuthorPhase.BLACK_MOVE: "PLAY BLACK · I TYPE SAN · ENTER CONFIRM",
+            AuthorPhase.CHOOSE_RULE_CHANGE: "CHOOSE RULE CHANGE · I EDIT NOTE",
             AuthorPhase.SAVING: "SAVING",
             AuthorPhase.ERROR: "C CANCEL",
             AuthorPhase.LOADING: "LOADING",
             AuthorPhase.NOTE: "ENTER NOTE",
         }[self.phase]
-        self.status.update(
-            f"Renderer: {self.renderer.mode.value} · {instructions} · "
-            "CTRL+N RESTART · CTRL+R RELOAD · Q QUIT"
-        )
+        self.status.update(f"[NAV] {instructions} · R RESTART · CTRL+R RELOAD · Q QUIT")
 
     def _update_debug_status(self) -> None:
         turn = "white" if self.controller.board.turn is chess.WHITE else "black"
@@ -528,8 +697,9 @@ class AuthorScreen(Screen[None]):
             rule = "none"
         error = type(self.failure).__name__ if self.failure is not None else "none"
         self.debug_status.update(
-            f"phase={self.phase.value} | turn={turn} | white_step={white_step} | "
-            f"ply={len(self.history)} | rule={rule} | error={error}"
+            f"phase={self.phase.value} | input={self.input.mode.value} | "
+            f"turn={turn} | white_step={white_step} | ply={len(self.history)} | "
+            f"rule={rule} | error={error}"
         )
 
     def _apply_layout_mode(self, mode: QuizLayoutMode) -> None:

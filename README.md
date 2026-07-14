@@ -65,14 +65,23 @@ Author mode edits one local White-flow TOML file. White recommendations resolve
 an exact-position exception first, then the numbered default for that White
 step.
 
-- Play White's recommended move, or another legal move, on the board.
-- On Black's turn, manually play any legal response to explore that branch.
+- Play White's recommended move, or another legal move, on the board. Press
+  `Enter` after highlighting the destination; the board selection autofills the
+  SAN field. You can also type the move in SAN and press `Enter`.
+- On Black's turn, play any legal response on the board or type it in SAN to
+  explore that branch.
+- Author interaction starts in `[NAV]`, where board controls and shortcuts are
+  active. Press `I` or click the SAN field to enter `[TEXT: MOVE]`; printable
+  keys are literal until `Enter` submits or `Escape` cancels the edit.
 - When White differs from the policy, save an exact-position exception or
-  replace the numbered default.
-- `Ctrl+N` restarts the line from the flow's starting FEN.
+  replace the numbered default. The optional note opens in `[TEXT: NOTE]`
+  automatically; `Enter` finishes editing the note without choosing a rule
+  action.
+- `R` restarts the line from the flow's starting FEN; `Ctrl+N` remains an alias.
 - `Ctrl+R` reloads and validates hand edits without discarding the active policy
   when the file is invalid.
-- `Escape` cancels a pending move or rule decision, and `Q` quits.
+- `Escape` leaves text mode or cancels a pending move or rule decision. `Q`
+  quits in NAV mode and types a literal `q` in TEXT mode.
 - A minimal debug line shows the current author phase, turn, White step, ply,
   active rule source, and error state.
 

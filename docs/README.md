@@ -43,7 +43,10 @@ histories for exact-position exceptions. `WhitePolicy` derives normalized
 position keys and resolves exceptions before defaults; `FlowStore` validates
 and atomically saves changes with a backup.
 
-The author screen uses python-chess as its rules authority. White plays or edits
-the recommendation, while Black moves are selected manually to explore a line.
+The author screen uses python-chess as its rules authority. White plays or types
+the recommendation in SAN, while Black moves are selected on the board or typed
+in SAN to explore a line.
+Explicit `[NAV]`, `[TEXT: MOVE]`, and `[TEXT: NOTE]` modes determine whether
+printable keys invoke application shortcuts or enter literal text.
 The screen emits default/exception edit intent to `WhiteFlowAuthor`; policy and
 persistence semantics do not live in the Textual screen.

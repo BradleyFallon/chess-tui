@@ -7,12 +7,13 @@ import shutil
 from chess_tui import AppMode, DEFAULT_STARTING_FEN, parse_fen
 from chess_tui.flow import FlowStore, WhiteFlow
 from chess_tui.game import square_from_name
+from chess_tui.input_mode import InputMode
 from chess_tui.layout import QuizLayoutMode
 from chess_tui.renderers.factory import create_piece_renderer
 from chess_tui.renderers.mode import RendererMode
 from chess_tui.screens.author import AuthorPhase, AuthorScreen, RuleDecision
 from chess_tui.runtime import TerminalCapabilityError
-from chess_tui.tui import ChessTui
+from chess_tui.tui import ChessBoard, ChessTui
 
 PROJECT_ROOT = Path(__file__).parents[1]
 LONDON_FLOW = PROJECT_ROOT / "flows" / "london.toml"
@@ -98,10 +99,185 @@ def test_author_q_quits_when_note_editor_is_hidden(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
             assert screen.note_input.disabled
+            assert screen.input.mode is InputMode.NAVIGATION
+            assert app.focused is None
+            assert screen.status.render_line(0).text.strip().startswith("[NAV]")
 
             await pilot.press("q")
             await pilot.pause()
 
+            assert not app.is_running
+
+    asyncio.run(run_test())
+
+
+def test_author_enter_confirms_highlighted_board_move(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            parse_fen(DEFAULT_STARTING_FEN),
+            mode=AppMode.AUTHOR,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            assert screen.input.mode is InputMode.NAVIGATION
+            screen.on_chess_board_square_clicked(
+                ChessBoard.SquareClicked(square_from_name("d2"))
+            )
+            screen.on_chess_board_square_clicked(
+                ChessBoard.SquareClicked(square_from_name("d4"))
+            )
+            assert screen.move_input.value == "d4"
+            assert screen.input.mode is InputMode.NAVIGATION
+
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert screen.history == ["d4"]
+            assert screen.phase is AuthorPhase.BLACK_MOVE
+
+            await pilot.press("r")
+            await pilot.pause()
+            assert screen.history == []
+            assert screen.phase is AuthorPhase.WHITE_MOVE
+
+    asyncio.run(run_test())
+
+
+def test_author_accepts_typed_san_and_reports_invalid_input(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            parse_fen(DEFAULT_STARTING_FEN),
+            mode=AppMode.AUTHOR,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await pilot.press("i")
+            await pilot.pause()
+            assert screen.input.mode is InputMode.TEXT
+            assert app.focused is screen.move_input
+            screen.move_input.value = "not-a-move"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.history == []
+            assert "INVALID MOVE" in screen.status.render_line(0).text
+            assert screen.input.mode is InputMode.TEXT
+
+            screen.move_input.value = "d4"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.history == ["d4"]
+            assert screen.phase is AuthorPhase.BLACK_MOVE
+            assert screen.move_input.value == ""
+            assert screen.input.mode is InputMode.NAVIGATION
+
+            await pilot.press("i")
+            screen.move_input.value = "d5"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.history == ["d4", "d5"]
+            assert screen.phase is AuthorPhase.WHITE_MOVE
+
+    asyncio.run(run_test())
+
+
+def test_author_text_mode_treats_shortcuts_as_literal_text(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            parse_fen(DEFAULT_STARTING_FEN),
+            mode=AppMode.AUTHOR,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            screen.move_input.value = "d4"
+            assert await pilot.click("#move-entry")
+            await pilot.pause()
+            assert screen.input.mode is InputMode.TEXT
+            assert screen.status.render_line(0).text.strip().startswith("[TEXT: MOVE]")
+
+            await pilot.press("q", "e", "d", "r")
+            await pilot.pause()
+            assert app.is_running
+            assert "qedr" in screen.move_input.value
+            assert "d4" in screen.move_input.value
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert screen.input.mode is InputMode.NAVIGATION
+            assert screen.move_input.value == "d4"
+            assert app.focused is None
+
+    asyncio.run(run_test())
+
+
+def test_author_note_opens_in_text_mode_and_pending_quit_is_guarded(
+    tmp_path: Path,
+) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "empty.toml"
+        FlowStore().save(
+            path,
+            WhiteFlow(1, "Empty London", DEFAULT_STARTING_FEN, (), ()),
+        )
+        app = ChessTui(
+            parse_fen(DEFAULT_STARTING_FEN),
+            mode=AppMode.AUTHOR,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            _play(screen, "d2d4")
+            await pilot.pause()
+            assert screen.phase is AuthorPhase.CHOOSE_RULE_CHANGE
+            assert screen.input.mode is InputMode.TEXT
+            assert app.focused is screen.note_input
+            assert screen.status.render_line(0).text.strip().startswith("[TEXT: NOTE]")
+
+            await pilot.press("q")
+            await pilot.pause()
+            assert app.is_running
+            assert screen.note_input.value == "q"
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.input.mode is InputMode.NAVIGATION
+
+            await pilot.press("q")
+            await pilot.pause()
+            assert app.is_running
+            assert "UNSAVED RULE CHANGE" in screen.panel.render_line(0).text
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert app.is_running
+            assert screen.phase is AuthorPhase.CHOOSE_RULE_CHANGE
+
+            await pilot.press("q", "q")
+            await pilot.pause()
             assert not app.is_running
 
     asyncio.run(run_test())
