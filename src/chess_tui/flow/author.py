@@ -10,7 +10,7 @@ import chess
 
 from ..board import ParsedFen, parse_fen
 from ..game import BoardInteraction, ChessMove
-from .models import ExceptionRule, Recommendation, WhiteFlow
+from .models import ExceptionRule, OpponentReply, Recommendation, WhiteFlow
 from .policy import WhitePolicy
 from .errors import FlowValidationError
 from .position import normalized_position_key, parse_legal_san, replay_san
@@ -73,6 +73,30 @@ class WhiteFlowAuthor:
         self.policy = WhitePolicy(updated)
         return updated
 
+    def record_opponent_reply(
+        self,
+        board: chess.Board,
+        after_san: tuple[str, ...],
+        move_san: str,
+    ) -> WhiteFlow:
+        replayed = replay_san(self.flow.start_fen, after_san)
+        if normalized_position_key(replayed) != normalized_position_key(board):
+            raise FlowValidationError(
+                "Opponent reply SAN history does not resolve to the authored position."
+            )
+        if board.turn is not chess.BLACK:
+            raise FlowValidationError("Opponent replies must be recorded for Black.")
+        parse_legal_san(board, move_san, context="Opponent reply")
+        reply = OpponentReply(
+            id=_branch_id(after_san + (move_san,)),
+            after_san=after_san,
+            move_san=move_san,
+        )
+        updated = self.store.add_opponent_reply(self.path, reply)
+        self.flow = updated
+        self.policy = WhitePolicy(updated)
+        return updated
+
 
 @dataclass(frozen=True, slots=True)
 class ConfirmedAuthorMove:
@@ -125,6 +149,14 @@ class AuthorBoardController:
         """Parse and commit a typed legal SAN move."""
 
         return self._commit_move(self.board.parse_san(san))
+
+    def confirm_uci(self, uci: str) -> ConfirmedAuthorMove:
+        """Parse and commit a legal UCI move supplied by an opening source."""
+
+        move = chess.Move.from_uci(uci)
+        if move not in self.board.legal_moves:
+            raise ValueError(f"{uci!r} is not legal in {self.board.fen()}.")
+        return self._commit_move(move)
 
     def _commit_move(self, move: chess.Move) -> ConfirmedAuthorMove:
         san = self.board.san(move)
@@ -186,6 +218,10 @@ class AuthorBoardController:
 
 
 def _exception_id(history: tuple[str, ...]) -> str:
+    return _branch_id(history)
+
+
+def _branch_id(history: tuple[str, ...]) -> str:
     parts = [re.sub(r"[^a-z0-9]+", "-", san.lower()).strip("-") for san in history]
     suffix = "-".join(part for part in parts if part)
     return f"after-{suffix}" if suffix else "starting-position"

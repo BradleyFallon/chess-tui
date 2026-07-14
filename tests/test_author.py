@@ -58,15 +58,18 @@ def test_author_defines_consecutive_defaults_in_empty_flow(tmp_path: Path) -> No
             assert await pilot.click("#save-default")
             await pilot.pause()
 
-            assert screen.phase is AuthorPhase.BLACK_MOVE
-            assert "phase=black-move" in screen.debug_status.render_line(0).text
+            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
+            assert "phase=select-black-move" in screen.debug_status.render_line(0).text
             assert "turn=black" in screen.debug_status.render_line(0).text
             assert FlowStore().load(path).defaults[0].move_san == "d4"
+            assert screen.opening_moves.highlighted_move is not None
+            assert screen.opening_moves.highlighted_move.san == "d5"
 
-            _play(screen, "d7d5")
+            await pilot.press("enter")
             await pilot.pause()
             assert screen.phase is AuthorPhase.WHITE_MOVE
             assert screen.recommendation is None
+            assert screen.move_input.value == ""
 
             _play(screen, "c1f4")
             await pilot.pause()
@@ -127,9 +130,13 @@ def test_author_enter_confirms_highlighted_board_move(tmp_path: Path) -> None:
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
             assert screen.input.mode is InputMode.NAVIGATION
+            await pilot.press("i")
+            screen.move_input.value = "d"
             screen.on_chess_board_square_clicked(
                 ChessBoard.SquareClicked(square_from_name("d2"))
             )
+            assert screen.move_input.value == ""
+            assert screen.input.mode is InputMode.NAVIGATION
             screen.on_chess_board_square_clicked(
                 ChessBoard.SquareClicked(square_from_name("d4"))
             )
@@ -140,7 +147,8 @@ def test_author_enter_confirms_highlighted_board_move(tmp_path: Path) -> None:
             await pilot.pause()
 
             assert screen.history == ["d4"]
-            assert screen.phase is AuthorPhase.BLACK_MOVE
+            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
+            assert screen.move_input.value == ""
 
             await pilot.press("r")
             await pilot.pause()
@@ -180,16 +188,93 @@ def test_author_accepts_typed_san_and_reports_invalid_input(tmp_path: Path) -> N
             await pilot.press("enter")
             await pilot.pause()
             assert screen.history == ["d4"]
-            assert screen.phase is AuthorPhase.BLACK_MOVE
+            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
             assert screen.move_input.value == ""
             assert screen.input.mode is InputMode.NAVIGATION
 
             await pilot.press("i")
+            await pilot.pause()
+            assert screen.phase is AuthorPhase.BLACK_MOVE
+            assert screen.input.mode is InputMode.TEXT
             screen.move_input.value = "d5"
             await pilot.press("enter")
             await pilot.pause()
             assert screen.history == ["d4", "d5"]
             assert screen.phase is AuthorPhase.WHITE_MOVE
+
+    asyncio.run(run_test())
+
+
+def test_author_can_switch_common_response_to_manual_board_entry(
+    tmp_path: Path,
+) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            parse_fen(DEFAULT_STARTING_FEN),
+            mode=AppMode.AUTHOR,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            _play(screen, "d2d4")
+            await pilot.pause()
+            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
+
+            await pilot.press("m")
+            await pilot.pause()
+            assert screen.phase is AuthorPhase.BLACK_MOVE
+
+            screen.on_chess_board_square_clicked(
+                ChessBoard.SquareClicked(square_from_name("d7"))
+            )
+            screen.on_chess_board_square_clicked(
+                ChessBoard.SquareClicked(square_from_name("d5"))
+            )
+            assert screen.move_input.value == "d5"
+            await pilot.press("enter")
+            await pilot.pause()
+
+            assert screen.history == ["d4", "d5"]
+            assert screen.move_input.value == ""
+            assert FlowStore().load(path).opponent_replies[0].move_san == "d5"
+
+    asyncio.run(run_test())
+
+
+def test_author_falls_back_to_manual_black_entry_without_fixture_moves(
+    tmp_path: Path,
+) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "empty.toml"
+        FlowStore().save(
+            path,
+            WhiteFlow(1, "Empty", DEFAULT_STARTING_FEN, (), ()),
+        )
+        app = ChessTui(
+            parse_fen(DEFAULT_STARTING_FEN),
+            mode=AppMode.AUTHOR,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            _play(screen, "e2e4")
+            await pilot.pause()
+            assert await pilot.click("#save-default")
+            await pilot.pause()
+
+            assert screen.phase is AuthorPhase.BLACK_MOVE
+            assert not screen.opening_moves.display
+            assert "legal black move" in screen.panel.render_line(2).text.lower()
 
     asyncio.run(run_test())
 
@@ -362,6 +447,79 @@ def test_author_persists_exact_exception_and_reloads_note(tmp_path: Path) -> Non
             assert screen.failure is not None
             assert screen.author.flow is active_flow
             assert screen.controller.board.fen() != chess_start_fen()
+
+    asyncio.run(run_test())
+
+
+def test_author_selects_and_persists_common_black_branches(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            parse_fen(DEFAULT_STARTING_FEN),
+            mode=AppMode.AUTHOR,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            _play(screen, "d2d4")
+            await pilot.pause()
+            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
+            assert screen.opening_moves.highlighted_move is not None
+            assert screen.opening_moves.highlighted_move.san == "d5"
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.history == ["d4", "d5"]
+            assert screen.move_input.value == ""
+            assert screen.recommendation is not None
+            assert screen.recommendation.move_san == "Bf4"
+
+            screen.action_restart_line()
+            _play(screen, "d2d4")
+            await pilot.pause()
+            await pilot.press("d", "enter")
+            await pilot.pause()
+            assert screen.history == ["d4", "e5"]
+            assert screen.move_input.value == ""
+
+            _play(screen, "d4e5")
+            await pilot.pause()
+            assert screen.pending_change is not None
+            assert screen.pending_change.decision is RuleDecision.DIFFERENT_FROM_DEFAULT
+            screen.note_input.value = "Capture the offered pawn."
+            assert await pilot.click("#add-exception")
+            await pilot.pause()
+
+            screen.action_restart_line()
+            _play(screen, "d2d4")
+            await pilot.pause()
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.recommendation is not None
+            assert screen.recommendation.move_san == "Bf4"
+
+            screen.action_restart_line()
+            _play(screen, "d2d4")
+            await pilot.pause()
+            await pilot.press("d", "enter")
+            await pilot.pause()
+            assert screen.recommendation is not None
+            assert screen.recommendation.move_san == "dxe5"
+            assert screen.recommendation.source == "exception"
+
+            reopened = FlowStore().load(path)
+            assert {
+                (reply.after_san, reply.move_san) for reply in reopened.opponent_replies
+            } == {
+                (("d4",), "d5"),
+                (("d4",), "e5"),
+            }
+            assert len(reopened.exceptions) == 1
 
     asyncio.run(run_test())
 

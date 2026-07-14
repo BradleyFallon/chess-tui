@@ -23,12 +23,21 @@ class ExceptionRule:
 
 
 @dataclass(frozen=True, slots=True)
+class OpponentReply:
+    id: str
+    after_san: tuple[str, ...]
+    move_san: str
+    note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class WhiteFlow:
     version: int
     name: str
     start_fen: str
     defaults: tuple[DefaultRule, ...]
     exceptions: tuple[ExceptionRule, ...]
+    opponent_replies: tuple[OpponentReply, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

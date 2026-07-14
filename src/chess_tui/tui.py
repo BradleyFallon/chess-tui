@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 from rich.segment import Segment
 from rich.style import Style
 from textual.app import App
@@ -37,6 +38,9 @@ from .renderers.pixel_mask import (
 )
 from .runtime import TerminalCapabilityError
 from .view import BoardInputMode, BoardViewState
+
+if TYPE_CHECKING:
+    from .opening import OpeningMoveSource
 
 BOARD_LEFT_MARGIN = 3
 SQUARE_PRESETS = ((7, 3), (5, 2), (3, 1))
@@ -383,6 +387,7 @@ class ChessTui(App[None]):
         renderer: PieceRenderer | None = None,
         fen: str | None = None,
         flow_path: Path | None = None,
+        opening_source: OpeningMoveSource | None = None,
     ) -> None:
         super().__init__()
         from .screens.local_game import LocalGameScreen
@@ -415,7 +420,11 @@ class ChessTui(App[None]):
         else:
             if flow_path is None:
                 raise ValueError("author mode requires a flow_path")
-            self.initial_screen = AuthorScreen(flow_path, selected_renderer)
+            self.initial_screen = AuthorScreen(
+                flow_path,
+                selected_renderer,
+                opening_source,
+            )
 
     def on_mount(self) -> None:
         self.push_screen(self.initial_screen)
@@ -465,8 +474,15 @@ def run_chess_app(
     renderer: PieceRenderer | None = None,
     mode: AppMode = AppMode.LOCAL_GAME,
     flow_path: Path | None = None,
+    opening_source: OpeningMoveSource | None = None,
 ) -> None:
     """Run the selected application mode."""
 
-    app = ChessTui(position, mode=mode, renderer=renderer, flow_path=flow_path)
+    app = ChessTui(
+        position,
+        mode=mode,
+        renderer=renderer,
+        flow_path=flow_path,
+        opening_source=opening_source,
+    )
     app.run()

@@ -68,8 +68,9 @@ step.
 - Play White's recommended move, or another legal move, on the board. Press
   `Enter` after highlighting the destination; the board selection autofills the
   SAN field. You can also type the move in SAN and press `Enter`.
-- On Black's turn, play any legal response on the board or type it in SAN to
-  explore that branch.
+- On Black's turn, fixture-backed common responses appear with game counts and
+  frequencies. Use `Up`/`Down` or `A`/`S`/`D`/`F` and press `Enter`; press `M`
+  for manual board entry or `I` to type SAN.
 - Author interaction starts in `[NAV]`, where board controls and shortcuts are
   active. Press `I` or click the SAN field to enter `[TEXT: MOVE]`; printable
   keys are literal until `Enter` submits or `Escape` cancels the edit.
@@ -85,9 +86,11 @@ step.
 - A minimal debug line shows the current author phase, turn, White step, ply,
   active rule source, and error state.
 
-Flow files store readable SAN histories. Position matching derives piece
-placement, side to move, castling rights, and en-passant state while ignoring
-move clocks. Saves are atomic and preserve the previous file as `<flow>.bak`.
+Flow files store readable SAN histories and explored Black replies. Opening
+counts and frequencies remain source data and are not persisted. Position
+matching derives piece placement, side to move, castling rights, and en-passant
+state while ignoring move clocks. Saves are atomic and preserve the previous
+file as `<flow>.bak`.
 
 ## Runtime contract
 

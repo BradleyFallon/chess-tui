@@ -12,6 +12,7 @@ from chess_tui.flow import (
     FlowStore,
     FlowStorageError,
     FlowValidationError,
+    OpponentReply,
     RuleUnavailableError,
     WhiteFlow,
     WhiteFlowAuthor,
@@ -30,6 +31,26 @@ def test_store_loads_human_readable_london_flow() -> None:
     assert flow.name == "London System"
     assert [rule.move_san for rule in flow.defaults] == ["d4", "Bf4", "e3", "Nf3"]
     assert flow.exceptions == ()
+    assert flow.opponent_replies == ()
+
+
+def test_author_persists_explored_opponent_reply_without_statistics(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "london.toml"
+    shutil.copy2(LONDON_FLOW, path)
+    author = WhiteFlowAuthor(path)
+    after_d4 = replay_san(author.flow.start_fen, ("d4",))
+
+    author.record_opponent_reply(after_d4, ("d4",), "d5")
+    author.record_opponent_reply(after_d4, ("d4",), "d5")
+
+    reloaded = FlowStore().load(path)
+    assert reloaded.opponent_replies == (OpponentReply("after-d4-d5", ("d4",), "d5"),)
+    encoded = path.read_text(encoding="utf-8")
+    assert "[[opponent_replies]]" in encoded
+    assert "games" not in encoded
+    assert "frequency" not in encoded
 
 
 def test_normalized_position_key_ignores_only_move_clocks() -> None:

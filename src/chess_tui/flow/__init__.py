@@ -8,7 +8,7 @@ from .errors import (
     FlowValidationError,
     RuleUnavailableError,
 )
-from .models import DefaultRule, ExceptionRule, Recommendation, WhiteFlow
+from .models import DefaultRule, ExceptionRule, OpponentReply, Recommendation, WhiteFlow
 from .policy import WhitePolicy
 from .position import normalized_position_key, replay_san
 from .store import FlowStore
@@ -23,6 +23,7 @@ __all__ = [
     "FlowStorageError",
     "FlowStore",
     "FlowValidationError",
+    "OpponentReply",
     "Recommendation",
     "RuleUnavailableError",
     "WhiteFlow",

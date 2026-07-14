@@ -17,7 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib  # pyright: ignore[reportMissingImports]
 
 from .errors import FlowStorageError, FlowValidationError
-from .models import DefaultRule, ExceptionRule, WhiteFlow
+from .models import DefaultRule, ExceptionRule, OpponentReply, WhiteFlow
 from .position import normalized_position_key, parse_legal_san, replay_san
 
 SUPPORTED_VERSION = 1
@@ -88,6 +88,7 @@ class FlowStore:
             flow.start_fen,
             tuple(sorted(defaults, key=lambda rule: rule.step)),
             flow.exceptions,
+            flow.opponent_replies,
         )
         self.save(path, updated)
         return updated
@@ -111,7 +112,46 @@ class FlowStore:
             flow.start_fen,
             flow.defaults,
             tuple(exceptions),
+            flow.opponent_replies,
         )
+        self.save(path, updated)
+        return updated
+
+    def add_opponent_reply(self, path: Path, reply: OpponentReply) -> WhiteFlow:
+        flow = self.load(path)
+        target_board = replay_san(flow.start_fen, reply.after_san)
+        target_key = normalized_position_key(target_board)
+        target_move = parse_legal_san(
+            target_board,
+            reply.move_san,
+            context=f"Opponent reply {reply.id!r}",
+        )
+        replies: list[OpponentReply] = []
+        for existing in flow.opponent_replies:
+            existing_board = replay_san(flow.start_fen, existing.after_san)
+            existing_move = parse_legal_san(
+                existing_board,
+                existing.move_san,
+                context=f"Opponent reply {existing.id!r}",
+            )
+            same_branch = (
+                normalized_position_key(existing_board) == target_key
+                and existing_move == target_move
+            )
+            if existing.id == reply.id or same_branch:
+                continue
+            replies.append(existing)
+        replies.append(reply)
+        updated = WhiteFlow(
+            flow.version,
+            flow.name,
+            flow.start_fen,
+            flow.defaults,
+            flow.exceptions,
+            tuple(replies),
+        )
+        if updated == flow:
+            return flow
         self.save(path, updated)
         return updated
 
@@ -178,20 +218,72 @@ class FlowStore:
                 )
             positions.add(key)
 
+        reply_ids: set[str] = set()
+        explored_branches: set[tuple[str, str]] = set()
+        for reply in flow.opponent_replies:
+            if not reply.id.strip() or reply.id in reply_ids:
+                raise FlowValidationError(
+                    f"Opponent reply ids must be non-empty and unique: {reply.id!r}."
+                )
+            reply_ids.add(reply.id)
+            _validate_rule_text(
+                reply.move_san,
+                reply.note,
+                f"Opponent reply {reply.id!r}",
+            )
+            board = replay_san(
+                flow.start_fen,
+                reply.after_san,
+                context=f"Opponent reply {reply.id!r}",
+            )
+            if board.turn is not chess.BLACK:
+                raise FlowValidationError(
+                    f"Opponent reply {reply.id!r} must target Black to move."
+                )
+            move = parse_legal_san(
+                board,
+                reply.move_san,
+                context=f"Opponent reply {reply.id!r}",
+            )
+            branch = (normalized_position_key(board), move.uci())
+            if branch in explored_branches:
+                raise FlowValidationError(
+                    f"Opponent reply {reply.id!r} duplicates an explored branch."
+                )
+            explored_branches.add(branch)
+
     def _decode(self, data: dict[str, Any]) -> WhiteFlow:
-        _require_keys(data, {"version", "name", "start_fen", "defaults", "exceptions"})
+        _require_keys(
+            data,
+            {
+                "version",
+                "name",
+                "start_fen",
+                "defaults",
+                "exceptions",
+                "opponent_replies",
+            },
+        )
         defaults_data = data.get("defaults", [])
         exceptions_data = data.get("exceptions", [])
-        if not isinstance(defaults_data, list) or not isinstance(exceptions_data, list):
-            raise TypeError("defaults and exceptions must be arrays of tables")
+        replies_data = data.get("opponent_replies", [])
+        if not all(
+            isinstance(items, list)
+            for items in (defaults_data, exceptions_data, replies_data)
+        ):
+            raise TypeError(
+                "defaults, exceptions, and opponent_replies must be arrays of tables"
+            )
         defaults = tuple(self._decode_default(item) for item in defaults_data)
         exceptions = tuple(self._decode_exception(item) for item in exceptions_data)
+        replies = tuple(self._decode_opponent_reply(item) for item in replies_data)
         return WhiteFlow(
             version=_integer(data, "version"),
             name=_string(data, "name"),
             start_fen=_string(data, "start_fen"),
             defaults=defaults,
             exceptions=exceptions,
+            opponent_replies=replies,
         )
 
     def _decode_default(self, data: object) -> DefaultRule:
@@ -214,6 +306,21 @@ class FlowStore:
         return ExceptionRule(
             _string(mapping, "id"),
             _integer(mapping, "step"),
+            tuple(after),
+            _string(mapping, "move"),
+            _optional_string(mapping, "note"),
+        )
+
+    def _decode_opponent_reply(self, data: object) -> OpponentReply:
+        mapping = _mapping(data, "opponent reply")
+        _require_keys(mapping, {"id", "after", "move", "note"})
+        after = mapping.get("after")
+        if not isinstance(after, list) or not all(
+            isinstance(item, str) for item in after
+        ):
+            raise TypeError("opponent reply after must be an array of strings")
+        return OpponentReply(
+            _string(mapping, "id"),
             tuple(after),
             _string(mapping, "move"),
             _optional_string(mapping, "note"),
@@ -250,6 +357,18 @@ def _encode(flow: WhiteFlow) -> str:
         )
         if rule.note is not None:
             lines.append(f"note = {json.dumps(rule.note)}")
+    for reply in flow.opponent_replies:
+        lines.extend(
+            (
+                "",
+                "[[opponent_replies]]",
+                f"id = {json.dumps(reply.id)}",
+                f"after = {json.dumps(list(reply.after_san))}",
+                f"move = {json.dumps(reply.move_san)}",
+            )
+        )
+        if reply.note is not None:
+            lines.append(f"note = {json.dumps(reply.note)}")
     return "\n".join(lines) + "\n"
 
 

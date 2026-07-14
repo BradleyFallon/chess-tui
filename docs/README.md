@@ -44,9 +44,11 @@ position keys and resolves exceptions before defaults; `FlowStore` validates
 and atomically saves changes with a backup.
 
 The author screen uses python-chess as its rules authority. White plays or types
-the recommendation in SAN, while Black moves are selected on the board or typed
-in SAN to explore a line.
+the recommendation in SAN. Black responses first come from an asynchronous
+`OpeningMoveSource`; the initial deterministic fixture covers the London
+prototype, with manual board and typed-SAN fallbacks.
 Explicit `[NAV]`, `[TEXT: MOVE]`, and `[TEXT: NOTE]` modes determine whether
 printable keys invoke application shortcuts or enter literal text.
-The screen emits default/exception edit intent to `WhiteFlowAuthor`; policy and
-persistence semantics do not live in the Textual screen.
+The screen emits default, exception, and explored-opponent-reply intent to
+`WhiteFlowAuthor`; policy and persistence semantics do not live in the Textual
+screen. Flow files persist explored branches but not changing opening statistics.
