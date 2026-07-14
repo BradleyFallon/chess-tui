@@ -17,7 +17,9 @@ from chess_tui.board import (
     PIXEL_SPRITE_HEIGHT,
     PIXEL_SPRITE_WIDTH,
 )
+from chess_tui.game import BoardInteraction, ChessMove
 from chess_tui.renderers.base import center_cells
+from chess_tui.renderers.colors import DARK_SQUARE, LIGHT_SQUARE
 from chess_tui.renderers.factory import create_piece_renderer
 from chess_tui.renderers.pixel_mask import (
     PIECE_NAMES,
@@ -161,6 +163,38 @@ def test_pixel_mask_renderer_rejects_non_native_geometry() -> None:
             quiet_target=False,
             capture_target=False,
         )
+
+
+def test_pixel_mask_last_move_uses_only_a_one_pixel_outline() -> None:
+    renderer = create_piece_renderer(RendererMode.PIXEL_MASK)
+    arguments = {
+        "piece": ".",
+        "square_width": PIXEL_MASK_SQUARE_WIDTH,
+        "square_height": PIXEL_MASK_SQUARE_HEIGHT,
+        "background": DARK_SQUARE,
+        "quiet_target": False,
+        "capture_target": False,
+    }
+    normal = renderer.render_square_rows(visual_state="normal", **arguments)
+    outlined = renderer.render_square_rows(visual_state="last-move", **arguments)
+
+    assert outlined[0][3].style != normal[0][3].style
+    assert outlined[3][3].style != normal[3][3].style
+    assert outlined[1][0].style != normal[1][0].style
+    assert outlined[1][7].style != normal[1][7].style
+    assert outlined[1][3] == normal[1][3]
+    assert outlined[2][4] == normal[2][4]
+
+
+def test_last_move_squares_keep_their_checkerboard_backgrounds() -> None:
+    board = ChessBoard(parse_fen(DEFAULT_STARTING_FEN))
+    move = ChessMove.from_uci("b1c3")
+    board.interaction = BoardInteraction(last_move=move)
+
+    assert board._square_visual_state(move.from_square) == "last-move"
+    assert board._square_visual_state(move.to_square) == "last-move"
+    assert board._square_background(move.from_square) == LIGHT_SQUARE
+    assert board._square_background(move.to_square) == DARK_SQUARE
 
 
 @pytest.mark.parametrize("piece", PIECE_GLYPHS)

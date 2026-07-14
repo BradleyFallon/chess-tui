@@ -16,6 +16,7 @@ from rich.segment import Segment
 from rich.style import Style
 
 from .errors import RendererStartupError
+from .colors import LAST_MOVE_SQUARE
 from .mode import RendererMode
 
 PIECE_NAMES = {
@@ -280,26 +281,37 @@ def render_piece_square(
     piece: str,
     background: str,
     piece_set: PixelMaskPieceSet,
+    outline: str | None = None,
 ) -> RenderedSquare:
     """Render one board designator at the piece set's native dimensions."""
 
     if piece == ".":
         background_rgb = hex_to_rgb(background)
-        return raster_to_half_blocks(
-            tuple(tuple(background_rgb for _ in range(8)) for _ in range(8))
-        )
-    if piece.upper() not in PIECE_NAME_BY_SYMBOL:
-        raise PixelMaskError(f"Unknown chess piece designator: {piece!r}.")
+        raster = tuple(tuple(background_rgb for _ in range(8)) for _ in range(8))
+    else:
+        if piece.upper() not in PIECE_NAME_BY_SYMBOL:
+            raise PixelMaskError(f"Unknown chess piece designator: {piece!r}.")
 
-    piece_name = PIECE_NAME_BY_SYMBOL[piece.upper()]
-    palette = piece_set.white_palette if piece.isupper() else piece_set.black_palette
-    return raster_to_half_blocks(
-        rasterize_piece(
+        piece_name = PIECE_NAME_BY_SYMBOL[piece.upper()]
+        palette = (
+            piece_set.white_palette if piece.isupper() else piece_set.black_palette
+        )
+        raster = rasterize_piece(
             rows=piece_set.pieces[piece_name],
             palette=palette,
             background=background,
         )
-    )
+
+    if outline is not None:
+        outline_rgb = hex_to_rgb(outline)
+        raster = tuple(
+            tuple(
+                outline_rgb if x in {0, 7} or y in {0, 7} else pixel
+                for x, pixel in enumerate(row)
+            )
+            for y, row in enumerate(raster)
+        )
+    return raster_to_half_blocks(raster)
 
 
 @dataclass(slots=True)
@@ -308,7 +320,7 @@ class PixelMaskPieceRenderer:
 
     piece_set: PixelMaskPieceSet
     mode: RendererMode = RendererMode.PIXEL_MASK
-    _cache: dict[tuple[str, str], RenderedSquare] = field(default_factory=dict)
+    _cache: dict[tuple[str, str, str], RenderedSquare] = field(default_factory=dict)
 
     def render_square_rows(
         self,
@@ -329,11 +341,14 @@ class PixelMaskPieceRenderer:
                 "pixel-mask requires exactly 8x4 terminal cells per square; "
                 f"received {square_width}x{square_height}."
             )
-        cache_key = (piece, background)
+        cache_key = (piece, background, visual_state)
         rendered = self._cache.get(cache_key)
         if rendered is None:
             rendered = render_piece_square(
-                piece=piece, background=background, piece_set=self.piece_set
+                piece=piece,
+                background=background,
+                piece_set=self.piece_set,
+                outline=(LAST_MOVE_SQUARE if visual_state == "last-move" else None),
             )
             self._cache[cache_key] = rendered
         return rendered

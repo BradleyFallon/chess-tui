@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rich.segment import Segment
-from rich.style import Style
 
 from ..board import PIECE_GLYPHS
-from .base import center_cells
+from .base import center_cells, render_text_square_row
 from .colors import (
     BLACK_PIECE,
+    LAST_MOVE_SQUARE,
     LEGAL_MARKER,
     WHITE_PIECE,
 )
@@ -37,25 +37,47 @@ class UnicodePieceRenderer:
     ) -> tuple[tuple[Segment, ...], ...]:
         rows: list[tuple[Segment, ...]] = []
         center_row = square_height // 2
+        outline = LAST_MOVE_SQUARE if visual_state == "last-move" else None
         for square_row in range(square_height):
             if piece != "." and square_row == center_row:
                 glyph = PIECE_GLYPHS[piece]
                 color = WHITE_PIECE if piece.isupper() else BLACK_PIECE
                 content = center_cells(glyph, square_width)
-                rows.append((Segment(content, Style(color=color, bgcolor=background)),))
+                rows.append(
+                    render_text_square_row(
+                        content,
+                        foreground=color,
+                        background=background,
+                        square_row=square_row,
+                        square_height=square_height,
+                        outline=outline,
+                    )
+                )
                 continue
             if piece == "." and quiet_target and square_row == center_row:
                 content = center_cells(LEGAL_MARKER, square_width)
                 rows.append(
-                    (
-                        Segment(
-                            content,
-                            Style(color=WHITE_PIECE, bgcolor=background, bold=True),
-                        ),
+                    render_text_square_row(
+                        content,
+                        foreground=WHITE_PIECE,
+                        background=background,
+                        bold=True,
+                        square_row=square_row,
+                        square_height=square_height,
+                        outline=outline,
                     )
                 )
                 continue
-            rows.append((Segment(" " * square_width, Style(bgcolor=background)),))
+            rows.append(
+                render_text_square_row(
+                    " " * square_width,
+                    foreground=None,
+                    background=background,
+                    square_row=square_row,
+                    square_height=square_height,
+                    outline=outline,
+                )
+            )
         return tuple(rows)
 
 

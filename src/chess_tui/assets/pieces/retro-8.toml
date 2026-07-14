@@ -18,35 +18,35 @@ B = "#333333" # fill/highlight
 pixels = [
   "________",
   "________",
-  "___AB___",
+  "___BB___",
   "__ABBA__",
-  "___AB___",
-  "__ABBB__",
-  "_ABBBBB_",
+  "___AA___",
+  "__ABBA__",
+  "_ABBBBA_",
   "________",
 ]
 
 [pieces.knight]
 pixels = [
-  "____B___",
-  "__BBBB__",
+  "____AB__",
+  "__ABBB__",
   "_BBBAB__",
-  "____BB__",
-  "___BBB__",
-  "__BBBA__",
+  "___ABB__",
+  "__ABBB__",
+  "_ABBBA__",
   "_BBBBBB_",
   "________",
 ]
 
 [pieces.bishop]
 pixels = [
-  "___AB___",
+  "____B___",
   "___BA___",
   "____B___",
+  "___AB___",
   "___BB___",
-  "___BB___",
-  "__BBBB__",
-  "_BBBBBB_",
+  "__ABBA__",
+  "_ABBBBA_",
   "________",
 ]
 

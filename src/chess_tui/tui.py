@@ -22,7 +22,6 @@ from .renderers.colors import (
     DARK_SQUARE,
     HOVER_SQUARE,
     LABEL_COLOR,
-    LAST_MOVE_SQUARE,
     LEGAL_SQUARE,
     LIGHT_SQUARE,
     PENDING_SOURCE,
@@ -366,12 +365,6 @@ class ChessBoard(Widget):
             return LEGAL_SQUARE
         if square == interaction.hover_square:
             return HOVER_SQUARE
-        last_move = interaction.last_move
-        if last_move is not None and square in {
-            last_move.from_square,
-            last_move.to_square,
-        }:
-            return LAST_MOVE_SQUARE
         rank = square // 8
         file_index = square % 8
         return LIGHT_SQUARE if (rank + file_index) % 2 else DARK_SQUARE

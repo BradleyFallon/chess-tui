@@ -5,12 +5,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from rich.segment import Segment
-from rich.style import Style
 
 from ..board import PIECE_GLYPHS, PIECE_SPRITES, PIXEL_SPRITE_HEIGHT, PIXEL_SPRITE_WIDTH
-from .base import center_cells
+from .base import center_cells, render_text_square_row
 from .colors import (
     BLACK_PIECE,
+    LAST_MOVE_SQUARE,
     LEGAL_MARKER,
     WHITE_PIECE,
 )
@@ -36,6 +36,7 @@ class LegacySpriteRenderer:
         capture_target: bool,
     ) -> tuple[tuple[Segment, ...], ...]:
         rows: list[tuple[Segment, ...]] = []
+        outline = LAST_MOVE_SQUARE if visual_state == "last-move" else None
         if piece != ".":
             sprite = PIECE_SPRITES[piece.upper()]
             vertical_offset = (square_height - len(sprite)) // 2
@@ -45,16 +46,26 @@ class LegacySpriteRenderer:
                     content = center_cells(sprite[sprite_row], square_width)
                     color = WHITE_PIECE if piece.isupper() else BLACK_PIECE
                     rows.append(
-                        (
-                            Segment(
-                                content,
-                                Style(color=color, bgcolor=background, bold=True),
-                            ),
+                        render_text_square_row(
+                            content,
+                            foreground=color,
+                            background=background,
+                            bold=True,
+                            square_row=square_row,
+                            square_height=square_height,
+                            outline=outline,
                         )
                     )
                 else:
                     rows.append(
-                        (Segment(" " * square_width, Style(bgcolor=background)),)
+                        render_text_square_row(
+                            " " * square_width,
+                            foreground=None,
+                            background=background,
+                            square_row=square_row,
+                            square_height=square_height,
+                            outline=outline,
+                        )
                     )
             return tuple(rows)
 
@@ -63,15 +74,27 @@ class LegacySpriteRenderer:
             if quiet_target and square_row == center_row:
                 content = center_cells(LEGAL_MARKER, square_width)
                 rows.append(
-                    (
-                        Segment(
-                            content,
-                            Style(color=WHITE_PIECE, bgcolor=background, bold=True),
-                        ),
+                    render_text_square_row(
+                        content,
+                        foreground=WHITE_PIECE,
+                        background=background,
+                        bold=True,
+                        square_row=square_row,
+                        square_height=square_height,
+                        outline=outline,
                     )
                 )
             else:
-                rows.append((Segment(" " * square_width, Style(bgcolor=background)),))
+                rows.append(
+                    render_text_square_row(
+                        " " * square_width,
+                        foreground=None,
+                        background=background,
+                        square_row=square_row,
+                        square_height=square_height,
+                        outline=outline,
+                    )
+                )
         return tuple(rows)
 
 
