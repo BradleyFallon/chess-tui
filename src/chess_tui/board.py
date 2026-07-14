@@ -19,6 +19,40 @@ PIECE_GLYPHS = {
     "q": "♛",
     "k": "♚",
 }
+PIXEL_SPRITE_WIDTH = 5
+PIXEL_SPRITE_HEIGHT = 3
+PIECE_SPRITES: dict[str, tuple[str, str, str]] = {
+    "P": (
+        "  ●  ",
+        " ▄█▄ ",
+        "▀███▀",
+    ),
+    "N": (
+        " ▄██ ",
+        " ██▄ ",
+        "▀███▀",
+    ),
+    "B": (
+        "  ◆  ",
+        " ▄█▄ ",
+        "▀███▀",
+    ),
+    "R": (
+        "█ █ █",
+        " ███ ",
+        "▀███▀",
+    ),
+    "Q": (
+        "◆ ◆ ◆",
+        " ███ ",
+        "▀███▀",
+    ),
+    "K": (
+        "  ╬  ",
+        " ▄█▄ ",
+        "▀███▀",
+    ),
+}
 VALID_PIECES = frozenset(PIECE_GLYPHS)
 DEFAULT_STARTING_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
@@ -107,6 +141,37 @@ def parse_fen(fen: str) -> ParsedFen:
         en_passant=en_passant,
         halfmove_clock=halfmove_clock,
         fullmove_number=fullmove_number,
+    )
+
+
+def format_fen(position: ParsedFen) -> str:
+    """Serialize a parsed position as a complete FEN string."""
+
+    ranks: list[str] = []
+    for row in position.board:
+        fields: list[str] = []
+        empty_count = 0
+        for square in row:
+            if square == ".":
+                empty_count += 1
+                continue
+            if empty_count:
+                fields.append(str(empty_count))
+                empty_count = 0
+            fields.append(square)
+        if empty_count:
+            fields.append(str(empty_count))
+        ranks.append("".join(fields))
+
+    return " ".join(
+        (
+            "/".join(ranks),
+            position.active_color,
+            position.castling,
+            position.en_passant,
+            str(position.halfmove_clock),
+            str(position.fullmove_number),
+        )
     )
 
 

@@ -6,10 +6,11 @@ import codecs
 from importlib.metadata import PackageNotFoundError, version
 from typing import TextIO
 
-from .board import PIECE_GLYPHS
+from .board import PIECE_GLYPHS, PIECE_SPRITES, PIXEL_SPRITE_WIDTH
 
 REQUIRED_TEXTUAL_VERSION = "8.2.8"
 REQUIRED_RICH_VERSION = "15.0.0"
+REQUIRED_CHESSNUT_VERSION = "0.4.1"
 
 
 class RuntimeRequirementError(RuntimeError):
@@ -25,6 +26,7 @@ def validate_textual_runtime(stream: TextIO) -> None:
 
     _require_distribution("rich", REQUIRED_RICH_VERSION)
     _require_distribution("textual", REQUIRED_TEXTUAL_VERSION)
+    _require_distribution("Chessnut", REQUIRED_CHESSNUT_VERSION)
 
     try:
         import textual
@@ -67,6 +69,19 @@ def validate_textual_runtime(stream: TextIO) -> None:
         rendered = ", ".join(repr(glyph) for glyph in invalid_glyphs)
         raise TerminalCapabilityError(
             f"Chess symbols must occupy exactly one terminal cell; invalid: {rendered}."
+        )
+
+    invalid_sprite_rows = [
+        row
+        for sprite in PIECE_SPRITES.values()
+        for row in sprite
+        if cell_len(row) != PIXEL_SPRITE_WIDTH
+    ]
+    if invalid_sprite_rows:
+        rendered = ", ".join(repr(row) for row in invalid_sprite_rows)
+        raise TerminalCapabilityError(
+            f"Pixel sprite rows must occupy exactly {PIXEL_SPRITE_WIDTH} terminal "
+            f"cells; invalid: {rendered}."
         )
 
 

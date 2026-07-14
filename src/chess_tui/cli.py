@@ -21,6 +21,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="FEN string to render (defaults to the standard starting position).",
     )
     parser.add_argument(
+        "--pieces",
+        choices=("pixel", "figurine"),
+        default="pixel",
+        help="Piece rendering mode (defaults to pixel).",
+    )
+    parser.add_argument(
         "--version",
         action="store_true",
         help="Print the package version and exit",
@@ -45,7 +51,7 @@ def main(argv: list[str] | None = None) -> int:
         validate_textual_runtime(sys.stdout)
         from .tui import run_chess_app
 
-        run_chess_app(position)
+        run_chess_app(position, piece_mode=args.pieces)
     except RuntimeRequirementError as exc:
         parser.exit(2, f"{parser.prog}: error: {exc}\n")
     return 0

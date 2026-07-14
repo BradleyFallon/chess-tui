@@ -7,9 +7,10 @@ import textual
 
 from chess_tui import DEFAULT_STARTING_FEN, parse_fen
 from chess_tui import runtime
-from chess_tui.board import PIECE_GLYPHS
-from chess_tui.cli import main
+from chess_tui.board import PIECE_GLYPHS, PIECE_SPRITES
+from chess_tui.cli import build_parser, main
 from chess_tui.runtime import (
+    REQUIRED_CHESSNUT_VERSION,
     REQUIRED_RICH_VERSION,
     REQUIRED_TEXTUAL_VERSION,
     RuntimeRequirementError,
@@ -49,6 +50,26 @@ def test_runtime_rejects_wrong_textual_version(
         validate_textual_runtime(cast(TextIO, FakeTty("utf-8")))
 
 
+def test_runtime_rejects_wrong_chessnut_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_version(package: str) -> str:
+        versions = {
+            "rich": REQUIRED_RICH_VERSION,
+            "textual": REQUIRED_TEXTUAL_VERSION,
+            "Chessnut": "0.0.0",
+        }
+        return versions[package]
+
+    monkeypatch.setattr(runtime, "version", fake_version)
+
+    with pytest.raises(
+        RuntimeRequirementError,
+        match=f"Chessnut {REQUIRED_CHESSNUT_VERSION} is required",
+    ):
+        validate_textual_runtime(cast(TextIO, FakeTty("utf-8")))
+
+
 def test_runtime_rejects_non_single_cell_glyph(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -60,6 +81,17 @@ def test_runtime_rejects_non_single_cell_glyph(
         validate_textual_runtime(cast(TextIO, FakeTty("utf-8")))
 
 
+def test_runtime_rejects_wrong_sprite_cell_width(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    invalid_sprites = dict(PIECE_SPRITES)
+    invalid_sprites["K"] = ("too wide", "  █   ", "▀███▀ ")
+    monkeypatch.setattr(runtime, "PIECE_SPRITES", invalid_sprites)
+
+    with pytest.raises(TerminalCapabilityError, match="sprite rows must occupy"):
+        validate_textual_runtime(cast(TextIO, FakeTty("utf-8")))
+
+
 def test_cli_rejects_non_interactive_output(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -68,6 +100,12 @@ def test_cli_rejects_non_interactive_output(
 
     assert exc_info.value.code == 2
     assert "requires an interactive TTY" in capsys.readouterr().err
+
+
+def test_cli_accepts_piece_view_mode() -> None:
+    args = build_parser().parse_args(["--pieces", "figurine"])
+
+    assert args.pieces == "figurine"
 
 
 def test_package_smoke() -> None:

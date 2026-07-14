@@ -1,7 +1,7 @@
 # Chess TUI
 
-A strict Textual chess board viewer that renders FEN positions as a colored
-checkerboard with centered Unicode pieces.
+An interactive Textual chess board that loads FEN positions, highlights legal
+moves, and renders large pixel-art pieces on a responsive checkerboard.
 
 ## Quick start
 
@@ -9,6 +9,7 @@ checkerboard with centered Unicode pieces.
 source ./activate
 update-deps
 chess-tui --help
+chess-tui --pieces figurine
 chess-tui --fen "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 ```
 
@@ -18,25 +19,39 @@ editable mode with its `dev` dependencies and finishes with `pip check`.
 `activate` creates the virtual environment if needed, keeps it aligned with
 `requirements.txt`, and loads the shell aliases.
 
-Press `q` to exit the viewer.
+After activation, `chess-tui` resolves to the installed console script at
+`venv/bin/chess-tui`, which runs `chess_tui.cli:main` from the editable source.
+
+## Controls
+
+- Click a piece to select it and show its legal destinations.
+- Click a highlighted destination to create a pending move.
+- Press `Enter` to confirm a pending move.
+- Press `Escape` to cancel selection or a pending move.
+- Press `F` to flip the board.
+- Press `V` to switch between pixel sprites and Unicode figurines.
+- Press `Q` to quit.
 
 ## Runtime contract
 
 The viewer deliberately has no degraded rendering mode. Startup fails with an
 error unless all of these requirements are met:
 
-- Textual 8.2.8 and Rich 15.0.0 are installed.
+- Chessnut 0.4.1, Textual 8.2.8, and Rich 15.0.0 are installed.
 - Standard output is an interactive UTF-8 TTY.
 - Every Unicode chess symbol occupies exactly one terminal cell.
-- The calculated centered board fits in the terminal.
-- When the terminal reports pixel dimensions, its calculated square aspect
-  ratio is within the required tolerance.
+- Every pixel-sprite row occupies exactly five terminal cells.
+- The terminal is at least 27 columns by 11 rows, including the status line.
 
-Terminals such as VS Code that do not report pixel dimensions use a fixed
-centered 5x3-cell square geometry. This is a supported rendering mode, not a
-plain-text fallback. Redirected output is unsupported. Terminal applications
-cannot query whether a selected font visually contains a Unicode glyph; use a
-terminal font that includes the standard chess symbols.
+The board chooses the best fitting geometry from 7x3, 5x2, and 3x1-cell
+presets. Reported pixel dimensions improve aspect selection but are optional,
+so terminals such as VS Code are fully supported. If the terminal becomes too
+small, the application displays a size requirement and recovers when resized.
+The 7x3 preset centers a five-cell, three-row pixel sprite with one column of
+padding on each side. Compact 5x2 and 3x1 boards use standard one-cell chess
+figurines. Redirected output is unsupported. Terminal applications cannot
+query whether a selected font visually contains a Unicode glyph; use a terminal
+font that includes the standard chess and block-drawing symbols.
 
 ## Project tree
 
@@ -66,8 +81,9 @@ Copy this block when providing the project structure to an LLM:
 |   `-- chess_tui/              # Installable application package
 |       |-- __init__.py                # Public API and package version
 |       |-- __main__.py                # python -m entry point
-|       |-- board.py                   # FEN parsing and chess symbols
+|       |-- board.py                   # FEN parsing and chess piece art
 |       |-- cli.py                     # Command-line interface
+|       |-- game.py                    # Legal moves and interaction state
 |       |-- runtime.py                 # Strict dependency/capability checks
 |       |-- tui.py                     # Textual board widget and application
 |       `-- output_schema.json         # Optional structured-output schema
@@ -75,6 +91,7 @@ Copy this block when providing the project structure to an LLM:
 |   |-- fixtures/
 |   |   `-- fens.json                  # Sample positions used by tests
 |   |-- test_board.py                 # FEN parsing and rendering coverage
+|   |-- test_game.py                  # Move controller coverage
 |   `-- test_smoke.py                 # Minimal package behavior tests
 |-- tox.ini                            # Multi-version test environments
 `-- venv/                              # Generated local Python environment
@@ -112,11 +129,13 @@ Copy this block when providing the project structure to an LLM:
   `python -m chess_tui` invoke the command-line interface.
 - `src/chess_tui/cli.py` - defines command-line arguments and the CLI's
   `main()` function.
+- `src/chess_tui/game.py` - adapts Chessnut into typed move and interaction
+  state without coupling chess legality to the renderer.
 - `src/chess_tui/runtime.py` - validates the pinned UI dependencies, UTF-8 TTY,
   and Unicode cell widths before the application starts.
 - `src/chess_tui/tui.py` - implements the Textual line-rendered chess board,
-  cell-based geometry with optional pixel-aware sizing, and strict terminal
-  capability checks.
+  responsive geometry, pointer mapping, keyboard actions, and layered square
+  styling.
 - `src/chess_tui/output_schema.json` - a packaged placeholder for
   project-specific structured-output metadata; replace or remove it if the
   project does not need a schema.

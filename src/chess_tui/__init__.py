@@ -1,12 +1,13 @@
 """Chess TUI package."""
 
-from .board import DEFAULT_STARTING_FEN, FenError, ParsedFen, parse_fen
+from .board import DEFAULT_STARTING_FEN, FenError, ParsedFen, format_fen, parse_fen
 
 __all__ = [
     "__version__",
     "DEFAULT_STARTING_FEN",
     "FenError",
     "ParsedFen",
+    "format_fen",
     "parse_fen",
 ]
 

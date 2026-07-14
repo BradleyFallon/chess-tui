@@ -11,6 +11,7 @@ requires-python = ">=3.10"
 license = { file = "LICENSE" }
 authors = [{ name = "Bradley Fallon", email = "bradley.fallon@gmail.com" }]
 dependencies = [
+  "Chessnut==0.4.1",
   "rich==15.0.0",
   "textual==8.2.8",
 ]

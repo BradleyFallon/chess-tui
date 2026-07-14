@@ -1,10 +1,7 @@
 # Chess TUI aliases
 unalias chess-tui check-setup update-deps fix-deps install-missing-packages \
   2>/dev/null || true
-
-chess-tui() {
-  "${PROJECT_ROOT}/venv/bin/python" -m chess_tui "$@"
-}
+unset -f chess-tui check-setup update-deps 2>/dev/null || true
 
 check-setup() {
   "${PROJECT_ROOT}/venv/bin/python" "${PROJECT_ROOT}/scripts/check-setup.py" "$@"

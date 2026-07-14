@@ -29,6 +29,11 @@ def python_executable(root: Path) -> str:
 def main() -> int:
     root = project_root()
     python = python_executable(root)
+    console_script = root / "venv" / "bin" / "chess-tui"
+    if not console_script.exists():
+        raise SystemExit(
+            "Missing chess-tui console script. Run update-deps to install the project."
+        )
 
     subprocess.run([python, "-m", "pip", "check"], check=True)
     subprocess.run(
@@ -42,6 +47,7 @@ def main() -> int:
         ],
         check=True,
     )
+    subprocess.run([str(console_script), "--version"], check=True)
     return 0
 
 
