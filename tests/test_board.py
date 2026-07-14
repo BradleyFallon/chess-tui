@@ -397,6 +397,31 @@ def test_textual_app_accepts_resize_without_pixel_metrics() -> None:
     asyncio.run(run_test())
 
 
+def test_textual_app_falls_back_to_unicode_and_restores_pixel_mask() -> None:
+    async def run_test() -> None:
+        app = ChessTui(parse_fen(DEFAULT_STARTING_FEN))
+
+        async with app.run_test(size=(60, 30)) as pilot:
+            await pilot.pause()
+
+            assert app.failure is None
+            assert app.preferred_renderer.mode is RendererMode.PIXEL_MASK
+            assert app.renderer.mode is RendererMode.UNICODE
+            assert app.board.renderer is app.renderer
+            assert app.board.geometry == BoardGeometry(7, 3)
+            assert "pixel-mask fallback" in app.status.render_line(0).text
+
+            size = Size(80, 40)
+            app.post_message(Resize(size, size, size))
+            await pilot.pause()
+
+            assert app.renderer.mode is RendererMode.PIXEL_MASK
+            assert app.board.renderer is app.renderer
+            assert app.board.geometry == BoardGeometry(8, 4)
+
+    asyncio.run(run_test())
+
+
 def test_textual_app_recovers_after_terminal_grows() -> None:
     async def run_test() -> None:
         app = ChessTui(parse_fen(DEFAULT_STARTING_FEN))

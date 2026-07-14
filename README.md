@@ -35,8 +35,8 @@ After activation, `chess-tui` resolves to the installed console script at
 
 ## Runtime contract
 
-The viewer deliberately has no degraded rendering mode. Startup fails with an
-error unless all of these requirements are met:
+The viewer validates its rendering modes strictly. Startup fails with an error
+unless all of these requirements are met:
 
 - Chessnut 0.4.1, Textual 8.2.8, and Rich 15.0.0 are installed.
 - Standard output is an interactive UTF-8 TTY.
@@ -47,14 +47,17 @@ error unless all of these requirements are met:
   `pixel-mask`.
 
 The `pixel-mask` renderer uses fixed 8x8 pixel masks mapped directly to 8x4
-terminal-cell squares; it never scales or switches modes automatically. The
-responsive `unicode` and `legacy-sprite` renderers choose from 7x3, 5x2, and
-3x1-cell presets. Reported pixel dimensions improve their aspect selection but
-are optional. If the terminal is too small, the application displays the exact
-size requirement and recovers when resized. Retro artwork and both piece
-palettes are stored in `src/chess_tui/assets/pieces/retro-8.toml`. Masks use `_`
-for transparency, `A` for outline/shadow, and `B` for fill/highlight. Each side
-defines only its `A` and `B` colors. Redirected output is unsupported.
+terminal-cell squares and never scales. When the terminal cannot fit its 67x35
+layout, the application automatically uses responsive Unicode rendering and
+restores `pixel-mask` when enough space is available again. Explicit `unicode`
+and `legacy-sprite` selections do not switch modes. The responsive renderers
+choose from 7x3, 5x2, and 3x1-cell presets. Reported pixel dimensions improve
+their aspect selection but are optional. If even the Unicode board is too
+large, the application displays the exact size requirement and recovers when
+resized. Retro artwork and both piece palettes are stored in
+`src/chess_tui/assets/pieces/retro-8.toml`. Masks use `_` for transparency, `A`
+for outline/shadow, and `B` for fill/highlight. Each side defines only its `A`
+and `B` colors. Redirected output is unsupported.
 Terminal applications cannot query whether a selected font visually contains a
 Unicode glyph; use a terminal font that includes the standard chess and
 block-drawing symbols.

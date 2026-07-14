@@ -65,11 +65,11 @@ pixels = [
 [pieces.queen]
 pixels = [
   "________",
+  "_B_AB_B_",
+  "__BAAB__",
+  "___AA___",
   "_BABBAB_",
-  "__BBBB__",
-  "___BB___",
-  "__ABBA__",
-  "_ABBBBA_",
+  "__AAAA__",
   "_BBBBBB_",
   "________",
 ]
@@ -79,9 +79,9 @@ pixels = [
   "___AB___",
   "__ABBB__",
   "___AB___",
-  "___AB___",
-  "__ABBA__",
+  "__AABA__",
   "_BBBBBB_",
-  "_BBBBBB_",
+  "_BAAAAB_",
+  "__BBBB__",
   "________",
 ]

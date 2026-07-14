@@ -31,6 +31,7 @@ from .renderers.colors import (
     STATUS_BACKGROUND,
 )
 from .renderers.factory import create_piece_renderer
+from .renderers.errors import RendererStartupError
 from .renderers.mode import RendererMode
 from .renderers.pixel_mask import (
     PIXEL_MASK_SQUARE_HEIGHT,
@@ -404,11 +405,13 @@ class ChessTui(App[None]):
         renderer: PieceRenderer | None = None,
     ) -> None:
         super().__init__()
-        self.renderer = (
+        self.preferred_renderer = (
             renderer
             if renderer is not None
             else create_piece_renderer(RendererMode.PIXEL_MASK)
         )
+        self.renderer = self.preferred_renderer
+        self._unicode_fallback: PieceRenderer | None = None
         self.controller = GameController(position)
         self.board = ChessBoard(position, renderer=self.renderer)
         self.status = Static("", id="status", markup=False)
@@ -425,22 +428,67 @@ class ChessTui(App[None]):
 
     def on_resize(self, event: Resize) -> None:
         try:
-            geometry = calculate_geometry(
-                event.size,
-                event.pixel_size,
-                reserved_rows=1,
-                renderer_mode=self.renderer.mode,
-            )
+            renderer, geometry = self._renderer_and_geometry(event)
         except TerminalCapabilityError as exc:
             self.failure = exc
             self._geometry_error = str(exc)
             self.board.unconfigure()
             self._update_status()
             return
+        self._activate_renderer(renderer)
         self.failure = None
         self._geometry_error = None
         self.board.configure(geometry)
         self._update_status()
+
+    def _renderer_and_geometry(
+        self, event: Resize
+    ) -> tuple[PieceRenderer, BoardGeometry]:
+        """Choose geometry, falling back from pixel-mask to Unicode when needed."""
+
+        preferred = self.preferred_renderer
+        pixel_failure: str | None = None
+        try:
+            geometry = calculate_geometry(
+                event.size,
+                event.pixel_size,
+                reserved_rows=1,
+                renderer_mode=preferred.mode,
+            )
+            return preferred, geometry
+        except TerminalCapabilityError as pixel_error:
+            if preferred.mode is not RendererMode.PIXEL_MASK:
+                raise
+            pixel_failure = str(pixel_error)
+
+        fallback = self._unicode_fallback
+        if fallback is None:
+            try:
+                fallback = create_piece_renderer(RendererMode.UNICODE)
+            except RendererStartupError as exc:
+                raise TerminalCapabilityError(
+                    f"{pixel_failure}\n\nUnicode fallback is unavailable: {exc}"
+                ) from exc
+            self._unicode_fallback = fallback
+        try:
+            geometry = calculate_geometry(
+                event.size,
+                event.pixel_size,
+                reserved_rows=1,
+                renderer_mode=fallback.mode,
+            )
+        except TerminalCapabilityError as unicode_error:
+            raise TerminalCapabilityError(
+                f"{pixel_failure}\n\nUnicode fallback also failed:\n{unicode_error}"
+            ) from unicode_error
+        return fallback, geometry
+
+    def _activate_renderer(self, renderer: PieceRenderer) -> None:
+        if renderer is self.renderer:
+            return
+        self.renderer = renderer
+        self.board.renderer = renderer
+        self.board.refresh()
 
     def on_chess_board_square_hovered(self, message: ChessBoard.SquareHovered) -> None:
         self.controller.set_hover(message.square)
@@ -490,8 +538,10 @@ class ChessTui(App[None]):
         else:
             side = "White" if self.controller.position.active_color == "w" else "Black"
             text = f"{side} to move | click a piece | F flip | Q quit"
-        text += f" | Renderer: {self.renderer.mode.value}"
-        self.status.update(text)
+        renderer_text = f"Renderer: {self.renderer.mode.value}"
+        if self.renderer is not self.preferred_renderer:
+            renderer_text += " (pixel-mask fallback)"
+        self.status.update(f"{renderer_text} | {text}")
 
 
 def run_chess_app(
