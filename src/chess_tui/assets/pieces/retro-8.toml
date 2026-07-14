@@ -1,0 +1,87 @@
+version = 1
+
+name = "retro-8"
+width = 8
+height = 8
+baseline = 6
+transparent = "_"
+
+[palette.white]
+A = "#cccccc" # outline/shadow
+B = "#ffffff" # fill/highlight
+
+[palette.black]
+A = "#222222" # outline/shadow
+B = "#333333" # fill/highlight
+
+[pieces.pawn]
+pixels = [
+  "________",
+  "________",
+  "___AB___",
+  "__ABBA__",
+  "___AB___",
+  "__ABBB__",
+  "_ABBBBB_",
+  "________",
+]
+
+[pieces.knight]
+pixels = [
+  "____B___",
+  "__BBBB__",
+  "_BBBAB__",
+  "____BB__",
+  "___BBB__",
+  "__BBBA__",
+  "_BBBBBB_",
+  "________",
+]
+
+[pieces.bishop]
+pixels = [
+  "___AB___",
+  "___BA___",
+  "____B___",
+  "___BB___",
+  "___BB___",
+  "__BBBB__",
+  "_BBBBBB_",
+  "________",
+]
+
+[pieces.rook]
+pixels = [
+  "________",
+  "________",
+  "_B_BB_B_",
+  "__AAAB__",
+  "__ABBB__",
+  "__ABBB__",
+  "_BBBBBB_",
+  "________",
+]
+
+[pieces.queen]
+pixels = [
+  "________",
+  "_BABBAB_",
+  "__BBBB__",
+  "___BB___",
+  "__ABBA__",
+  "_ABBBBA_",
+  "_BBBBBB_",
+  "________",
+]
+
+[pieces.king]
+pixels = [
+  "___AB___",
+  "__ABBB__",
+  "___AB___",
+  "___AB___",
+  "__ABBA__",
+  "_BBBBBB_",
+  "_BBBBBB_",
+  "________",
+]

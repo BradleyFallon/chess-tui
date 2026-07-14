@@ -1,0 +1,1 @@
+"""Piece asset families."""

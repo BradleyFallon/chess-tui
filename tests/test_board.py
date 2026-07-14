@@ -9,13 +9,23 @@ from rich.cells import cell_len
 from textual.events import Resize
 from textual.geometry import Size
 
-from chess_tui import DEFAULT_STARTING_FEN, FenError, parse_fen
+from chess_tui import DEFAULT_STARTING_FEN, FenError, RendererMode, parse_fen
 from chess_tui.board import (
     FILES,
     PIECE_GLYPHS,
     PIECE_SPRITES,
     PIXEL_SPRITE_HEIGHT,
     PIXEL_SPRITE_WIDTH,
+)
+from chess_tui.renderers.base import center_cells
+from chess_tui.renderers.factory import create_piece_renderer
+from chess_tui.renderers.pixel_mask import (
+    PIECE_NAMES,
+    PIXEL_MASK_SQUARE_HEIGHT,
+    PIXEL_MASK_SQUARE_WIDTH,
+    PixelMaskError,
+    load_retro_8_piece_set,
+    render_piece_square,
 )
 from chess_tui.runtime import TerminalCapabilityError
 from chess_tui.tui import (
@@ -25,11 +35,8 @@ from chess_tui.tui import (
     ChessTui,
     calculate_geometry,
     cell_offset_to_square,
-    center_cells,
     display_coordinates_to_square,
-    render_piece_row,
     square_to_display_coordinates,
-    use_pixel_pieces,
 )
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "fens.json"
@@ -45,7 +52,10 @@ def load_fen_samples() -> list[dict[str, str]]:
 )
 def test_textual_board_renders_fen_samples(sample: dict[str, str]) -> None:
     position = parse_fen(sample["fen"])
-    geometry = BoardGeometry(square_width=5, square_height=2)
+    geometry = BoardGeometry(
+        square_width=PIXEL_MASK_SQUARE_WIDTH,
+        square_height=PIXEL_MASK_SQUARE_HEIGHT,
+    )
     board = ChessBoard(position)
     board.configure(geometry)
 
@@ -59,103 +69,139 @@ def test_textual_board_renders_fen_samples(sample: dict[str, str]) -> None:
     )
     assert visible_lines[0] == expected_labels
     assert visible_lines[-1] == visible_lines[0]
-
-    expected_pieces = sum(
-        1 for char in sample["fen"].split()[0] if char in PIECE_GLYPHS
-    )
-    rendered_pieces = sum(char in GLYPHS for line in visible_lines for char in line)
-    assert rendered_pieces == expected_pieces
-
-    for rank_index in range(8):
-        center_row = 1 + (rank_index * geometry.square_height)
-        center_row += geometry.square_height // 2
-        line = visible_lines[center_row]
-        assert line.startswith(str(8 - rank_index))
-        for column, character in enumerate(line):
-            if character in GLYPHS:
-                square_column = column - BOARD_LEFT_MARGIN
-                assert (
-                    square_column % geometry.square_width
-                    == (geometry.square_width - 1) // 2
-                )
+    assert any("▀" in line for line in visible_lines[1:-1])
 
 
 @pytest.mark.parametrize("piece", PIECE_GLYPHS)
-def test_render_piece_row_centers_three_row_sprite(
+def test_pixel_mask_renderer_distinguishes_piece_and_empty_squares(
     piece: str,
 ) -> None:
+    renderer = create_piece_renderer(RendererMode.PIXEL_MASK)
+    geometry = BoardGeometry(
+        PIXEL_MASK_SQUARE_WIDTH,
+        PIXEL_MASK_SQUARE_HEIGHT,
+    )
+
+    piece_rows = renderer.render_square_rows(
+        piece=piece,
+        square_width=geometry.square_width,
+        square_height=geometry.square_height,
+        background="#405e42",
+        visual_state="normal",
+        quiet_target=False,
+        capture_target=False,
+    )
+    empty_rows = renderer.render_square_rows(
+        piece=".",
+        square_width=geometry.square_width,
+        square_height=geometry.square_height,
+        background="#405e42",
+        visual_state="normal",
+        quiet_target=False,
+        capture_target=False,
+    )
+
+    assert len(piece_rows) == geometry.square_height
+    assert all(
+        sum(segment.cell_length for segment in row) == geometry.square_width
+        for row in piece_rows
+    )
+    assert piece_rows != empty_rows
+
+
+def test_retro_8_piece_set_loads() -> None:
+    piece_set = load_retro_8_piece_set()
+
+    assert piece_set.width == 8
+    assert piece_set.height == 8
+    assert piece_set.baseline == 6
+    assert set(piece_set.pieces) == PIECE_NAMES
+    assert set(piece_set.white_palette) == {"A", "B"}
+    assert set(piece_set.black_palette) == {"A", "B"}
+
+
+def test_every_piece_is_exactly_eight_by_eight() -> None:
+    piece_set = load_retro_8_piece_set()
+
+    for rows in piece_set.pieces.values():
+        assert len(rows) == 8
+        assert all(len(row) == 8 for row in rows)
+        assert set("".join(rows)) <= {"_", "A", "B"}
+
+
+def test_pixel_mask_square_renders_as_eight_by_four() -> None:
+    rendered = render_piece_square(
+        piece="N",
+        background="#405e42",
+        piece_set=load_retro_8_piece_set(),
+    )
+
+    assert len(rendered) == 4
+    assert all(sum(segment.cell_length for segment in row) == 8 for row in rendered)
+
+
+def test_white_and_black_piece_colors_differ() -> None:
+    piece_set = load_retro_8_piece_set()
+    white = render_piece_square(piece="P", background="#405e42", piece_set=piece_set)
+    black = render_piece_square(piece="p", background="#405e42", piece_set=piece_set)
+
+    assert white != black
+
+
+def test_pixel_mask_renderer_rejects_non_native_geometry() -> None:
+    renderer = create_piece_renderer(RendererMode.PIXEL_MASK)
+
+    with pytest.raises(PixelMaskError, match="requires exactly 8x4"):
+        renderer.render_square_rows(
+            piece="P",
+            square_width=7,
+            square_height=3,
+            background="#405e42",
+            visual_state="normal",
+            quiet_target=False,
+            capture_target=False,
+        )
+
+
+@pytest.mark.parametrize("piece", PIECE_GLYPHS)
+def test_unicode_renderer_centers_glyph(piece: str) -> None:
+    renderer = create_piece_renderer(RendererMode.UNICODE)
+    geometry = BoardGeometry(5, 2)
+
+    rendered = renderer.render_square_rows(
+        piece=piece,
+        square_width=geometry.square_width,
+        square_height=geometry.square_height,
+        background="#405e42",
+        visual_state="normal",
+        quiet_target=False,
+        capture_target=False,
+    )
+
+    assert rendered[0][0].text == " " * geometry.square_width
+    assert PIECE_GLYPHS[piece] in rendered[1][0].text
+
+
+@pytest.mark.parametrize("piece", PIECE_GLYPHS)
+def test_legacy_renderer_centers_sprite(piece: str) -> None:
+    renderer = create_piece_renderer(RendererMode.LEGACY_SPRITE)
     geometry = BoardGeometry(7, 3)
 
-    rendered = tuple(
-        render_piece_row(piece, square_row, geometry)
-        for square_row in range(geometry.square_height)
+    rendered = renderer.render_square_rows(
+        piece=piece,
+        square_width=geometry.square_width,
+        square_height=geometry.square_height,
+        background="#405e42",
+        visual_state="normal",
+        quiet_target=False,
+        capture_target=False,
     )
     expected = tuple(
         center_cells(row, geometry.square_width) for row in PIECE_SPRITES[piece.upper()]
     )
 
-    assert use_pixel_pieces(geometry)
-    assert rendered == expected
-    assert all(cell_len(row) == geometry.square_width for row in rendered)
-
-
-def test_render_piece_row_centers_sprite_in_larger_square() -> None:
-    geometry = BoardGeometry(7, 4)
-
-    rendered = tuple(
-        render_piece_row("K", square_row, geometry)
-        for square_row in range(geometry.square_height)
-    )
-
-    assert rendered[:3] == tuple(
-        center_cells(row, geometry.square_width) for row in PIECE_SPRITES["K"]
-    )
-    assert rendered[3] == " " * geometry.square_width
-
-
-def test_render_piece_row_uses_figurine_for_compact_square() -> None:
-    geometry = BoardGeometry(5, 2)
-
-    rendered = tuple(
-        render_piece_row("n", square_row, geometry)
-        for square_row in range(geometry.square_height)
-    )
-
-    assert not use_pixel_pieces(geometry)
-    assert rendered == (" " * 5, center_cells(PIECE_GLYPHS["n"], 5))
-
-
-def test_render_piece_row_can_force_figurine_in_large_square() -> None:
-    geometry = BoardGeometry(7, 3)
-
-    rendered = tuple(
-        render_piece_row("N", row, geometry, "figurine")
-        for row in range(geometry.square_height)
-    )
-
-    assert rendered == (
-        " " * 7,
-        center_cells(PIECE_GLYPHS["N"], 7),
-        " " * 7,
-    )
-
-
-def test_textual_board_renders_pixel_sprite_across_square_rows() -> None:
-    position = parse_fen("8/8/8/8/4P3/8/8/8 w - - 0 1")
-    geometry = BoardGeometry(7, 3)
-    board = ChessBoard(position)
-    board.configure(geometry)
-    square_start = BOARD_LEFT_MARGIN + (4 * geometry.square_width)
-    rank_start = 1 + (4 * geometry.square_height)
-
-    rendered = tuple(
-        board.render_line(rank_start + row).text[
-            square_start : square_start + geometry.square_width
-        ]
-        for row in range(geometry.square_height)
-    )
-
-    assert rendered == tuple(center_cells(row, 7) for row in PIECE_SPRITES["P"])
+    assert tuple(row[0].text for row in rendered) == expected
+    assert all(cell_len(row[0].text) == geometry.square_width for row in rendered)
 
 
 def test_all_pixel_sprite_rows_are_five_cells_wide() -> None:
@@ -183,7 +229,11 @@ def test_center_cells_rejects_content_wider_than_square() -> None:
 
 
 def test_calculate_geometry_uses_reported_pixel_ratio() -> None:
-    geometry = calculate_geometry(Size(100, 40), Size(800, 640))
+    geometry = calculate_geometry(
+        Size(100, 40),
+        Size(800, 640),
+        renderer_mode=RendererMode.UNICODE,
+    )
 
     assert geometry == BoardGeometry(square_width=7, square_height=3)
     assert geometry.width == 59
@@ -191,7 +241,7 @@ def test_calculate_geometry_uses_reported_pixel_ratio() -> None:
 
 
 def test_calculate_geometry_uses_cell_geometry_without_pixel_metrics() -> None:
-    geometry = calculate_geometry(Size(100, 40))
+    geometry = calculate_geometry(Size(100, 40), renderer_mode=RendererMode.UNICODE)
 
     assert geometry == BoardGeometry(square_width=7, square_height=3)
 
@@ -207,16 +257,35 @@ def test_calculate_geometry_uses_cell_geometry_without_pixel_metrics() -> None:
 def test_calculate_geometry_uses_largest_fitting_preset(
     terminal_size: Size, expected: BoardGeometry
 ) -> None:
-    assert calculate_geometry(terminal_size) == expected
+    assert (
+        calculate_geometry(terminal_size, renderer_mode=RendererMode.UNICODE)
+        == expected
+    )
 
 
 def test_calculate_geometry_reserves_space_for_app_chrome() -> None:
-    assert calculate_geometry(Size(59, 26), reserved_rows=1) == BoardGeometry(5, 2)
+    assert calculate_geometry(
+        Size(59, 26),
+        reserved_rows=1,
+        renderer_mode=RendererMode.UNICODE,
+    ) == BoardGeometry(5, 2)
 
 
 def test_calculate_geometry_rejects_terminal_that_is_too_small() -> None:
     with pytest.raises(TerminalCapabilityError, match="at least 27x10"):
-        calculate_geometry(Size(26, 9))
+        calculate_geometry(Size(26, 9), renderer_mode=RendererMode.UNICODE)
+
+
+def test_pixel_mask_geometry_is_fixed_at_eight_by_four() -> None:
+    assert calculate_geometry(Size(100, 40), reserved_rows=1) == BoardGeometry(8, 4)
+
+
+def test_pixel_mask_geometry_requires_sixty_seven_by_thirty_five() -> None:
+    with pytest.raises(
+        TerminalCapabilityError,
+        match="67 columns × 35 rows",
+    ):
+        calculate_geometry(Size(66, 34), reserved_rows=1)
 
 
 @pytest.mark.parametrize(
@@ -275,7 +344,8 @@ def test_textual_app_accepts_verified_pixel_metrics() -> None:
             await pilot.pause()
 
             assert app.failure is None
-            assert app.board.geometry == BoardGeometry(7, 3)
+            assert app.board.geometry == BoardGeometry(8, 4)
+            assert app.renderer.mode is RendererMode.PIXEL_MASK
 
     asyncio.run(run_test())
 
@@ -288,7 +358,7 @@ def test_textual_app_accepts_resize_without_pixel_metrics() -> None:
             await pilot.pause()
 
             assert app.failure is None
-            assert app.board.geometry == BoardGeometry(7, 3)
+            assert app.board.geometry == BoardGeometry(8, 4)
 
     asyncio.run(run_test())
 
@@ -301,12 +371,12 @@ def test_textual_app_recovers_after_terminal_grows() -> None:
             await pilot.pause()
             assert app.board.geometry is None
 
-            size = Size(80, 24)
+            size = Size(80, 40)
             app.post_message(Resize(size, size, size))
             await pilot.pause()
 
             assert app.is_running
-            assert app.board.geometry == BoardGeometry(5, 2)
+            assert app.board.geometry == BoardGeometry(8, 4)
 
     asyncio.run(run_test())
 
@@ -336,27 +406,19 @@ def test_textual_app_selects_confirms_and_flips() -> None:
     asyncio.run(run_test())
 
 
-def test_textual_app_toggles_piece_view_mode() -> None:
+def test_textual_app_renders_pixel_mask_mode() -> None:
     async def run_test() -> None:
         app = ChessTui(parse_fen(DEFAULT_STARTING_FEN))
 
-        async with app.run_test(size=(100, 40)) as pilot:
+        async with app.run_test(size=(100, 40)):
             geometry = app.board.geometry
             assert geometry is not None
-            assert geometry == BoardGeometry(7, 3)
-            assert app.piece_mode == "pixel"
-            pixel_lines = [
+            assert geometry == BoardGeometry(8, 4)
+            assert app.renderer.mode is RendererMode.PIXEL_MASK
+            rendered_lines = [
                 app.board.render_line(row).text for row in range(geometry.height)
             ]
-            assert not any(glyph in line for glyph in GLYPHS for line in pixel_lines)
-
-            await pilot.press("v")
-
-            assert app.piece_mode == "figurine"
-            figurine_lines = [
-                app.board.render_line(row).text for row in range(geometry.height)
-            ]
-            assert any(glyph in line for glyph in GLYPHS for line in figurine_lines)
+            assert any("▀" in line for line in rendered_lines)
 
     asyncio.run(run_test())
 

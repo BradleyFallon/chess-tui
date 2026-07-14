@@ -3,9 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
-
-from rich.cells import cell_len
 from rich.segment import Segment
 from rich.style import Style
 from textual.app import App, ComposeResult
@@ -16,34 +13,34 @@ from textual.strip import Strip
 from textual.widget import Widget
 from textual.widgets import Static
 
-from .board import (
-    FILES,
-    PIECE_GLYPHS,
-    PIECE_SPRITES,
-    PIXEL_SPRITE_HEIGHT,
-    PIXEL_SPRITE_WIDTH,
-    ParsedFen,
-)
+from .board import FILES, ParsedFen
 from .game import BoardInteraction, GameController, square_name
+from .renderers.base import PieceRenderer, center_cells
+from .renderers.colors import (
+    CAPTURE_SQUARE,
+    CHECK_SQUARE,
+    DARK_SQUARE,
+    HOVER_SQUARE,
+    LABEL_COLOR,
+    LAST_MOVE_SQUARE,
+    LEGAL_SQUARE,
+    LIGHT_SQUARE,
+    PENDING_SOURCE,
+    PENDING_TARGET,
+    SELECTED_SQUARE,
+    SCREEN_BACKGROUND,
+    STATUS_BACKGROUND,
+)
+from .renderers.factory import create_piece_renderer
+from .renderers.mode import RendererMode
+from .renderers.pixel_mask import (
+    PIXEL_MASK_SQUARE_HEIGHT,
+    PIXEL_MASK_SQUARE_WIDTH,
+)
 from .runtime import TerminalCapabilityError
 
 BOARD_LEFT_MARGIN = 3
 SQUARE_PRESETS = ((7, 3), (5, 2), (3, 1))
-LIGHT_SQUARE = "#9eaf74"
-DARK_SQUARE = "#405e42"
-WHITE_PIECE = "#fffdf5"
-BLACK_PIECE = "#111713"
-LABEL_COLOR = "#d7ddcf"
-SELECTED_SQUARE = "#d6a943"
-HOVER_SQUARE = "#688869"
-LEGAL_SQUARE = "#55895a"
-CAPTURE_SQUARE = "#a84d4d"
-PENDING_SOURCE = "#bc8436"
-PENDING_TARGET = "#f0c95b"
-LAST_MOVE_SQUARE = "#71804c"
-CHECK_SQUARE = "#d45555"
-LEGAL_MARKER = "•"
-PieceMode = Literal["pixel", "figurine"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,8 +64,9 @@ def calculate_geometry(
     terminal_pixels: Size | None = None,
     *,
     reserved_rows: int = 0,
+    renderer_mode: RendererMode | str = RendererMode.PIXEL_MASK,
 ) -> BoardGeometry:
-    """Calculate centered board geometry from available terminal metrics."""
+    """Calculate geometry without changing or degrading the selected renderer."""
 
     if terminal_cells.width <= 0 or terminal_cells.height <= 0:
         raise TerminalCapabilityError("The terminal reported an invalid cell size.")
@@ -78,6 +76,36 @@ def calculate_geometry(
         terminal_pixels.width <= 0 or terminal_pixels.height <= 0
     ):
         raise TerminalCapabilityError("The terminal reported an invalid pixel size.")
+
+    try:
+        mode = RendererMode(renderer_mode)
+    except ValueError as exc:
+        raise TerminalCapabilityError(
+            f"Unsupported renderer mode: {renderer_mode!r}."
+        ) from exc
+
+    if mode is RendererMode.PIXEL_MASK:
+        geometry = BoardGeometry(
+            PIXEL_MASK_SQUARE_WIDTH,
+            PIXEL_MASK_SQUARE_HEIGHT,
+        )
+        required_height = geometry.height + reserved_rows
+        if (
+            terminal_cells.width < geometry.width
+            or terminal_cells.height < required_height
+        ):
+            raise TerminalCapabilityError(
+                "CHESS TUI DISPLAY ERROR\n\n"
+                "Renderer:\n"
+                "pixel-mask\n\n"
+                "The retro-8 renderer requires at least:\n"
+                f"{geometry.width} columns × {required_height} rows\n\n"
+                "Current terminal:\n"
+                f"{terminal_cells.width} columns × {terminal_cells.height} rows\n\n"
+                "Resize the terminal or explicitly select another mode:\n\n"
+                "    chess-tui --renderer unicode"
+            )
+        return geometry
 
     candidates = [
         BoardGeometry(square_width, square_height)
@@ -156,54 +184,6 @@ def cell_offset_to_square(
     return display_coordinates_to_square(display_file, display_rank, flipped)
 
 
-def use_pixel_pieces(geometry: BoardGeometry) -> bool:
-    """Return whether a square can contain the full pixel-art piece sprite."""
-
-    return (
-        geometry.square_width >= PIXEL_SPRITE_WIDTH
-        and geometry.square_height >= PIXEL_SPRITE_HEIGHT
-    )
-
-
-def center_cells(text: str, width: int) -> str:
-    """Center text according to rendered terminal-cell width."""
-
-    rendered_width = cell_len(text)
-    if rendered_width > width:
-        raise ValueError(
-            f"Content occupies {rendered_width} terminal cells, "
-            f"but only {width} are available."
-        )
-
-    padding = width - rendered_width
-    left_padding = padding // 2
-    right_padding = padding - left_padding
-    return (" " * left_padding) + text + (" " * right_padding)
-
-
-def render_piece_row(
-    piece: str,
-    square_row: int,
-    geometry: BoardGeometry,
-    piece_mode: PieceMode = "pixel",
-) -> str:
-    """Render one terminal row of a piece in pixel or figurine mode."""
-
-    if piece == ".":
-        return " " * geometry.square_width
-    if piece_mode == "figurine" or not use_pixel_pieces(geometry):
-        if square_row == geometry.square_height // 2:
-            return center_cells(PIECE_GLYPHS[piece], geometry.square_width)
-        return " " * geometry.square_width
-
-    sprite = PIECE_SPRITES[piece.upper()]
-    vertical_offset = (geometry.square_height - len(sprite)) // 2
-    sprite_row = square_row - vertical_offset
-    if not 0 <= sprite_row < len(sprite):
-        return " " * geometry.square_width
-    return center_cells(sprite[sprite_row], geometry.square_width)
-
-
 class ChessBoard(Widget):
     """Render a chess position and emit pointer interactions as square messages."""
 
@@ -217,13 +197,21 @@ class ChessBoard(Widget):
             self.square = square
             super().__init__()
 
-    def __init__(self, position: ParsedFen) -> None:
+    def __init__(
+        self,
+        position: ParsedFen,
+        renderer: PieceRenderer | None = None,
+    ) -> None:
         super().__init__()
         self.position = position
         self.interaction = BoardInteraction()
         self.geometry: BoardGeometry | None = None
         self.flipped = False
-        self.piece_mode: PieceMode = "pixel"
+        self.renderer = (
+            renderer
+            if renderer is not None
+            else create_piece_renderer(RendererMode.PIXEL_MASK)
+        )
 
     def configure(self, geometry: BoardGeometry) -> None:
         """Apply validated terminal geometry to the board."""
@@ -247,14 +235,12 @@ class ChessBoard(Widget):
         interaction: BoardInteraction,
         *,
         flipped: bool,
-        piece_mode: PieceMode,
     ) -> None:
         """Apply the controller's current renderer-facing state."""
 
         self.position = position
         self.interaction = interaction
         self.flipped = flipped
-        self.piece_mode: PieceMode = piece_mode
         self.refresh()
 
     def square_at(self, x: int, y: int) -> int | None:
@@ -309,22 +295,17 @@ class ChessBoard(Widget):
             )
             piece = self._piece_at(square)
             background = self._square_background(square)
-            if piece != ".":
-                foreground = WHITE_PIECE if piece.isupper() else BLACK_PIECE
-                content = render_piece_row(
-                    piece,
-                    square_row,
-                    geometry,
-                    self.piece_mode,
-                )
-                style = Style(color=foreground, bgcolor=background, bold=True)
-            elif center_row and square in self.interaction.quiet_targets:
-                content = center_cells(LEGAL_MARKER, geometry.square_width)
-                style = Style(color=WHITE_PIECE, bgcolor=background, bold=True)
-            else:
-                content = " " * geometry.square_width
-                style = Style(bgcolor=background)
-            segments.append(Segment(content, style))
+            visual_state = self._square_visual_state(square)
+            rendered_rows = self.renderer.render_square_rows(
+                piece=piece,
+                square_width=geometry.square_width,
+                square_height=geometry.square_height,
+                background=background,
+                visual_state=visual_state,
+                quiet_target=square in self.interaction.quiet_targets,
+                capture_target=square in self.interaction.capture_targets,
+            )
+            segments.extend(rendered_rows[square_row])
 
         return Strip(segments, geometry.width)
 
@@ -340,6 +321,32 @@ class ChessBoard(Widget):
         rank = square // 8
         file_index = square % 8
         return self.position.board[7 - rank][file_index]
+
+    def _square_visual_state(self, square: int) -> str:
+        interaction = self.interaction
+        if square == interaction.checked_king:
+            return "check"
+        pending_move = interaction.pending_move
+        if pending_move is not None:
+            if square == pending_move.to_square:
+                return "pending-target"
+            if square == pending_move.from_square:
+                return "pending-source"
+        if square == interaction.selected_square:
+            return "selected"
+        if square in interaction.capture_targets:
+            return "capture"
+        if square in interaction.quiet_targets:
+            return "quiet"
+        if square == interaction.hover_square:
+            return "hover"
+        last_move = interaction.last_move
+        if last_move is not None and square in {
+            last_move.from_square,
+            last_move.to_square,
+        }:
+            return "last-move"
+        return "normal"
 
     def _square_background(self, square: int) -> str:
         interaction = self.interaction
@@ -373,27 +380,26 @@ class ChessBoard(Widget):
 class ChessTui(App[None]):
     """Display and interact with a FEN-backed chess position."""
 
-    CSS = """
-    Screen {
+    CSS = f"""
+    Screen {{
         align: center middle;
-        background: #172019;
-    }
-    ChessBoard {
+        background: {SCREEN_BACKGROUND};
+    }}
+    ChessBoard {{
         pointer: pointer;
-    }
-    #status {
+    }}
+    #status {{
         dock: bottom;
         width: 100%;
-        height: 1;
-        color: #d7ddcf;
-        background: #111713;
+        height: auto;
+        color: {LABEL_COLOR};
+        background: {STATUS_BACKGROUND};
         text-align: center;
-    }
+    }}
     """
     BINDINGS = [
         ("q", "quit", "Quit"),
         ("f", "flip_board", "Flip"),
-        ("v", "toggle_piece_mode", "Pieces"),
         ("enter", "confirm_move", "Confirm"),
         ("escape", "cancel_move", "Cancel"),
     ]
@@ -402,15 +408,19 @@ class ChessTui(App[None]):
         self,
         position: ParsedFen,
         *,
-        piece_mode: PieceMode = "pixel",
+        renderer: PieceRenderer | None = None,
     ) -> None:
         super().__init__()
+        self.renderer = (
+            renderer
+            if renderer is not None
+            else create_piece_renderer(RendererMode.PIXEL_MASK)
+        )
         self.controller = GameController(position)
-        self.board = ChessBoard(position)
+        self.board = ChessBoard(position, renderer=self.renderer)
         self.status = Static("", id="status", markup=False)
         self.failure: TerminalCapabilityError | None = None
         self.flipped = False
-        self.piece_mode: PieceMode = piece_mode
         self._geometry_error: str | None = None
 
     def compose(self) -> ComposeResult:
@@ -426,12 +436,15 @@ class ChessTui(App[None]):
                 event.size,
                 event.pixel_size,
                 reserved_rows=1,
+                renderer_mode=self.renderer.mode,
             )
         except TerminalCapabilityError as exc:
+            self.failure = exc
             self._geometry_error = str(exc)
             self.board.unconfigure()
             self._update_status()
             return
+        self.failure = None
         self._geometry_error = None
         self.board.configure(geometry)
         self._update_status()
@@ -448,10 +461,6 @@ class ChessTui(App[None]):
         self.flipped = not self.flipped
         self._sync_view()
 
-    def action_toggle_piece_mode(self) -> None:
-        self.piece_mode = "figurine" if self.piece_mode == "pixel" else "pixel"
-        self._sync_view()
-
     def action_confirm_move(self) -> None:
         self.controller.confirm_move()
         self._sync_view()
@@ -465,7 +474,6 @@ class ChessTui(App[None]):
             self.controller.position,
             self.controller.interaction,
             flipped=self.flipped,
-            piece_mode=self.piece_mode,
         )
         self._update_status()
 
@@ -489,26 +497,16 @@ class ChessTui(App[None]):
         else:
             side = "White" if self.controller.position.active_color == "w" else "Black"
             text = f"{side} to move | click a piece | F flip | Q quit"
-        geometry = self.board.geometry
-        effective_mode = (
-            "pixel"
-            if self.piece_mode == "pixel"
-            and geometry is not None
-            and use_pixel_pieces(geometry)
-            else "figurine"
-        )
-        if self.piece_mode == "pixel" and effective_mode == "figurine":
-            effective_mode = "figurine (compact)"
-        text += f" | V pieces: {effective_mode}"
+        text += f" | Renderer: {self.renderer.mode.value}"
         self.status.update(text)
 
 
 def run_chess_app(
     position: ParsedFen,
     *,
-    piece_mode: PieceMode = "pixel",
+    renderer: PieceRenderer | None = None,
 ) -> None:
     """Run the Textual application and propagate strict capability failures."""
 
-    app = ChessTui(position, piece_mode=piece_mode)
+    app = ChessTui(position, renderer=renderer)
     app.run()

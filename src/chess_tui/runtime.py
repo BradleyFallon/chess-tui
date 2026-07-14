@@ -6,7 +6,10 @@ import codecs
 from importlib.metadata import PackageNotFoundError, version
 from typing import TextIO
 
-from .board import PIECE_GLYPHS, PIECE_SPRITES, PIXEL_SPRITE_WIDTH
+from .renderers.base import PieceRenderer
+from .renderers.errors import RendererStartupError
+from .renderers.factory import create_piece_renderer
+from .renderers.mode import RendererMode
 
 REQUIRED_TEXTUAL_VERSION = "8.2.8"
 REQUIRED_RICH_VERSION = "15.0.0"
@@ -21,7 +24,11 @@ class TerminalCapabilityError(RuntimeRequirementError):
     """Raised when the terminal does not provide a required capability."""
 
 
-def validate_textual_runtime(stream: TextIO) -> None:
+def validate_textual_runtime(
+    stream: TextIO,
+    *,
+    renderer_mode: RendererMode | str | None = None,
+) -> PieceRenderer | None:
     """Require the exact UI stack and terminal text capabilities."""
 
     _require_distribution("rich", REQUIRED_RICH_VERSION)
@@ -57,32 +64,24 @@ def validate_textual_runtime(stream: TextIO) -> None:
             f"chess-tui requires UTF-8 output, but the terminal uses {encoding!r}."
         )
 
+    if renderer_mode is None:
+        return None
+
     try:
-        from rich.cells import cell_len
-    except ImportError as exc:
+        mode = (
+            renderer_mode
+            if isinstance(renderer_mode, RendererMode)
+            else RendererMode(renderer_mode)
+        )
+    except ValueError as exc:
         raise RuntimeRequirementError(
-            "Rich is installed but could not be imported. Reinstall the project dependencies."
+            f"Unsupported renderer mode: {renderer_mode!r}."
         ) from exc
 
-    invalid_glyphs = [glyph for glyph in PIECE_GLYPHS.values() if cell_len(glyph) != 1]
-    if invalid_glyphs:
-        rendered = ", ".join(repr(glyph) for glyph in invalid_glyphs)
-        raise TerminalCapabilityError(
-            f"Chess symbols must occupy exactly one terminal cell; invalid: {rendered}."
-        )
-
-    invalid_sprite_rows = [
-        row
-        for sprite in PIECE_SPRITES.values()
-        for row in sprite
-        if cell_len(row) != PIXEL_SPRITE_WIDTH
-    ]
-    if invalid_sprite_rows:
-        rendered = ", ".join(repr(row) for row in invalid_sprite_rows)
-        raise TerminalCapabilityError(
-            f"Pixel sprite rows must occupy exactly {PIXEL_SPRITE_WIDTH} terminal "
-            f"cells; invalid: {rendered}."
-        )
+    try:
+        return create_piece_renderer(mode)
+    except RendererStartupError as exc:
+        raise RuntimeRequirementError(str(exc)) from exc
 
 
 def _require_distribution(package: str, required_version: str) -> None:

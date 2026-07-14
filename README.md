@@ -1,7 +1,7 @@
 # Chess TUI
 
 An interactive Textual chess board that loads FEN positions, highlights legal
-moves, and renders large pixel-art pieces on a responsive checkerboard.
+moves, and renders chess pieces on a responsive checkerboard.
 
 ## Quick start
 
@@ -9,7 +9,9 @@ moves, and renders large pixel-art pieces on a responsive checkerboard.
 source ./activate
 update-deps
 chess-tui --help
-chess-tui --pieces figurine
+chess-tui --renderer pixel-mask
+chess-tui --renderer unicode
+chess-tui --renderer legacy-sprite
 chess-tui --fen "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 ```
 
@@ -29,7 +31,6 @@ After activation, `chess-tui` resolves to the installed console script at
 - Press `Enter` to confirm a pending move.
 - Press `Escape` to cancel selection or a pending move.
 - Press `F` to flip the board.
-- Press `V` to switch between pixel sprites and Unicode figurines.
 - Press `Q` to quit.
 
 ## Runtime contract
@@ -39,19 +40,24 @@ error unless all of these requirements are met:
 
 - Chessnut 0.4.1, Textual 8.2.8, and Rich 15.0.0 are installed.
 - Standard output is an interactive UTF-8 TTY.
-- Every Unicode chess symbol occupies exactly one terminal cell.
-- Every pixel-sprite row occupies exactly five terminal cells.
-- The terminal is at least 27 columns by 11 rows, including the status line.
+- The selected renderer's glyphs or masks pass strict startup validation.
+- `pixel-mask` requires at least 67 columns by 35 rows, including the status line.
+- The selected renderer is one of `pixel-mask`, `unicode`, or `legacy-sprite`.
+- The CLI flag `--renderer` overrides `CHESS_TUI_RENDERER`; the default mode is
+  `pixel-mask`.
 
-The board chooses the best fitting geometry from 7x3, 5x2, and 3x1-cell
-presets. Reported pixel dimensions improve aspect selection but are optional,
-so terminals such as VS Code are fully supported. If the terminal becomes too
-small, the application displays a size requirement and recovers when resized.
-The 7x3 preset centers a five-cell, three-row pixel sprite with one column of
-padding on each side. Compact 5x2 and 3x1 boards use standard one-cell chess
-figurines. Redirected output is unsupported. Terminal applications cannot
-query whether a selected font visually contains a Unicode glyph; use a terminal
-font that includes the standard chess and block-drawing symbols.
+The `pixel-mask` renderer uses fixed 8x8 pixel masks mapped directly to 8x4
+terminal-cell squares; it never scales or switches modes automatically. The
+responsive `unicode` and `legacy-sprite` renderers choose from 7x3, 5x2, and
+3x1-cell presets. Reported pixel dimensions improve their aspect selection but
+are optional. If the terminal is too small, the application displays the exact
+size requirement and recovers when resized. Retro artwork and both piece
+palettes are stored in `src/chess_tui/assets/pieces/retro-8.toml`. Masks use `_`
+for transparency, `A` for outline/shadow, and `B` for fill/highlight. Each side
+defines only its `A` and `B` colors. Redirected output is unsupported.
+Terminal applications cannot query whether a selected font visually contains a
+Unicode glyph; use a terminal font that includes the standard chess and
+block-drawing symbols.
 
 ## Project tree
 
@@ -81,11 +87,13 @@ Copy this block when providing the project structure to an LLM:
 |   `-- chess_tui/              # Installable application package
 |       |-- __init__.py                # Public API and package version
 |       |-- __main__.py                # python -m entry point
-|       |-- board.py                   # FEN parsing and chess piece art
+|       |-- board.py                   # FEN parsing and board helpers
 |       |-- cli.py                     # Command-line interface
 |       |-- game.py                    # Legal moves and interaction state
+|       |-- renderers/                 # Explicit piece renderer modes
 |       |-- runtime.py                 # Strict dependency/capability checks
 |       |-- tui.py                     # Textual board widget and application
+|       `-- assets/                    # Packaged retro text masks and assets
 |       `-- output_schema.json         # Optional structured-output schema
 |-- tests/
 |   |-- fixtures/

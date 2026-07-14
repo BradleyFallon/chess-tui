@@ -14,6 +14,7 @@ dependencies = [
   "Chessnut==0.4.1",
   "rich==15.0.0",
   "textual==8.2.8",
+  "tomli>=2.0.1; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
@@ -35,10 +36,10 @@ include-package-data = true
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["chess_tui"]
+include = ["chess_tui", "chess_tui.*"]
 
 [tool.setuptools.package-data]
-chess_tui = ["output_schema.json"]
+chess_tui = ["output_schema.json", "assets/pieces/*.toml"]
 
 [tool.pytest.ini_options]
 addopts = "-q"
