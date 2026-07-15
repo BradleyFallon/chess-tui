@@ -2,9 +2,10 @@ import type { EvaluationSnapshot } from "../types/workspace";
 
 interface EvaluationBarProps {
   evaluation: EvaluationSnapshot;
+  turn: "white" | "black";
 }
 
-export function EvaluationBar({ evaluation }: EvaluationBarProps) {
+export function EvaluationBar({ evaluation, turn }: EvaluationBarProps) {
   const label = evaluationLabel(evaluation);
   const percentage = evaluationPercentage(evaluation);
   return (
@@ -22,6 +23,7 @@ export function EvaluationBar({ evaluation }: EvaluationBarProps) {
         <div className="evaluation-white" style={{ width: `${percentage}%` }} />
         <span className="evaluation-center-marker" aria-hidden="true" />
       </div>
+      <span className="turn-label">{turn} to move</span>
       {evaluation.errorMessage && <p className="inline-error">{evaluation.errorMessage}</p>}
     </section>
   );

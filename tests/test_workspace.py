@@ -100,6 +100,43 @@ def test_edit_revalidates_replays_and_reassesses_pending_move(tmp_path: Path) ->
     assert FlowStore().load(work.author.path).rules[0].move.to_square == "e4"
 
 
+def test_mismatch_can_be_added_as_an_exact_rule_and_committed(tmp_path: Path) -> None:
+    work = workspace(tmp_path)
+    attempt = work.submit_policy_san("e4")
+    assert attempt.result is AttemptResult.MISMATCH
+
+    override = work.allow_mismatch_as_override()
+
+    assert override.id == "allow-e2e4-ply-0"
+    assert override.after_san == ()
+    assert str(override.move.piece) == "white:e2"
+    assert override.move.to_square == "e4"
+    assert work.attempt is None
+    assert work.history == ["e4"]
+    assert not work.is_policy_turn
+    assert FlowStore().load(work.author.path).overrides[-1] == override
+
+
+def test_adding_mismatch_replaces_existing_exact_rule_for_position(
+    tmp_path: Path,
+) -> None:
+    work = workspace(tmp_path)
+    work.submit_policy_san("d4")
+    work.complete_correct_move()
+    work.submit_opponent_san("e5")
+    work.begin_policy_turn()
+    assert work.submit_policy_san("Bf4").result is AttemptResult.MISMATCH
+    override_count = len(work.author.flow.overrides)
+
+    override = work.allow_mismatch_as_override()
+
+    assert override.id == "after-d4-e5"
+    assert str(override.move.piece) == "white:c1"
+    assert override.move.to_square == "f4"
+    assert len(work.author.flow.overrides) == override_count
+    assert work.history == ["d4", "e5", "Bf4"]
+
+
 def test_failed_edit_preserves_file_and_live_attempt(tmp_path: Path) -> None:
     work = workspace(tmp_path)
     attempt = work.submit_policy_san("e4")

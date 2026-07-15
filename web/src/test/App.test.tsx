@@ -62,6 +62,25 @@ test("SAN composer submits moves", async () => {
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions/session-1/moves/san", expect.objectContaining({ method: "POST", body: JSON.stringify({ san: "d4" }) })));
 });
 
+test("typing anywhere sends printable keys to the move composer", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture())));
+  renderRoute("/develop");
+  const composer = await screen.findByRole("combobox", { name: "Enter move in SAN" });
+
+  fireEvent.keyDown(window, { key: "d" });
+  expect(composer).toHaveFocus();
+  expect(composer).toHaveValue("d");
+  await userEvent.keyboard("4");
+  expect(composer).toHaveValue("d4");
+
+  const destination = document.createElement("input");
+  document.body.append(destination);
+  destination.focus();
+  fireEvent.keyDown(destination, { key: "x" });
+  expect(composer).toHaveValue("d4");
+  destination.remove();
+});
+
 test("slash commands show concise help, filter, and execute from the composer", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture())));
   renderRoute("/develop");
@@ -137,7 +156,57 @@ test("mismatch shows retry, selected continuation, engine review, and editor dir
   expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: "Use selected move" })).toBeInTheDocument();
   expect(screen.getByText("blunder").closest("p")).toHaveTextContent("Best move: d4");
-  expect(screen.getByText(/Use Edit in Rule Status/)).toBeInTheDocument();
+  expect(screen.getByText(/Edit in Rule Status/)).toBeInTheDocument();
+});
+
+test("mismatch chat command adds a rule for the attempted move", async () => {
+  const initial = workspaceFixture();
+  const mismatch = workspaceFixture({
+    phase: "policy-result",
+    attempt: {
+      result: "mismatch", playedUci: "e2e4", playedSan: "e4",
+      expectedUci: "d2d4", expectedSan: "d4", source: "rule",
+      sourceId: "develop-d-pawn", note: "Control the center.", trace: [],
+      engineReview: null,
+    },
+  });
+  const accepted = workspaceFixture({
+    phase: "opponent-ready",
+    decision: null,
+    position: {
+      ...initial.position,
+      turn: "black",
+      ply: 1,
+      historySan: ["e4"],
+      lastMoveUci: "e2e4",
+    },
+    activity: [
+      ...initial.activity,
+      {
+        id: 2,
+        kind: "success",
+        title: "Added rule allow-e2e4-ply-0",
+        message: "e4 is now the exact-position policy move here and was accepted.",
+      },
+    ],
+  });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(mismatch))
+    .mockResolvedValueOnce(jsonResponse(accepted));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+  const composer = await screen.findByRole("combobox", { name: "Enter move in SAN" });
+
+  await userEvent.type(composer, "/");
+  expect(screen.getByRole("option", { name: /\/add-rule/ })).toBeInTheDocument();
+  await userEvent.clear(composer);
+  await userEvent.type(composer, "/add-rule{Enter}");
+
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/policy/add-rule",
+    expect.objectContaining({ method: "POST" }),
+  ));
+  expect(await screen.findByText("Added rule allow-e2e4-ply-0")).toBeInTheDocument();
 });
 
 test("hint highlights the expected original piece square", async () => {

@@ -53,6 +53,11 @@ class FlowAuthor:
             ),
         )
 
+    def candidate_with_added_override(self, override: ExactOverride) -> Flow:
+        if any(item.id == override.id for item in self.flow.overrides):
+            raise FlowValidationError(f"Duplicate override id: {override.id!r}.")
+        return replace(self.flow, overrides=(*self.flow.overrides, override))
+
     def record_opponent_reply(
         self,
         board: chess.Board,

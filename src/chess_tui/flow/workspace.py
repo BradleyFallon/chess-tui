@@ -10,10 +10,12 @@ from typing import Callable
 import chess
 
 from ..game import ChessMove
+from ..policy import MoveAction
 from ..policy.runtime import DecisionSource, PolicyDecision, PolicyRuntime
 from .author import AuthorBoardController, ConfirmedAuthorMove, FlowAuthor
 from .errors import FlowError, FlowValidationError
 from .models import ExactOverride, Flow, PolicyRule
+from .position import normalized_position_key
 
 
 class AttemptResult(str, Enum):
@@ -172,6 +174,52 @@ class FlowWorkspace:
     def update_override(self, replacement: ExactOverride) -> PolicyMoveAttempt | None:
         return self._apply_candidate(self.author.candidate_with_override(replacement))
 
+    def allow_mismatch_as_override(self) -> ExactOverride:
+        attempt = self._require_attempt()
+        if attempt.result is not AttemptResult.MISMATCH:
+            raise FlowValidationError(
+                "Only a mismatching policy move can be added as an exact rule."
+            )
+        move = chess.Move.from_uci(attempt.selected_move.move.uci)
+        if move.promotion is not None:
+            raise FlowValidationError(
+                "Promotion moves cannot be authored because v2 actions do not encode promotion."
+            )
+        tracked_piece = next(
+            (
+                piece
+                for piece in self.runtime.tracker.pieces
+                if piece.current_square == move.from_square
+            ),
+            None,
+        )
+        if tracked_piece is None:
+            raise FlowValidationError(
+                "The attempted move does not belong to a tracked original piece."
+            )
+        position_key = normalized_position_key(attempt.board_before)
+        existing = self.runtime.overrides_by_position.get(position_key)
+        override = ExactOverride(
+            id=(
+                existing.id
+                if existing is not None
+                else self._available_override_id(
+                    move.uci(), len(attempt.history_before)
+                )
+            ),
+            after_san=attempt.history_before,
+            move=MoveAction(tracked_piece.id, chess.square_name(move.to_square)),
+            enabled=True,
+            note=f"Added from chat to allow {attempt.selected_move.san} here.",
+        )
+        candidate = (
+            self.author.candidate_with_override(override)
+            if existing is not None
+            else self.author.candidate_with_added_override(override)
+        )
+        self._apply_candidate(candidate)
+        return override
+
     def _apply_candidate(self, candidate: Flow) -> PolicyMoveAttempt | None:
         attempt_uci = self.attempt.selected_move.move.uci if self.attempt else None
         history = self.attempt.history_before if self.attempt else tuple(self.history)
@@ -189,6 +237,16 @@ class FlowWorkspace:
         if refreshed.result is AttemptResult.CORRECT:
             self.complete_correct_move()
         return refreshed
+
+    def _available_override_id(self, uci: str, ply: int) -> str:
+        stem = f"allow-{uci}-ply-{ply}"
+        existing = {item.id for item in self.author.flow.overrides}
+        if stem not in existing:
+            return stem
+        suffix = 2
+        while f"{stem}-{suffix}" in existing:
+            suffix += 1
+        return f"{stem}-{suffix}"
 
     def _submit_policy(
         self, commit: Callable[[], ConfirmedAuthorMove | None]

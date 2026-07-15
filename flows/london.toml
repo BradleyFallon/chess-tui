@@ -145,3 +145,48 @@ move = "d5"
 id = "after-d4-nf6"
 after = ["d4"]
 move = "Nf6"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-e6-e3-c5"
+after = ["d4", "Nf6", "Bf4", "e6", "e3"]
+move = "c5"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-e6-e3-c5-nf3-d5"
+after = ["d4", "Nf6", "Bf4", "e6", "e3", "c5", "Nf3"]
+move = "d5"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-d5"
+after = ["d4", "Nf6", "Bf4"]
+move = "d5"
+
+[[opponent_replies]]
+id = "after-d4-g6"
+after = ["d4"]
+move = "g6"
+
+[[opponent_replies]]
+id = "after-d4-g6-bf4-h6"
+after = ["d4", "g6", "Bf4"]
+move = "h6"
+
+[[opponent_replies]]
+id = "after-d4-g6-bf4-h6-e3-f6"
+after = ["d4", "g6", "Bf4", "h6", "e3"]
+move = "f6"
+
+[[opponent_replies]]
+id = "after-d4-g6-bf4-h6-e3-f6-nf3-e6"
+after = ["d4", "g6", "Bf4", "h6", "e3", "f6", "Nf3"]
+move = "e6"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-d5-e3-c5"
+after = ["d4", "Nf6", "Bf4", "d5", "e3"]
+move = "c5"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-d5-e3-c5-nf3-nc6"
+after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3"]
+move = "Nc6"

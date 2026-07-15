@@ -239,6 +239,25 @@ class SessionManager:
             )
             return await self._snapshot(session)
 
+    async def add_rule_for_mismatch(self, session_id: str) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            attempt = session.workspace.attempt
+            if attempt is None or attempt.result is not AttemptResult.MISMATCH:
+                raise WebApiError(
+                    ApiErrorCode.INVALID_REQUEST,
+                    "A rule can only be added for a pending mismatching move.",
+                )
+            played_san = attempt.selected_move.san
+            override = session.workspace.allow_mismatch_as_override()
+            self._append_activity(
+                session,
+                "success",
+                f"Added rule {override.id}",
+                f"{played_san} is now the exact-position policy move here and was accepted.",
+            )
+            return await self._snapshot(session)
+
     async def play_next_opponent(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:

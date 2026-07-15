@@ -19,6 +19,7 @@ interface Props {
   onHint: () => void;
   onRetry: () => void;
   onContinue: () => void;
+  onAddRule: () => void;
   onNextOpponent: () => void;
   onSubmitSan: (san: string) => void;
   onBack: () => void;
@@ -40,6 +41,7 @@ export function StatusFeed({
   onHint,
   onRetry,
   onContinue,
+  onAddRule,
   onNextOpponent,
   onSubmitSan,
   onBack,
@@ -47,12 +49,21 @@ export function StatusFeed({
   onAnalyse,
 }: Props) {
   const feedRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLInputElement>(null);
   const [moveText, setMoveText] = useState("");
   const [selectedCommand, setSelectedCommand] = useState(0);
   const commandMode = moveText.startsWith("/");
   const sanUnavailable =
     workspace.phase === "policy-result" || workspace.phase === "game-over";
   const commands: ChatCommand[] = [
+    {
+      name: "/add-rule",
+      description: "Accept the attempted move as an exact-position policy rule.",
+      available:
+        workspace.phase === "policy-result" &&
+        workspace.attempt?.result === "mismatch",
+      run: onAddRule,
+    },
     {
       name: "/analyse",
       description: "Show local book moves and Stockfish's best candidates.",
@@ -150,6 +161,38 @@ export function StatusFeed({
   useEffect(() => {
     if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
   }, [workspace.activity.length, workspace.phase]);
+  useEffect(() => {
+    const focusComposerOnTyping = (event: globalThis.KeyboardEvent) => {
+      if (
+        pending ||
+        event.defaultPrevented ||
+        event.isComposing ||
+        event.metaKey ||
+        event.ctrlKey ||
+        event.altKey ||
+        event.key.length !== 1 ||
+        event.key.trim() === ""
+      ) {
+        return;
+      }
+      const target = event.target;
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) {
+        return;
+      }
+      event.preventDefault();
+      composerRef.current?.focus();
+      setMoveText((current) => current + event.key);
+      setSelectedCommand(0);
+    };
+
+    window.addEventListener("keydown", focusComposerOnTyping);
+    return () => window.removeEventListener("keydown", focusComposerOnTyping);
+  }, [pending]);
 
   return (
     <aside className="workspace-panel status-panel" aria-labelledby="status-heading">
@@ -205,6 +248,7 @@ export function StatusFeed({
         )}
         <form className="status-composer" onSubmit={submit}>
           <input
+            ref={composerRef}
             aria-label="Enter move in SAN"
             role="combobox"
             aria-autocomplete="list"
@@ -256,7 +300,7 @@ function CurrentStatus({
   onRetry,
   onContinue,
   onNextOpponent,
-}: Omit<Props, "onSubmitSan" | "onBack" | "onRestart" | "onAnalyse">) {
+}: Omit<Props, "onSubmitSan" | "onBack" | "onRestart" | "onAnalyse" | "onAddRule">) {
   if (workspace.phase === "policy-ready") {
     const side = capitalize(workspace.flow.side);
     return <article className="status-note status-note-prompt status-note-current"><span className="status-note-marker" aria-hidden="true" /><div>
@@ -280,7 +324,7 @@ function ResultActions({ attempt, pending, onRetry, onContinue }: { attempt: Att
     <p>You played {attempt.playedSan}.{attempt.expectedSan ? ` The selected policy expects ${attempt.expectedSan}.` : " No policy action resolves here."}</p>
     {attempt.note && <p>Reason: {attempt.note}</p>}<EngineReview attempt={attempt} />
     <div className="button-row status-actions"><button onClick={onRetry} disabled={pending}>Retry</button>{mismatch && <button className="primary" onClick={onContinue} disabled={pending}>Use selected move</button>}</div>
-    <p className="status-edit-help">Use Edit in Rule Status to change the selected rule or override.</p>
+    <p className="status-edit-help">Use /add-rule in chat to accept this move here, or use Edit in Rule Status to change the selected rule or override.</p>
   </div></article>;
 }
 

@@ -196,6 +196,15 @@ def _register_api_routes(application: FastAPI) -> None:
         return await _manager(request).continue_policy(session_id)
 
     @application.post(
+        "/api/sessions/{session_id}/policy/add-rule",
+        response_model=WorkspaceSnapshot,
+    )
+    async def add_rule_for_mismatch(
+        request: Request, session_id: str
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).add_rule_for_mismatch(session_id)
+
+    @application.post(
         "/api/sessions/{session_id}/opponent/next",
         response_model=WorkspaceSnapshot,
     )

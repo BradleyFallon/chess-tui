@@ -18,6 +18,7 @@ export function DevelopPage() {
     submitSanMove,
     retryPolicy,
     continuePolicy,
+    addRuleForMismatch,
     playNextOpponent,
     analysePosition,
     updateRule,
@@ -91,7 +92,10 @@ export function DevelopPage() {
           onRestart={() => void restart()}
         />
         <div className="board-region">
-          <EvaluationBar evaluation={workspace.evaluation} />
+          <EvaluationBar
+            evaluation={workspace.evaluation}
+            turn={workspace.position.turn}
+          />
           <BoardPanel
             workspace={workspace}
             pending={pending}
@@ -110,6 +114,7 @@ export function DevelopPage() {
             onHint={() => setHintedFen(workspace.position.fen)}
             onRetry={() => void retryPolicy()}
             onContinue={() => void continuePolicy()}
+            onAddRule={() => void addRuleForMismatch()}
             onNextOpponent={() => void playNextOpponent()}
             onSubmitSan={(san) => void submitSanMove(san)}
             onBack={() => void back()}

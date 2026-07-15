@@ -83,6 +83,7 @@ export const workspaceApi = {
     post(`/api/sessions/${sessionId}/moves/san`, { san }),
   retryPolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/retry`),
   continuePolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/continue`),
+  addRuleForMismatch: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/add-rule`),
   playNextOpponent: (sessionId: string) => post(`/api/sessions/${sessionId}/opponent/next`),
   analysePosition: (sessionId: string) => post(`/api/sessions/${sessionId}/analysis`),
   updateRule: (sessionId: string, ruleId: string, update: RuleUpdate) =>

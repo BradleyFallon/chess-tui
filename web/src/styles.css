@@ -80,9 +80,10 @@ dd { margin: 0; font-weight: 700; text-transform: capitalize; }
 .lifecycle-groups div { padding: 0.65rem; border: 1px solid #30392e; border-radius: 5px; }
 .lifecycle-groups h3 { margin: 0 0 0.35rem; font-size: 0.68rem; color: var(--accent); text-transform: uppercase; }
 .lifecycle-groups p { margin: 0; font-size: 0.72rem; }
-.evaluation-card { padding: 0.45rem 0.65rem; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 0.65rem; }
-.evaluation-score { min-width: 4.4rem; color: var(--text); font-size: 0.9rem; font-weight: 800; font-variant-numeric: tabular-nums; }
-.evaluation-track { position: relative; height: 18px; display: flex; overflow: hidden; border: 1px solid #6b7464; border-radius: 5px; }
+.evaluation-card { padding: 0.4rem 0.65rem; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0.65rem; }
+.evaluation-score { min-width: 4.4rem; justify-self: end; color: var(--text); font-size: 0.9rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.evaluation-track { position: relative; width: clamp(120px, 42vw, 280px); height: 12px; display: flex; overflow: hidden; border: 1px solid #6b7464; border-radius: 4px; }
+.evaluation-card .turn-label { justify-self: start; white-space: nowrap; }
 .evaluation-black, .evaluation-white { transition: width 180ms ease; }
 .evaluation-black { background: #20231f; }
 .evaluation-white { background: #eee8d3; }

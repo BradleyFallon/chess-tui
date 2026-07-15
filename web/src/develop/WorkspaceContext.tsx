@@ -24,6 +24,7 @@ interface WorkspaceContextValue {
   submitSanMove: (san: string) => Promise<void>;
   retryPolicy: () => Promise<void>;
   continuePolicy: () => Promise<void>;
+  addRuleForMismatch: () => Promise<void>;
   playNextOpponent: () => Promise<void>;
   analysePosition: () => Promise<void>;
   updateRule: (ruleId: string, update: RuleUpdate) => Promise<void>;
@@ -107,6 +108,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       submitSanMove: (san) => operate((id) => workspaceApi.submitSanMove(id, san)),
       retryPolicy: () => operate(workspaceApi.retryPolicy),
       continuePolicy: () => operate(workspaceApi.continuePolicy),
+      addRuleForMismatch: () => operate(workspaceApi.addRuleForMismatch),
       playNextOpponent: () => operate(workspaceApi.playNextOpponent),
       analysePosition: () => operate(workspaceApi.analysePosition),
       updateRule: (ruleId, update) => operate((id) => workspaceApi.updateRule(id, ruleId, update)),

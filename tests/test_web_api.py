@@ -96,6 +96,27 @@ def test_mismatch_retry_and_continue_selected_move(tmp_path: Path) -> None:
         assert continued["position"]["historySan"] == ["d4"]
 
 
+def test_mismatch_can_add_an_exact_rule_from_chat_action(tmp_path: Path) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        mismatch = move(client, session_id, "e2e4")
+        assert mismatch["phase"] == "policy-result"
+
+        response = client.post(f"/api/sessions/{session_id}/policy/add-rule", json={})
+
+        assert response.status_code == 200
+        snapshot = response.json()
+        assert snapshot["phase"] == "opponent-ready"
+        assert snapshot["attempt"] is None
+        assert snapshot["position"]["historySan"] == ["e4"]
+        assert snapshot["activity"][-1]["title"] == "Added rule allow-e2e4-ply-0"
+        override = FlowStore().load(path).overrides[-1]
+        assert override.id == "allow-e2e4-ply-0"
+        assert str(override.move.piece) == "white:e2"
+        assert override.move.to_square == "e4"
+
+
 def test_engine_review_and_next_opponent(tmp_path: Path) -> None:
     with web_client(tmp_path, engine=FixtureEngineService()) as (client, _):
         created = session(client)

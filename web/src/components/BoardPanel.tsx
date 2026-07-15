@@ -73,11 +73,7 @@ export function BoardPanel({ workspace, pending, hintMoveUci, onMove }: BoardPan
   };
 
   return (
-    <section className="board-column" aria-labelledby="board-heading">
-      <div className="section-heading-row">
-        <h2 id="board-heading">Board</h2>
-        <span className="turn-label">{workspace.position.turn} to move</span>
-      </div>
+    <section className="board-column" aria-label="Chessboard">
       <div className="board-shell" aria-label="Interactive chessboard">
         <Chessboard options={options} />
       </div>
