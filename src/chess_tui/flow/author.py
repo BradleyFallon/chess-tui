@@ -73,6 +73,12 @@ class WhiteFlowAuthor:
         self.policy = WhitePolicy(updated)
         return updated
 
+    def remove_exception(self, exception_id: str) -> WhiteFlow:
+        updated = self.store.remove_exception(self.path, exception_id)
+        self.flow = updated
+        self.policy = WhitePolicy(updated)
+        return updated
+
     def record_opponent_reply(
         self,
         board: chess.Board,

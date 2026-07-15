@@ -12,6 +12,12 @@ from .models import DefaultRule, ExceptionRule, OpponentReply, Recommendation, W
 from .policy import WhitePolicy
 from .position import normalized_position_key, replay_san
 from .store import FlowStore
+from .workspace import (
+    AttemptResult,
+    FlowWorkspace,
+    WhiteMoveAttempt,
+    WhiteTurn,
+)
 
 __all__ = [
     "DefaultRule",
@@ -21,6 +27,7 @@ __all__ = [
     "FlowError",
     "FlowPolicyError",
     "FlowStorageError",
+    "FlowWorkspace",
     "FlowStore",
     "FlowValidationError",
     "OpponentReply",
@@ -29,6 +36,9 @@ __all__ = [
     "WhiteFlow",
     "WhiteFlowAuthor",
     "WhitePolicy",
+    "WhiteMoveAttempt",
+    "WhiteTurn",
+    "AttemptResult",
     "normalized_position_key",
     "replay_san",
 ]

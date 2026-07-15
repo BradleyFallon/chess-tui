@@ -35,20 +35,26 @@ terminal changes. Renderer selection is strict: a screen that is too small
 shows a resize requirement and restores the same renderer and session state
 when enlarged.
 
-## Local White-flow authoring
+## Unified White-flow mode
 
-`chess-tui --mode author --flow flows/london.toml` uses a separate authoring
-state machine. The TOML file contains numbered White defaults and readable SAN
-histories for exact-position exceptions. `WhitePolicy` derives normalized
-position keys and resolves exceptions before defaults; `FlowStore` validates
-and atomically saves changes with a backup.
+`chess-tui --mode flow --flow flows/london.toml` uses one test-first workflow.
+The TOML file contains numbered White defaults and readable SAN histories for
+exact-position exceptions. `WhitePolicy` derives normalized position keys and
+resolves exceptions before defaults; `FlowStore` validates and atomically saves
+changes with a backup.
 
-The author screen uses python-chess as its rules authority. White plays or types
-the recommendation in SAN. Black responses first come from an asynchronous
-`OpeningMoveSource`; the initial deterministic fixture covers the London
-prototype, with manual board and typed-SAN fallbacks.
+Known White rules stay hidden until the user submits a board or SAN move. A
+correct attempt reveals the move and note; a mismatch can be retried, kept, or
+edited inline. Keeping a saved rule restores the pre-attempt position before
+applying it. At an undefined step, the selected move and note become the next
+default. If a numbered default is illegal, the selected legal move is offered
+as an exact-position exception.
+
+`FlowWorkspace` owns the current board, SAN history, attempted White move,
+rollback, and turn transitions. The Textual screen renders that state while
+`WhiteFlowAuthor` owns policy and file writes. Black responses first come from
+an asynchronous `OpeningMoveSource`; the deterministic fixture covers several
+London plies, with manual board and typed-SAN fallbacks.
 Explicit `[NAV]`, `[TEXT: MOVE]`, and `[TEXT: NOTE]` modes determine whether
 printable keys invoke application shortcuts or enter literal text.
-The screen emits default, exception, and explored-opponent-reply intent to
-`WhiteFlowAuthor`; policy and persistence semantics do not live in the Textual
-screen. Flow files persist explored branches but not changing opening statistics.
+Flow files persist explored branches but not changing opening statistics.

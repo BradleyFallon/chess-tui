@@ -117,6 +117,24 @@ class FlowStore:
         self.save(path, updated)
         return updated
 
+    def remove_exception(self, path: Path, exception_id: str) -> WhiteFlow:
+        flow = self.load(path)
+        exceptions = tuple(
+            exception for exception in flow.exceptions if exception.id != exception_id
+        )
+        if len(exceptions) == len(flow.exceptions):
+            raise FlowValidationError(f"Unknown exception id: {exception_id!r}.")
+        updated = WhiteFlow(
+            flow.version,
+            flow.name,
+            flow.start_fen,
+            flow.defaults,
+            exceptions,
+            flow.opponent_replies,
+        )
+        self.save(path, updated)
+        return updated
+
     def add_opponent_reply(self, path: Path, reply: OpponentReply) -> WhiteFlow:
         flow = self.load(path)
         target_board = replay_san(flow.start_fen, reply.after_san)

@@ -377,7 +377,7 @@ class ChessBoard(Widget):
 
 
 class ChessTui(App[None]):
-    """Top-level shell routing local-game, quiz, and author modes."""
+    """Top-level shell routing local-game, quiz-demo, and flow modes."""
 
     def __init__(
         self,
@@ -419,7 +419,7 @@ class ChessTui(App[None]):
             )
         else:
             if flow_path is None:
-                raise ValueError("author mode requires a flow_path")
+                raise ValueError("flow mode requires a flow_path")
             self.initial_screen = AuthorScreen(
                 flow_path,
                 selected_renderer,

@@ -132,20 +132,18 @@ def test_cli_parser_accepts_quiz_demo_mode() -> None:
     assert args.mode == "quiz-demo"
 
 
-def test_cli_parser_accepts_author_mode_with_flow() -> None:
-    args = build_parser().parse_args(
-        ["--mode", "author", "--flow", "flows/london.toml"]
-    )
+def test_cli_parser_accepts_flow_mode_with_flow() -> None:
+    args = build_parser().parse_args(["--mode", "flow", "--flow", "flows/london.toml"])
 
-    assert args.mode == "author"
+    assert args.mode == "flow"
     assert str(args.flow) == "flows/london.toml"
 
 
-def test_cli_requires_flow_for_author_mode(
+def test_cli_requires_flow_for_flow_mode(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        main(["--mode", "author"])
+        main(["--mode", "flow"])
 
     assert exc_info.value.code == 2
     assert "--flow is required" in capsys.readouterr().err
@@ -218,7 +216,7 @@ def test_cli_passes_quiz_demo_mode_to_app(
     assert captured == [AppMode.QUIZ_DEMO]
 
 
-def test_cli_passes_author_flow_to_app(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_cli_passes_flow_to_app(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: list[tuple[AppMode, str]] = []
     monkeypatch.setattr(
         "chess_tui.cli.validate_textual_runtime",
@@ -236,8 +234,8 @@ def test_cli_passes_author_flow_to_app(monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr("chess_tui.cli.run_chess_app", fake_run)
 
-    assert main(["--mode", "author", "--flow", "flows/london.toml"]) == 0
-    assert captured == [(AppMode.AUTHOR, "flows/london.toml")]
+    assert main(["--mode", "flow", "--flow", "flows/london.toml"]) == 0
+    assert captured == [(AppMode.FLOW, "flows/london.toml")]
 
 
 def test_package_smoke() -> None:

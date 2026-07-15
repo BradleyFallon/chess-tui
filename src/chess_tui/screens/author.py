@@ -1,8 +1,7 @@
-"""Persistent local White-flow authoring screen."""
+"""Unified test-first flow screen with inline editing."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -15,12 +14,12 @@ from textual.screen import Screen
 from textual.widgets import Button, Input, Static
 
 from ..flow import (
-    AuthorBoardController,
-    ConfirmedAuthorMove,
+    AttemptResult,
     FlowError,
+    FlowWorkspace,
     Recommendation,
-    RuleUnavailableError,
-    WhiteFlowAuthor,
+    WhiteMoveAttempt,
+    WhiteTurn,
 )
 from ..input_mode import InputMode, InputModeController
 from ..layout import QuizLayoutMode, choose_quiz_layout
@@ -39,36 +38,31 @@ from ..widgets import OpeningMovePanel
 from .base import RendererController
 
 
-class AuthorPhase(str, Enum):
+class FlowPhase(str, Enum):
     LOADING = "loading"
-    WHITE_MOVE = "white-move"
-    LOADING_BLACK_MOVES = "loading-black-moves"
-    SELECT_BLACK_MOVE = "select-black-move"
-    BLACK_MOVE = "black-move"
-    NOTE = "note"
-    CHOOSE_RULE_CHANGE = "choose-rule-change"
+    WHITE_TEST = "white-test"
+    WHITE_RESULT_CORRECT = "white-result-correct"
+    WHITE_RESULT_MISMATCH = "white-result-mismatch"
+    BLACK_LOADING = "black-loading"
+    BLACK_SELECT = "black-select"
+    BLACK_MANUAL = "black-manual"
+    FRONTIER_MOVE = "frontier-move"
+    RULE_NOTE = "rule-note"
     SAVING = "saving"
     ERROR = "error"
 
 
-class RuleDecision(str, Enum):
-    DEFINE_DEFAULT = "define-default"
-    DIFFERENT_FROM_DEFAULT = "different-from-default"
-    DIFFERENT_FROM_EXCEPTION = "different-from-exception"
-
-
-@dataclass(frozen=True, slots=True)
-class PendingRuleChange:
-    board_before: chess.Board
-    history_before: tuple[str, ...]
-    step: int
-    move_san: str
-    recommendation: Recommendation | None
-    decision: RuleDecision
+class RuleNoteAction(str, Enum):
+    SAVE_DEFAULT = "save-default"
+    SAVE_EXCEPTION = "save-exception"
+    EDIT_SAVED_NOTE = "edit-saved-note"
 
 
 class AuthorScreen(Screen[None]):
+    """Run, test, and edit one persistent White flow."""
+
     AUTO_FOCUS = ""
+    CORRECT_FEEDBACK_SECONDS = 0.35
     CSS = f"""
     AuthorScreen {{ background: {SCREEN_BACKGROUND}; }}
     AuthorScreen > #author-header {{
@@ -80,10 +74,10 @@ class AuthorScreen(Screen[None]):
     AuthorScreen #author-side {{ padding: 1 2; }}
     AuthorScreen #author-panel {{ height: auto; }}
     AuthorScreen #opening-moves {{ display: none; height: auto; margin-top: 1; }}
-    AuthorScreen #move-entry {{ height: 3; margin-top: 1; }}
+    AuthorScreen #move-entry {{ display: none; height: 3; margin-top: 1; }}
     AuthorScreen #note {{ display: none; height: 3; margin-top: 1; }}
-    AuthorScreen #decision-actions {{ display: none; height: 3; margin-top: 1; }}
-    AuthorScreen #decision-actions Button {{ width: 1fr; height: 3; min-width: 12; }}
+    AuthorScreen #decision-actions {{ display: none; height: auto; margin-top: 1; }}
+    AuthorScreen #decision-actions Button {{ width: 1fr; height: 3; min-width: 10; }}
     AuthorScreen > #author-status {{
         dock: bottom; height: 1; color: {LABEL_COLOR}; background: {STATUS_BACKGROUND};
         text-align: center;
@@ -112,7 +106,9 @@ class AuthorScreen(Screen[None]):
     AuthorScreen.layout-compact #move-entry {{ height: 1; margin: 0; border: none; }}
     AuthorScreen.layout-compact #note {{ height: 1; margin: 0; border: none; }}
     AuthorScreen.layout-compact #decision-actions {{ height: 1; margin: 0; }}
-    AuthorScreen.layout-compact #decision-actions Button {{ height: 1; min-width: 8; }}
+    AuthorScreen.layout-compact #decision-actions Button {{
+        height: 1; min-width: 7;
+    }}
     AuthorScreen.layout-too-small > #author-layout {{ display: none; }}
     """
     BINDINGS = [
@@ -132,9 +128,10 @@ class AuthorScreen(Screen[None]):
     ) -> None:
         super().__init__()
         self.flow_path = flow_path
-        self.author = WhiteFlowAuthor(flow_path)
-        start = chess.Board(self.author.flow.start_fen)
-        self.controller = AuthorBoardController(start)
+        self.workspace = FlowWorkspace(flow_path)
+        self.author = self.workspace.author
+        self.controller = self.workspace.controller
+        self.history = self.workspace.history
         self.renderer_controller = RendererController(renderer)
         self.opening_source = opening_source or FixtureOpeningMoveSource()
         self.board = ChessBoard(
@@ -154,11 +151,8 @@ class AuthorScreen(Screen[None]):
         self.debug_status = Static("", id="debug-status", markup=False)
         self.status = Static("", id="author-status", markup=False)
         self.input = InputModeController()
-        self.phase = AuthorPhase.LOADING
+        self.phase = FlowPhase.LOADING
         self.layout_mode: QuizLayoutMode | None = None
-        self.history: list[str] = []
-        self.recommendation: Recommendation | None = None
-        self.pending_change: PendingRuleChange | None = None
         self.failure: Exception | None = None
         self._geometry_error: str | None = None
         self._reload_error: str | None = None
@@ -166,10 +160,20 @@ class AuthorScreen(Screen[None]):
         self._text_value_before: str | None = None
         self._quit_confirmation = False
         self._opening_request_id = 0
+        self._note_action: RuleNoteAction | None = None
+        self._note_return_phase: FlowPhase | None = None
 
     @property
     def renderer(self) -> PieceRenderer:
         return self.renderer_controller.active
+
+    @property
+    def recommendation(self) -> Recommendation | None:
+        attempt = self.workspace.attempt
+        if attempt is not None:
+            return attempt.recommendation
+        turn = self.workspace.white_turn
+        return turn.recommendation if turn is not None else None
 
     def compose(self) -> ComposeResult:
         yield self.header
@@ -182,10 +186,15 @@ class AuthorScreen(Screen[None]):
                 yield self.move_input
                 yield self.note_input
                 with self.actions:
+                    yield Button("Retry", id="retry")
+                    yield Button("Keep rule", id="keep-rule", variant="primary")
                     yield Button("Save default", id="save-default", variant="primary")
                     yield Button("Add exception", id="add-exception", variant="primary")
                     yield Button("Replace exception", id="replace-exception")
                     yield Button("Replace default", id="replace-default")
+                    yield Button("Save note", id="save-note")
+                    yield Button("Edit note", id="edit-note")
+                    yield Button("Delete exception", id="delete-exception")
                     yield Button("Cancel", id="cancel")
         yield self.debug_status
         yield self.status
@@ -224,15 +233,20 @@ class AuthorScreen(Screen[None]):
         self._sync_board()
 
     def on_chess_board_square_clicked(self, message: ChessBoard.SquareClicked) -> None:
-        if self.phase in {AuthorPhase.WHITE_MOVE, AuthorPhase.BLACK_MOVE}:
-            if self.input.mode is InputMode.TEXT:
-                self._leave_text_mode()
-            self.move_input.value = ""
-            self.controller.handle_square(message.square)
-            pending_san = self.controller.pending_san
-            if pending_san is not None:
-                self.move_input.value = pending_san
-            self._sync_board()
+        if self.phase not in {
+            FlowPhase.WHITE_TEST,
+            FlowPhase.FRONTIER_MOVE,
+            FlowPhase.BLACK_MANUAL,
+        }:
+            return
+        if self.input.mode is InputMode.TEXT:
+            self._leave_text_mode()
+        self.move_input.value = ""
+        self.controller.handle_square(message.square)
+        pending_san = self.controller.pending_san
+        if pending_san is not None:
+            self.move_input.value = pending_san
+        self._sync_board()
 
     def on_descendant_focus(self, event: DescendantFocus) -> None:
         field = event.widget
@@ -250,35 +264,32 @@ class AuthorScreen(Screen[None]):
             self._update_status()
 
     def on_key(self, event: Key) -> None:
-        if not self.input.handles_global_shortcuts:
+        if not self.input.handles_global_shortcuts or self._quit_confirmation:
             return
-        if self._quit_confirmation:
+        key = event.key.lower()
+        if self.phase is FlowPhase.WHITE_RESULT_MISMATCH:
+            actions = {
+                "r": "retry",
+                "e": "add-exception",
+                "d": "replace-default",
+                "x": "replace-exception",
+                "n": "edit-note",
+                "delete": "delete-exception",
+            }
+            button_id = actions.get(key)
+            if button_id is not None:
+                button = self.query_one(f"#{button_id}", Button)
+                if button.display:
+                    event.stop()
+                    button.press()
             return
-        if event.key.lower() == "r":
+        if self.phase is FlowPhase.RULE_NOTE and key == "s":
+            event.stop()
+            self._save_rule_note()
+            return
+        if key == "r":
             event.stop()
             self.action_restart_line()
-            return
-        if self.phase in {AuthorPhase.WHITE_MOVE, AuthorPhase.BLACK_MOVE}:
-            return
-        if self.phase not in {
-            AuthorPhase.CHOOSE_RULE_CHANGE,
-            AuthorPhase.ERROR,
-        }:
-            return
-        actions = {
-            "s": "save-default",
-            "e": "add-exception",
-            "x": "replace-exception",
-            "d": "replace-default",
-            "c": "cancel",
-        }
-        button_id = actions.get(event.key.lower())
-        if button_id is None:
-            return
-        button = self.query_one(f"#{button_id}", Button)
-        if button.display:
-            event.stop()
-            button.press()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input is self.note_input:
@@ -301,41 +312,58 @@ class AuthorScreen(Screen[None]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         action = event.button.id
-        if action == "cancel":
-            self.action_cancel()
-        elif action == "save-default":
-            self._save_default()
-        elif action in {"add-exception", "replace-exception"}:
-            self._save_exception()
+        if action == "retry":
+            self._retry_white_move()
+        elif action == "keep-rule":
+            self._keep_saved_rule()
+        elif action == "add-exception":
+            if self.phase is FlowPhase.RULE_NOTE:
+                self._save_rule_note()
+            else:
+                self._start_rule_note(RuleNoteAction.SAVE_EXCEPTION)
+        elif action == "replace-exception":
+            self._start_rule_note(RuleNoteAction.SAVE_EXCEPTION, retain_note=True)
         elif action == "replace-default":
-            self._save_default()
+            self._start_rule_note(RuleNoteAction.SAVE_DEFAULT, retain_note=True)
+        elif action == "edit-note":
+            self._start_rule_note(RuleNoteAction.EDIT_SAVED_NOTE, retain_note=True)
+        elif action in {"save-default", "save-note"}:
+            self._save_rule_note()
+        elif action == "delete-exception":
+            self._delete_exception_and_continue()
+        elif action == "cancel":
+            self.action_cancel()
 
     def on_opening_move_panel_move_submitted(
         self, message: OpeningMovePanel.MoveSubmitted
     ) -> None:
-        if self.phase is AuthorPhase.SELECT_BLACK_MOVE:
+        if self.phase is FlowPhase.BLACK_SELECT:
             self._confirm_opening_move(message.move)
 
     def on_opening_move_panel_manual_requested(
         self, message: OpeningMovePanel.ManualRequested
     ) -> None:
-        if self.phase is AuthorPhase.SELECT_BLACK_MOVE:
+        if self.phase is FlowPhase.BLACK_SELECT:
             self._enter_manual_black_turn()
 
     def on_opening_move_panel_text_requested(
         self, message: OpeningMovePanel.TextRequested
     ) -> None:
-        if self.phase is AuthorPhase.SELECT_BLACK_MOVE:
+        if self.phase is FlowPhase.BLACK_SELECT:
             self._enter_manual_black_turn(text_entry=True)
 
     def action_focus_available_input(self) -> None:
         if not self.input.handles_global_shortcuts or self._quit_confirmation:
             return
-        if self.phase in {AuthorPhase.WHITE_MOVE, AuthorPhase.BLACK_MOVE}:
+        if self.phase in {
+            FlowPhase.WHITE_TEST,
+            FlowPhase.FRONTIER_MOVE,
+            FlowPhase.BLACK_MANUAL,
+        }:
             self._enter_text_mode(self.move_input)
-        elif self.phase is AuthorPhase.SELECT_BLACK_MOVE:
+        elif self.phase is FlowPhase.BLACK_SELECT:
             self._enter_manual_black_turn(text_entry=True)
-        elif self.phase in {AuthorPhase.CHOOSE_RULE_CHANGE, AuthorPhase.ERROR}:
+        elif self.phase in {FlowPhase.RULE_NOTE, FlowPhase.ERROR}:
             self._enter_text_mode(self.note_input)
 
     def action_request_quit(self) -> None:
@@ -344,124 +372,215 @@ class AuthorScreen(Screen[None]):
         if self._quit_confirmation:
             self.app.exit()
             return
-        if self.pending_change is None:
+        if self.phase not in {
+            FlowPhase.WHITE_RESULT_MISMATCH,
+            FlowPhase.RULE_NOTE,
+            FlowPhase.ERROR,
+        }:
             self.app.exit()
             return
         self._quit_confirmation = True
-        self.panel.update(
-            "UNSAVED RULE CHANGE\n\n[Q] Quit without saving    [Esc] Return"
-        )
+        self.panel.update("UNFINISHED FLOW EDIT\n\n[Q] Quit    [Esc] Return")
         self._update_status()
 
     def action_confirm_move(self) -> None:
-        if self.phase is AuthorPhase.SELECT_BLACK_MOVE:
+        if self.phase is FlowPhase.WHITE_RESULT_CORRECT:
+            self._continue_after_correct()
+            return
+        if self.phase is FlowPhase.WHITE_RESULT_MISMATCH:
+            self._keep_saved_rule()
+            return
+        if self.phase is FlowPhase.RULE_NOTE:
+            self._save_rule_note()
+            return
+        if self.phase is FlowPhase.BLACK_SELECT:
             self.opening_moves.submit_highlighted()
             return
-        if self.phase not in {
-            AuthorPhase.WHITE_MOVE,
-            AuthorPhase.BLACK_MOVE,
-            AuthorPhase.LOADING_BLACK_MOVES,
-        }:
+        if self.phase in {FlowPhase.WHITE_TEST, FlowPhase.FRONTIER_MOVE}:
+            attempt = self.workspace.submit_pending_white_move()
+            if attempt is not None:
+                self._handle_white_attempt(attempt)
             return
+        if self.phase is FlowPhase.BLACK_MANUAL:
+            try:
+                confirmed = self.workspace.submit_pending_black_move()
+            except FlowError as error:
+                self._show_black_save_error(error)
+                return
+            if confirmed is not None:
+                self._finish_black_move()
+
+    def _confirm_typed_move(self, move_text: str) -> None:
         self._reload_error = None
-        board_before = self.controller.board.copy(stack=False)
-        history_before = tuple(self.history)
-        confirmed = self.controller.confirm_move()
-        if confirmed is None:
+        try:
+            if self.phase in {FlowPhase.WHITE_TEST, FlowPhase.FRONTIER_MOVE}:
+                attempt = self.workspace.submit_white_san(move_text)
+                self._handle_white_attempt(attempt)
+            elif self.phase is FlowPhase.BLACK_MANUAL:
+                self.workspace.submit_black_san(move_text)
+                self._finish_black_move()
+        except ValueError:
+            self._move_error = f"{move_text!r} is not a legal SAN move"
+            self._update_status()
+        except FlowError as error:
+            self._show_black_save_error(error)
+
+    def _handle_white_attempt(self, attempt: WhiteMoveAttempt) -> None:
+        self._move_error = None
+        self.move_input.value = ""
+        self._sync_board()
+        if attempt.result is AttemptResult.CORRECT:
+            self.phase = FlowPhase.WHITE_RESULT_CORRECT
+            self._hide_interaction_controls()
+            self._refresh_panel()
+            self._update_status()
+            self.set_timer(
+                self.CORRECT_FEEDBACK_SECONDS,
+                self._continue_after_correct,
+            )
+        elif attempt.result in {
+            AttemptResult.FRONTIER,
+            AttemptResult.RULE_UNAVAILABLE,
+        }:
+            action = (
+                RuleNoteAction.SAVE_DEFAULT
+                if attempt.result is AttemptResult.FRONTIER
+                else RuleNoteAction.SAVE_EXCEPTION
+            )
+            self._start_rule_note(action)
+        else:
+            self.phase = FlowPhase.WHITE_RESULT_MISMATCH
+            self._show_mismatch_controls()
+            self._refresh_panel()
+            self._update_status()
+
+    def _continue_after_correct(self) -> None:
+        if self.phase is not FlowPhase.WHITE_RESULT_CORRECT:
             return
-        self._finish_confirmed_move(confirmed, board_before, history_before)
+        try:
+            self.workspace.complete_correct_move()
+        except FlowError as error:
+            self._show_save_error(error)
+            return
+        self._enter_black_turn()
+
+    def _retry_white_move(self) -> None:
+        try:
+            turn = self.workspace.retry_white_move()
+        except FlowError as error:
+            self._show_save_error(error)
+            return
+        self.note_input.value = ""
+        self._enter_white_turn(turn)
+
+    def _keep_saved_rule(self) -> None:
+        try:
+            self.workspace.keep_saved_rule()
+        except FlowError as error:
+            self._show_save_error(error)
+            return
+        self._sync_board()
+        self._enter_black_turn()
+
+    def _delete_exception_and_continue(self) -> None:
+        try:
+            self.workspace.remove_exception_and_keep_default()
+        except FlowError as error:
+            self._show_save_error(error)
+            return
+        self._sync_board()
+        self._enter_black_turn()
+
+    def _start_rule_note(
+        self,
+        action: RuleNoteAction,
+        *,
+        retain_note: bool = False,
+    ) -> None:
+        attempt = self.workspace.attempt
+        if attempt is None:
+            return
+        self._note_action = action
+        self._note_return_phase = (
+            FlowPhase.WHITE_RESULT_MISMATCH
+            if attempt.result
+            in {AttemptResult.MISMATCH_DEFAULT, AttemptResult.MISMATCH_EXCEPTION}
+            else FlowPhase.FRONTIER_MOVE
+        )
+        self.phase = FlowPhase.RULE_NOTE
+        if retain_note and attempt.recommendation is not None:
+            self.note_input.value = attempt.recommendation.note or ""
+        else:
+            self.note_input.value = ""
+        self._hide_opening_moves()
+        self._hide_interaction_controls()
+        self.note_input.display = True
+        self.note_input.disabled = False
+        self.actions.display = True
+        self._set_button_available(
+            "save-default", action is RuleNoteAction.SAVE_DEFAULT
+        )
+        self._set_button_available(
+            "add-exception", action is RuleNoteAction.SAVE_EXCEPTION
+        )
+        self._set_button_available(
+            "save-note", action is RuleNoteAction.EDIT_SAVED_NOTE
+        )
+        self._set_button_available("cancel", True)
+        self._enter_text_mode(self.note_input)
+        self._refresh_panel()
+        self._update_status()
+
+    def _save_rule_note(self) -> None:
+        action = self._note_action
+        if action is None or self.workspace.attempt is None:
+            return
+        self.phase = FlowPhase.SAVING
+        note = self.note_input.value.strip() or None
+        try:
+            if action is RuleNoteAction.SAVE_DEFAULT:
+                self.workspace.save_selected_default(note)
+            elif action is RuleNoteAction.SAVE_EXCEPTION:
+                self.workspace.save_selected_exception(note)
+            else:
+                self.workspace.edit_saved_note(note)
+        except FlowError as error:
+            self._show_save_error(error)
+            return
+        self._clear_failure()
+        self.note_input.value = ""
+        if action is RuleNoteAction.EDIT_SAVED_NOTE:
+            self.phase = FlowPhase.WHITE_RESULT_MISMATCH
+            self._note_action = None
+            self._show_mismatch_controls()
+            self._refresh_panel()
+            self._update_status()
+        else:
+            self._note_action = None
+            self._enter_black_turn()
 
     def _confirm_opening_move(self, move: OpeningMove) -> None:
-        board_before = self.controller.board.copy(stack=False)
-        history_before = tuple(self.history)
         try:
-            confirmed = self.controller.confirm_uci(move.uci)
-        except ValueError as error:
-            self.failure = error
+            self.workspace.submit_black_uci(move.uci)
+        except ValueError:
+            self.failure = ValueError(f"Opening move {move.san} is no longer legal.")
             self._enter_manual_black_turn()
             self.panel.update(
                 f"OPENING MOVE UNAVAILABLE\n\n{move.san} is no longer legal. "
                 "Enter Black's move manually."
             )
             return
-        self._finish_confirmed_move(confirmed, board_before, history_before)
-
-    def _confirm_typed_move(self, move_text: str) -> None:
-        if self.phase not in {AuthorPhase.WHITE_MOVE, AuthorPhase.BLACK_MOVE}:
+        except FlowError as error:
+            self._show_black_save_error(error)
             return
-        self._reload_error = None
-        board_before = self.controller.board.copy(stack=False)
-        history_before = tuple(self.history)
-        try:
-            confirmed = self.controller.confirm_san(move_text)
-        except ValueError:
-            self._move_error = f"{move_text!r} is not a legal SAN move"
-            self._update_status()
-            return
-        self._finish_confirmed_move(confirmed, board_before, history_before)
+        self._finish_black_move()
 
-    def _finish_confirmed_move(
-        self,
-        confirmed: ConfirmedAuthorMove,
-        board_before: chess.Board,
-        history_before: tuple[str, ...],
-    ) -> None:
+    def _finish_black_move(self) -> None:
+        self._clear_failure()
         self._move_error = None
         self.move_input.value = ""
-        if confirmed.color is chess.BLACK:
-            try:
-                self.author.record_opponent_reply(
-                    board_before,
-                    history_before,
-                    confirmed.san,
-                )
-            except FlowError as error:
-                self.controller.reset(board_before)
-                self.history = list(history_before)
-                self.failure = error
-                self._enter_manual_black_turn()
-                self.panel.update(
-                    f"BRANCH SAVE FAILED\n\n{error}\n\n"
-                    "The move was not applied; retry after fixing the flow file."
-                )
-                self._sync_board()
-                return
-        self.history.append(confirmed.san)
         self._sync_board()
-        if confirmed.color is chess.BLACK:
-            self.failure = None
-            self._enter_white_turn()
-            return
-
-        step = (len(history_before) // 2) + 1
-        recommendation = self.recommendation
-        matches = False
-        if recommendation is not None:
-            try:
-                expected = board_before.parse_san(recommendation.move_san)
-                matches = expected.uci() == confirmed.move.uci
-            except ValueError:
-                matches = False
-        if matches:
-            self.pending_change = None
-            self._enter_black_turn()
-            return
-
-        if recommendation is None:
-            decision = RuleDecision.DEFINE_DEFAULT
-        elif recommendation.source == "default":
-            decision = RuleDecision.DIFFERENT_FROM_DEFAULT
-        else:
-            decision = RuleDecision.DIFFERENT_FROM_EXCEPTION
-        self.pending_change = PendingRuleChange(
-            board_before,
-            history_before,
-            step,
-            confirmed.san,
-            recommendation,
-            decision,
-        )
-        self._show_rule_decision()
+        self._enter_white_turn()
 
     def action_cancel(self) -> None:
         if self.input.mode is InputMode.TEXT:
@@ -472,74 +591,80 @@ class AuthorScreen(Screen[None]):
             self._refresh_panel()
             self._update_status()
             return
-        self._reload_error = None
-        pending = self.pending_change
-        if pending is not None:
-            self.controller.reset(pending.board_before)
-            self.history = list(pending.history_before)
-            self.pending_change = None
-            self.note_input.value = ""
-            self._enter_white_turn()
-        else:
-            self.controller.clear_selection()
-            self.move_input.value = ""
-            self._sync_board()
+        if self.phase is FlowPhase.WHITE_RESULT_MISMATCH:
+            self._retry_white_move()
+            return
+        if self.phase is FlowPhase.RULE_NOTE:
+            if self._note_return_phase is FlowPhase.WHITE_RESULT_MISMATCH:
+                self.phase = FlowPhase.WHITE_RESULT_MISMATCH
+                self._note_action = None
+                self._show_mismatch_controls()
+                self._refresh_panel()
+                self._update_status()
+            else:
+                self._retry_white_move()
+            return
+        if self.phase is FlowPhase.ERROR and self.workspace.attempt is not None:
+            self.phase = FlowPhase.RULE_NOTE
+            self._refresh_panel()
+            self._update_status()
+            return
+        self.controller.clear_selection()
+        self.move_input.value = ""
+        self._sync_board()
 
     def action_restart_line(self) -> None:
-        if not self.input.handles_global_shortcuts:
-            return
-        self._restart()
+        if self.input.handles_global_shortcuts:
+            self._restart()
 
     def action_reload_flow(self) -> None:
         if not self.input.handles_global_shortcuts:
             return
         try:
-            self.author.reload()
+            turn = self.workspace.reload()
         except FlowError as error:
             self.failure = error
             self._reload_error = f"FLOW RELOAD FAILED\n\n{error}"
             self._refresh_panel()
             self._update_status()
             return
-        self.failure = None
+        self._clear_failure()
         self._reload_error = None
-        self._refresh_turn()
+        if turn is not None:
+            self._enter_white_turn(turn)
+        else:
+            self._enter_black_turn()
 
     def _restart(self) -> None:
         self._opening_request_id += 1
         self._leave_text_mode()
-        self.controller.reset(chess.Board(self.author.flow.start_fen))
-        self.history.clear()
-        self.pending_change = None
+        turn = self.workspace.restart()
         self.move_input.value = ""
         self.note_input.value = ""
         self._reload_error = None
         self._move_error = None
         self._quit_confirmation = False
-        self._enter_white_turn()
+        self._note_action = None
+        self._enter_white_turn(turn)
 
-    def _enter_white_turn(self) -> None:
-        self.phase = AuthorPhase.WHITE_MOVE
-        self.pending_change = None
-        step = (len(self.history) // 2) + 1
-        try:
-            self.recommendation = self.author.recommend(self.controller.board, step)
-            self.failure = None
-        except RuleUnavailableError as error:
-            self.recommendation = error.recommendation
-            self.failure = error
+    def _enter_white_turn(self, turn: WhiteTurn | None = None) -> None:
+        turn = turn or self.workspace.begin_white_turn()
+        self.phase = (
+            FlowPhase.FRONTIER_MOVE
+            if turn.recommendation is None or turn.unavailable_reason is not None
+            else FlowPhase.WHITE_TEST
+        )
         self._hide_opening_moves()
-        self._hide_decision()
+        self._hide_interaction_controls()
+        self.move_input.display = True
+        self.move_input.disabled = False
         self._refresh_panel()
         self._sync_board()
 
     def _enter_black_turn(self) -> None:
-        self.phase = AuthorPhase.LOADING_BLACK_MOVES
-        self.recommendation = None
-        self._hide_decision()
+        self.phase = FlowPhase.BLACK_LOADING
+        self._hide_interaction_controls()
         self._hide_opening_moves()
-        self.move_input.display = False
-        self.move_input.disabled = True
         self._opening_request_id += 1
         request_id = self._opening_request_id
         self._refresh_panel()
@@ -570,15 +695,19 @@ class AuthorScreen(Screen[None]):
         if not moves:
             self._enter_manual_black_turn()
             return
-        self.failure = None
-        self.phase = AuthorPhase.SELECT_BLACK_MOVE
+        self._clear_failure()
+        self.phase = FlowPhase.BLACK_SELECT
+        explored = frozenset(
+            reply.move_san
+            for reply in self.author.flow.opponent_replies
+            if reply.after_san == tuple(self.history)
+        )
         self.opening_moves.set_moves(
             moves[:4],
             context=f"After {_format_history(tuple(self.history))}:",
+            explored_sans=explored,
         )
         self.opening_moves.display = True
-        self.move_input.display = False
-        self.move_input.disabled = True
         self.panel.update("")
         self.opening_moves.focus()
         self._update_status()
@@ -588,65 +717,54 @@ class AuthorScreen(Screen[None]):
     ) -> bool:
         return (
             request_id == self._opening_request_id
-            and self.phase is AuthorPhase.LOADING_BLACK_MOVES
+            and self.phase is FlowPhase.BLACK_LOADING
             and self.controller.board.fen(en_passant="fen")
             == board.fen(en_passant="fen")
         )
 
     def _enter_manual_black_turn(self, *, text_entry: bool = False) -> None:
         self._opening_request_id += 1
-        self.phase = AuthorPhase.BLACK_MOVE
-        self.recommendation = None
+        self.phase = FlowPhase.BLACK_MANUAL
         self._hide_opening_moves()
-        self._hide_decision()
+        self._hide_interaction_controls()
+        self.move_input.display = True
+        self.move_input.disabled = False
         self._refresh_panel()
         self._sync_board()
         if text_entry:
             self._enter_text_mode(self.move_input)
+
+    def _show_mismatch_controls(self) -> None:
+        attempt = self.workspace.attempt
+        assert attempt is not None
+        self._hide_opening_moves()
+        self._hide_interaction_controls()
+        self.actions.display = True
+        self._set_button_available("retry", True)
+        self._set_button_available("keep-rule", True)
+        self._set_button_available("replace-default", True)
+        self._set_button_available("edit-note", True)
+        is_exception = attempt.result is AttemptResult.MISMATCH_EXCEPTION
+        self._set_button_available("add-exception", not is_exception)
+        self._set_button_available("replace-exception", is_exception)
+        self._set_button_available("delete-exception", is_exception)
+
+    def _hide_interaction_controls(self) -> None:
+        self._leave_text_mode()
+        self.move_input.display = False
+        self.move_input.disabled = True
+        self.note_input.display = False
+        self.note_input.disabled = True
+        self.actions.display = False
+        for button in self.actions.query(Button):
+            button.display = False
+            button.disabled = True
 
     def _hide_opening_moves(self) -> None:
         if self.opening_moves.has_focus:
             self.set_focus(None)
         self.opening_moves.display = False
         self.opening_moves.clear()
-
-    def _show_rule_decision(self) -> None:
-        self.phase = AuthorPhase.CHOOSE_RULE_CHANGE
-        self._hide_opening_moves()
-        self.move_input.display = False
-        self.move_input.disabled = True
-        self.note_input.disabled = False
-        self.note_input.display = True
-        self.actions.display = True
-        pending = self.pending_change
-        assert pending is not None
-        self._set_button_available(
-            "save-default", pending.decision is RuleDecision.DEFINE_DEFAULT
-        )
-        self._set_button_available(
-            "add-exception", pending.decision is RuleDecision.DIFFERENT_FROM_DEFAULT
-        )
-        self._set_button_available(
-            "replace-exception",
-            pending.decision is RuleDecision.DIFFERENT_FROM_EXCEPTION,
-        )
-        self._set_button_available(
-            "replace-default", pending.decision is not RuleDecision.DEFINE_DEFAULT
-        )
-        self._set_button_available("cancel", True)
-        self._enter_text_mode(self.note_input)
-        self._refresh_panel()
-        self._update_status()
-
-    def _hide_decision(self) -> None:
-        self._leave_text_mode()
-        self.note_input.display = False
-        self.note_input.disabled = True
-        self.actions.display = False
-        for button in self.actions.query(Button):
-            button.disabled = True
-        self.move_input.display = True
-        self.move_input.disabled = False
 
     def _enter_text_mode(self, field: Input) -> None:
         if self.input.active_field is not field:
@@ -669,58 +787,24 @@ class AuthorScreen(Screen[None]):
         button.display = available
         button.disabled = not available
 
-    def _save_default(self) -> None:
-        pending = self.pending_change
-        if pending is None:
-            return
-        self.phase = AuthorPhase.SAVING
-        try:
-            self.author.replace_default(
-                pending.board_before,
-                pending.step,
-                pending.move_san,
-                self.note_input.value.strip() or None,
-            )
-        except FlowError as error:
-            self._show_save_error(error)
-            return
-        self._finish_save()
-
-    def _save_exception(self) -> None:
-        pending = self.pending_change
-        if pending is None:
-            return
-        self.phase = AuthorPhase.SAVING
-        try:
-            self.author.add_exception(
-                pending.board_before,
-                pending.step,
-                pending.history_before,
-                pending.move_san,
-                self.note_input.value.strip() or None,
-            )
-        except FlowError as error:
-            self._show_save_error(error)
-            return
-        self._finish_save()
-
-    def _finish_save(self) -> None:
-        self.pending_change = None
-        self.note_input.value = ""
-        self.failure = None
-        self._enter_black_turn()
+    def _clear_failure(self) -> None:
+        if self._geometry_error is None:
+            self.failure = None
 
     def _show_save_error(self, error: FlowError) -> None:
         self.failure = error
-        self.phase = AuthorPhase.ERROR
-        self.panel.update(f"SAVE FAILED\n\n{error}\n\n[C] Cancel")
+        self.phase = FlowPhase.ERROR
+        self._leave_text_mode()
+        self.panel.update(f"SAVE FAILED\n\n{error}\n\n[Esc] Return")
         self._update_status()
 
-    def _refresh_turn(self) -> None:
-        if self.controller.board.turn is chess.WHITE:
-            self._enter_white_turn()
-        else:
-            self._enter_black_turn()
+    def _show_black_save_error(self, error: FlowError) -> None:
+        self.failure = error
+        self._enter_manual_black_turn()
+        self.panel.update(
+            f"BRANCH SAVE FAILED\n\n{error}\n\n"
+            "The move was not applied; retry after fixing the flow file."
+        )
 
     def _refresh_panel(self) -> None:
         if self._reload_error is not None:
@@ -728,59 +812,93 @@ class AuthorScreen(Screen[None]):
                 f"{self._reload_error}\n\nThe current in-memory flow remains active."
             )
             return
-        if self.phase is AuthorPhase.LOADING_BLACK_MOVES:
+        if self.phase is FlowPhase.WHITE_TEST:
+            turn = self.workspace.white_turn
+            assert turn is not None
+            self.panel.update(
+                f"WHITE STEP {turn.white_step}\n\n"
+                f"Position:\n{_format_history(tuple(self.history)) or 'Starting position'}"
+                "\n\nPLAY YOUR MOVE"
+            )
+        elif self.phase is FlowPhase.FRONTIER_MOVE:
+            turn = self.workspace.white_turn
+            assert turn is not None
+            if turn.unavailable_reason is not None:
+                recommendation = turn.recommendation
+                assert recommendation is not None
+                self.panel.update(
+                    "DEFAULT MOVE UNAVAILABLE\n\n"
+                    f"Default step {turn.white_step}: {recommendation.move_san}\n\n"
+                    f"{turn.unavailable_reason}\n\n"
+                    "Play a legal move to define an exception."
+                )
+            else:
+                self.panel.update(
+                    f"FLOW FRONTIER\n\nNo rule exists for White step "
+                    f"{turn.white_step}.\n\nPlay the move you want to add."
+                )
+        elif self.phase is FlowPhase.WHITE_RESULT_CORRECT:
+            attempt = self.workspace.attempt
+            assert attempt is not None and attempt.recommendation is not None
+            note = (
+                f"\n\n{attempt.recommendation.note}"
+                if attempt.recommendation.note
+                else ""
+            )
+            self.panel.update(f"CORRECT\n\n{attempt.selected_move.san}{note}")
+        elif self.phase is FlowPhase.WHITE_RESULT_MISMATCH:
+            self.panel.update(self._mismatch_text())
+        elif self.phase is FlowPhase.RULE_NOTE:
+            self.panel.update(self._rule_note_text())
+        elif self.phase is FlowPhase.BLACK_LOADING:
             self.panel.update("BLACK RESPONSE\n\nLoading common opening moves...")
-            return
-        if self.phase is AuthorPhase.SELECT_BLACK_MOVE:
+        elif self.phase is FlowPhase.BLACK_SELECT:
             self.panel.update("")
-            return
-        if self.phase is AuthorPhase.BLACK_MOVE:
+        elif self.phase is FlowPhase.BLACK_MANUAL:
             self.panel.update(
-                "CHOOSE BLACK'S RESPONSE TO EXPLORE\n\n"
-                "Play any legal Black move on the board."
-            )
-            return
-        if self.phase is AuthorPhase.CHOOSE_RULE_CHANGE:
-            self.panel.update(self._decision_text())
-            return
-        step = (len(self.history) // 2) + 1
-        recommendation = self.recommendation
-        if isinstance(self.failure, RuleUnavailableError):
-            self.panel.update(str(self.failure))
-        elif recommendation is None:
-            self.panel.update(
-                f"FLOW FRONTIER\n\nNo default move exists for White step {step}.\n\n"
-                "Play a move to define it."
-            )
-        else:
-            source = (
-                f"Exception {recommendation.exception_id}"
-                if recommendation.source == "exception"
-                else f"Default step {step}"
-            )
-            note = f"\n\n{recommendation.note}" if recommendation.note else ""
-            self.panel.update(
-                f"WHITE STEP {step}\n\nRecommended: {recommendation.move_san}\n"
-                f"Source: {source}{note}\n\nPlay White's move on the board."
+                "BLACK RESPONSE\n\nPlay any legal Black move on the board or type SAN."
             )
 
-    def _decision_text(self) -> str:
-        pending = self.pending_change
-        assert pending is not None
-        if pending.decision is RuleDecision.DEFINE_DEFAULT:
-            return (
-                f"DEFINE DEFAULT STEP {pending.step}\n\nMove: {pending.move_san}\n\n"
-                "Add an optional note, then save or cancel."
-            )
-        recommendation = pending.recommendation
-        assert recommendation is not None
-        source = recommendation.source.upper()
-        return (
-            f"YOUR MOVE DIFFERS FROM THE {source}\n\n"
-            f"You played: {pending.move_san}\n"
-            f"Saved move: {recommendation.move_san}\n\n"
-            "Add an exception for this exact position or replace the numbered default."
+    def _mismatch_text(self) -> str:
+        attempt = self.workspace.attempt
+        assert attempt is not None and attempt.recommendation is not None
+        recommendation = attempt.recommendation
+        source = (
+            f"Exception {recommendation.exception_id}"
+            if recommendation.source == "exception"
+            else f"Default step {attempt.white_step}"
         )
+        controls = (
+            "[R] Retry\n[Enter] Keep saved rule and continue\n"
+            "[X] Replace exception\n[D] Replace numbered default\n"
+            "[Delete] Remove exception and use default\n[N] Edit saved note"
+            if recommendation.source == "exception"
+            else "[R] Retry\n[Enter] Keep saved rule and continue\n"
+            "[E] Make selected move an exception\n[D] Make selected move the default\n"
+            "[N] Edit saved note"
+        )
+        return (
+            "RULE MISMATCH\n\n"
+            f"You played:\n{attempt.selected_move.san}\n\n"
+            f"Saved rule:\n{recommendation.move_san}\n\n"
+            f"Source:\n{source}\n\n{controls}"
+        )
+
+    def _rule_note_text(self) -> str:
+        attempt = self.workspace.attempt
+        assert attempt is not None
+        if self._note_action is RuleNoteAction.SAVE_DEFAULT:
+            heading = f"DEFINE DEFAULT STEP {attempt.white_step}"
+            move = attempt.selected_move.san
+        elif self._note_action is RuleNoteAction.SAVE_EXCEPTION:
+            heading = "DEFINE POSITION EXCEPTION"
+            move = attempt.selected_move.san
+        else:
+            heading = "EDIT SAVED NOTE"
+            recommendation = attempt.recommendation
+            assert recommendation is not None
+            move = recommendation.move_san
+        return f"{heading}\n\nMove:\n{move}\n\nWhy do you play this move?"
 
     def _sync_board(self) -> None:
         interaction = self.controller.interaction
@@ -824,7 +942,7 @@ class AuthorScreen(Screen[None]):
             self.status.update(self._geometry_error.replace("\n", " "))
             return
         if self._quit_confirmation:
-            self.status.update("[NAV] Q QUIT WITHOUT SAVING · ESC RETURN")
+            self.status.update("[NAV] Q QUIT · ESC RETURN")
             return
         if self._move_error is not None:
             self.status.update(
@@ -833,32 +951,39 @@ class AuthorScreen(Screen[None]):
             return
         if self.input.mode is InputMode.TEXT:
             if self.input.active_field is self.note_input:
-                self.status.update("[TEXT: NOTE] TYPE NOTE · ENTER DONE · ESC CANCEL")
+                self.status.update("[TEXT: NOTE] ENTER DONE · ESC CANCEL")
             else:
                 self.status.update("[TEXT: MOVE] TYPE SAN · ENTER SUBMIT · ESC CANCEL")
             return
         instructions = {
-            AuthorPhase.WHITE_MOVE: "PLAY WHITE · I TYPE SAN · ENTER CONFIRM",
-            AuthorPhase.LOADING_BLACK_MOVES: "LOADING BLACK RESPONSES",
-            AuthorPhase.SELECT_BLACK_MOVE: (
-                "UP/DOWN OR A/S/D/F SELECT · ENTER PLAY · M MANUAL · I TYPE SAN"
+            FlowPhase.WHITE_TEST: "PLAY WHITE · I TYPE SAN · ENTER CONFIRM",
+            FlowPhase.FRONTIER_MOVE: "PLAY RULE · I TYPE SAN · ENTER CONFIRM",
+            FlowPhase.WHITE_RESULT_CORRECT: "CORRECT · ENTER CONTINUE",
+            FlowPhase.WHITE_RESULT_MISMATCH: "R RETRY · ENTER KEEP · E/D/X EDIT",
+            FlowPhase.RULE_NOTE: "I EDIT NOTE · S SAVE · ESC CANCEL",
+            FlowPhase.BLACK_LOADING: "LOADING BLACK RESPONSES",
+            FlowPhase.BLACK_SELECT: (
+                "UP/DOWN OR A/S/D/F SELECT · ENTER PLAY · M MANUAL · I TYPE"
             ),
-            AuthorPhase.BLACK_MOVE: "PLAY BLACK · I TYPE SAN · ENTER CONFIRM",
-            AuthorPhase.CHOOSE_RULE_CHANGE: "CHOOSE RULE CHANGE · I EDIT NOTE",
-            AuthorPhase.SAVING: "SAVING",
-            AuthorPhase.ERROR: "C CANCEL",
-            AuthorPhase.LOADING: "LOADING",
-            AuthorPhase.NOTE: "ENTER NOTE",
+            FlowPhase.BLACK_MANUAL: "PLAY BLACK · I TYPE SAN · ENTER CONFIRM",
+            FlowPhase.SAVING: "SAVING",
+            FlowPhase.ERROR: "ESC RETURN",
+            FlowPhase.LOADING: "LOADING",
         }[self.phase]
-        self.status.update(f"[NAV] {instructions} · R RESTART · CTRL+R RELOAD · Q QUIT")
+        self.status.update(f"[NAV] {instructions} · R RESTART · Q QUIT")
 
     def _update_debug_status(self) -> None:
         turn = "white" if self.controller.board.turn is chess.WHITE else "black"
         white_step = (len(self.history) // 2) + 1
-        if self.pending_change is not None:
-            rule = f"pending:{self.pending_change.decision.value}"
-        elif self.recommendation is not None:
-            rule = f"{self.recommendation.source}:{self.recommendation.move_san}"
+        if self.phase is FlowPhase.WHITE_TEST:
+            rule = "hidden"
+        elif self.workspace.attempt is not None:
+            recommendation = self.workspace.attempt.recommendation
+            rule = (
+                f"{recommendation.source}:{recommendation.move_san}"
+                if recommendation is not None
+                else "none"
+            )
         else:
             rule = "none"
         error = type(self.failure).__name__ if self.failure is not None else "none"
@@ -873,6 +998,9 @@ class AuthorScreen(Screen[None]):
             self.remove_class(class_name)
         self.add_class(f"layout-{mode.value}")
         self.layout_mode = mode
+
+
+FlowScreen = AuthorScreen
 
 
 def _format_history(history: tuple[str, ...]) -> str:

@@ -31,6 +31,7 @@ class OpeningMovePanel(Static):
         self.moves: tuple[OpeningMove, ...] = ()
         self.highlighted_index: int | None = None
         self.context = ""
+        self.explored_sans: frozenset[str] = frozenset()
         self.submission_enabled = False
 
     @property
@@ -40,11 +41,18 @@ class OpeningMovePanel(Static):
             return None
         return self.moves[index]
 
-    def set_moves(self, moves: tuple[OpeningMove, ...], *, context: str) -> None:
+    def set_moves(
+        self,
+        moves: tuple[OpeningMove, ...],
+        *,
+        context: str,
+        explored_sans: frozenset[str] = frozenset(),
+    ) -> None:
         if len(moves) > len(MOVE_KEYS):
             raise ValueError("OpeningMovePanel supports at most four moves.")
         self.moves = moves
         self.context = context
+        self.explored_sans = explored_sans
         self.highlighted_index = 0 if moves else None
         self.submission_enabled = bool(moves)
         self.refresh()
@@ -52,6 +60,7 @@ class OpeningMovePanel(Static):
     def clear(self) -> None:
         self.moves = ()
         self.context = ""
+        self.explored_sans = frozenset()
         self.highlighted_index = None
         self.submission_enabled = False
         self.refresh()
@@ -99,9 +108,10 @@ class OpeningMovePanel(Static):
         for index, move in enumerate(self.moves):
             marker = ">" if index == self.highlighted_index else " "
             key = MOVE_KEYS[index].upper()
+            explored = " · explored" if move.san in self.explored_sans else ""
             output.append(
                 f"\n{marker} [{key}] {move.san:<5} "
-                f"{move.frequency:>4.0%} · {move.games:,} games",
+                f"{move.frequency:>4.0%} · {move.games:,} games{explored}",
                 style="bold" if index == self.highlighted_index else None,
             )
         return output

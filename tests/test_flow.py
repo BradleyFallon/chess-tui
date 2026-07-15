@@ -30,8 +30,21 @@ def test_store_loads_human_readable_london_flow() -> None:
 
     assert flow.name == "London System"
     assert [rule.move_san for rule in flow.defaults] == ["d4", "Bf4", "e3", "Nf3"]
-    assert flow.exceptions == ()
-    assert flow.opponent_replies == ()
+    assert flow.exceptions == (
+        ExceptionRule(
+            "after-d4-e5",
+            2,
+            ("d4", "e5"),
+            "dxe5",
+            "Capture the offered pawn.",
+        ),
+    )
+    assert [reply.move_san for reply in flow.opponent_replies] == [
+        "d5",
+        "Nf6",
+        "e6",
+        "c5",
+    ]
 
 
 def test_author_persists_explored_opponent_reply_without_statistics(
@@ -46,7 +59,9 @@ def test_author_persists_explored_opponent_reply_without_statistics(
     author.record_opponent_reply(after_d4, ("d4",), "d5")
 
     reloaded = FlowStore().load(path)
-    assert reloaded.opponent_replies == (OpponentReply("after-d4-d5", ("d4",), "d5"),)
+    expected = OpponentReply("after-d4-d5", ("d4",), "d5")
+    assert reloaded.opponent_replies.count(expected) == 1
+    assert len(reloaded.opponent_replies) == 4
     encoded = path.read_text(encoding="utf-8")
     assert "[[opponent_replies]]" in encoded
     assert "games" not in encoded
@@ -81,6 +96,7 @@ def test_policy_uses_default_then_exact_position_exception(tmp_path: Path) -> No
     path = tmp_path / "london.toml"
     shutil.copy2(LONDON_FLOW, path)
     author = WhiteFlowAuthor(path)
+    author.remove_exception("after-d4-e5")
 
     after_d5 = replay_san(author.flow.start_fen, ("d4", "d5"))
     after_e5 = replay_san(author.flow.start_fen, ("d4", "e5"))

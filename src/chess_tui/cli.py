@@ -19,7 +19,7 @@ from .tui import run_chess_app
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chess-tui",
-        description="Play local chess, run a quiz, or author a White flow.",
+        description="Play local chess or test and edit a White flow.",
     )
     parser.add_argument(
         "--fen",
@@ -36,7 +36,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--flow",
         type=Path,
         default=None,
-        help="White-flow TOML file (required for author mode).",
+        help="White-flow TOML file (required for flow mode).",
     )
     parser.add_argument(
         "--renderer",
@@ -80,10 +80,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     mode = AppMode(args.mode)
-    if mode is AppMode.AUTHOR and args.flow is None:
-        parser.error("--flow is required when --mode author is selected")
-    if mode is not AppMode.AUTHOR and args.flow is not None:
-        parser.error("--flow is only supported with --mode author")
+    if mode is AppMode.FLOW and args.flow is None:
+        parser.error("--flow is required when --mode flow is selected")
+    if mode is not AppMode.FLOW and args.flow is not None:
+        parser.error("--flow is only supported with --mode flow")
 
     try:
         position = parse_fen(args.fen)
@@ -97,7 +97,7 @@ def main(argv: list[str] | None = None) -> int:
             sys.stdout,
             renderer_mode=renderer_mode,
         )
-        if mode is AppMode.AUTHOR:
+        if mode is AppMode.FLOW:
             run_chess_app(position, renderer=renderer, mode=mode, flow_path=args.flow)
         else:
             run_chess_app(position, renderer=renderer, mode=mode)

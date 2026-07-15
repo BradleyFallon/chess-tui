@@ -11,7 +11,7 @@ update-deps
 chess-tui --help
 chess-tui --mode local-game
 chess-tui --mode quiz-demo
-chess-tui --mode author --flow flows/london.toml
+chess-tui --mode flow --flow flows/london.toml
 chess-tui --renderer pixel-mask
 chess-tui --renderer unicode
 chess-tui --renderer legacy-sprite
@@ -59,31 +59,38 @@ Application mode and renderer mode are independent, so combinations such as
 Quiz demo data is local and read-only. It does not start, connect to, or persist
 data in ChessFlow.
 
-## Author controls
+## Flow controls
 
-Author mode edits one local White-flow TOML file. White recommendations resolve
-an exact-position exception first, then the numbered default for that White
-step.
+Flow mode tests and edits one local White-flow TOML file. White recommendations
+resolve an exact-position exception first, then the numbered default for that
+White step.
 
-- Play White's recommended move, or another legal move, on the board. Press
-  `Enter` after highlighting the destination; the board selection autofills the
-  SAN field. You can also type the move in SAN and press `Enter`.
+- When a White rule exists, play without seeing its move or note. Correct moves
+  reveal the saved rule briefly, then continue to Black's response.
+- On a mismatch, press `R` to retry or `Enter` to roll back the attempted move,
+  apply the saved rule, and continue. Press `E` to make the move an exception,
+  `D` to replace the numbered default, or `N` to edit the saved note. Exception
+  mismatches also support `X` to replace the exception and `Delete` to remove it.
+- At the flow frontier, play the desired move, enter its note, and save it as the
+  next default. If the numbered default is illegal in the current position, the
+  legal move is saved as an exact-position exception instead.
+- Play on the board and press `Enter` after highlighting the destination; board
+  selection autofills the SAN field. You can also type SAN and press `Enter`.
 - On Black's turn, fixture-backed common responses appear with game counts and
-  frequencies. Use `Up`/`Down` or `A`/`S`/`D`/`F` and press `Enter`; press `M`
-  for manual board entry or `I` to type SAN.
-- Author interaction starts in `[NAV]`, where board controls and shortcuts are
+  frequencies, and previously explored responses are marked. Use `Up`/`Down`
+  or `A`/`S`/`D`/`F` and press `Enter`; press `M` for manual board entry or `I`
+  to type SAN.
+- Flow interaction starts in `[NAV]`, where board controls and shortcuts are
   active. Press `I` or click the SAN field to enter `[TEXT: MOVE]`; printable
   keys are literal until `Enter` submits or `Escape` cancels the edit.
-- When White differs from the policy, save an exact-position exception or
-  replace the numbered default. The optional note opens in `[TEXT: NOTE]`
-  automatically; `Enter` finishes editing the note without choosing a rule
-  action.
+- Rule notes open in `[TEXT: NOTE]`. `Enter` finishes text entry, then `S` saves
+  the selected rule action.
 - `R` restarts the line from the flow's starting FEN; `Ctrl+N` remains an alias.
 - `Ctrl+R` reloads and validates hand edits without discarding the active policy
   when the file is invalid.
 - `Escape` leaves text mode or cancels a pending move or rule decision. `Q`
   quits in NAV mode and types a literal `q` in TEXT mode.
-- A minimal debug line shows the current author phase, turn, White step, ply,
+- A minimal debug line shows the current Flow phase, turn, White step, ply,
   active rule source, and error state.
 
 Flow files store readable SAN histories and explored Black replies. Opening
@@ -102,7 +109,7 @@ unless all of these requirements are met:
 - The selected renderer's glyphs or masks pass strict startup validation.
 - `pixel-mask` requires at least 67 columns by 35 rows, including the status line.
 - The selected renderer is one of `pixel-mask`, `unicode`, or `legacy-sprite`.
-- The selected application mode is `local-game`, `quiz-demo`, or `author`.
+- The selected application mode is `local-game`, `quiz-demo`, or `flow`.
 - The CLI flag `--renderer` overrides `CHESS_TUI_RENDERER`; the default mode is
   `pixel-mask`.
 
@@ -174,7 +181,7 @@ Copy this block when providing the project structure to an LLM:
 |   |-- test_board.py                 # FEN parsing and rendering coverage
 |   |-- test_game.py                  # Move controller coverage
 |   |-- test_flow.py                  # Persistent flow policy and storage coverage
-|   |-- test_author.py                # Author-screen workflow coverage
+|   |-- test_author.py                # Flow-screen workflow coverage
 |   |-- test_quiz.py                  # Quiz screen and widget behavior
 |   |-- test_sessions.py              # Fixture provider and model validation
 |   `-- test_smoke.py                 # Minimal package behavior tests

@@ -5,36 +5,67 @@ from pathlib import Path
 import shutil
 
 from chess_tui import AppMode, DEFAULT_STARTING_FEN, parse_fen
-from chess_tui.flow import FlowStore, WhiteFlow
+from chess_tui.flow import FlowStore
 from chess_tui.game import square_from_name
 from chess_tui.input_mode import InputMode
 from chess_tui.layout import QuizLayoutMode
 from chess_tui.renderers.factory import create_piece_renderer
 from chess_tui.renderers.mode import RendererMode
-from chess_tui.screens.author import AuthorPhase, AuthorScreen, RuleDecision
 from chess_tui.runtime import TerminalCapabilityError
+from chess_tui.screens.author import AuthorScreen, FlowPhase
 from chess_tui.tui import ChessBoard, ChessTui
 
 PROJECT_ROOT = Path(__file__).parents[1]
 LONDON_FLOW = PROJECT_ROOT / "flows" / "london.toml"
 
 
-def _play(screen: AuthorScreen, uci: str) -> None:
-    screen.controller.handle_square(square_from_name(uci[:2]))
-    screen.controller.handle_square(square_from_name(uci[2:4]))
-    screen.action_confirm_move()
+def _click_move(screen: AuthorScreen, uci: str) -> None:
+    screen.on_chess_board_square_clicked(
+        ChessBoard.SquareClicked(square_from_name(uci[:2]))
+    )
+    screen.on_chess_board_square_clicked(
+        ChessBoard.SquareClicked(square_from_name(uci[2:4]))
+    )
 
 
-def test_author_defines_consecutive_defaults_in_empty_flow(tmp_path: Path) -> None:
+def _panel_text(screen: AuthorScreen) -> str:
+    return "\n".join(screen.panel.render_line(row).text for row in range(30))
+
+
+async def _submit_board_move(
+    screen: AuthorScreen,
+    pilot,
+    uci: str,
+) -> None:
+    _click_move(screen, uci)
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+async def _play_correct_and_choose_black(
+    screen: AuthorScreen,
+    pilot,
+    white_uci: str,
+    black_key: str | None = None,
+) -> None:
+    await _submit_board_move(screen, pilot, white_uci)
+    if screen.phase is FlowPhase.WHITE_RESULT_CORRECT:
+        await pilot.press("enter")
+        await pilot.pause()
+    assert screen.phase is FlowPhase.BLACK_SELECT
+    if black_key is not None:
+        await pilot.press(black_key)
+    await pilot.press("enter")
+    await pilot.pause()
+
+
+def test_flow_hides_known_answer_until_white_submits(tmp_path: Path) -> None:
     async def run_test() -> None:
-        path = tmp_path / "empty.toml"
-        FlowStore().save(
-            path,
-            WhiteFlow(1, "Empty London", DEFAULT_STARTING_FEN, (), ()),
-        )
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
         app = ChessTui(
             parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
+            mode=AppMode.FLOW,
             renderer=create_piece_renderer(RendererMode.UNICODE),
             flow_path=path,
         )
@@ -43,56 +74,34 @@ def test_author_defines_consecutive_defaults_in_empty_flow(tmp_path: Path) -> No
 
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
-            assert screen.phase is AuthorPhase.WHITE_MOVE
-            assert screen.recommendation is None
-            assert "phase=white-move" in screen.debug_status.render_line(0).text
-            assert "white_step=1" in screen.debug_status.render_line(0).text
+            assert screen.phase is FlowPhase.WHITE_TEST
+            assert "PLAY YOUR MOVE" in _panel_text(screen)
+            assert "Recommended" not in _panel_text(screen)
+            assert "d4" not in _panel_text(screen)
+            assert "rule=hidden" in screen.debug_status.render_line(0).text
 
-            _play(screen, "d2d4")
-            await pilot.pause()
-            assert screen.phase is AuthorPhase.CHOOSE_RULE_CHANGE
-            assert screen.pending_change is not None
-            assert screen.pending_change.decision is RuleDecision.DEFINE_DEFAULT
-            assert screen.board.geometry is not None
-            screen.note_input.value = "Control the center."
-            assert await pilot.click("#save-default")
-            await pilot.pause()
+            await _submit_board_move(screen, pilot, "d2d4")
+            assert screen.phase is FlowPhase.WHITE_RESULT_CORRECT
+            assert "CORRECT" in _panel_text(screen)
+            assert "d4" in _panel_text(screen)
+            assert "Control the center." in _panel_text(screen)
+            assert screen.move_input.value == ""
 
-            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
-            assert "phase=select-black-move" in screen.debug_status.render_line(0).text
-            assert "turn=black" in screen.debug_status.render_line(0).text
-            assert FlowStore().load(path).defaults[0].move_san == "d4"
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.phase is FlowPhase.BLACK_SELECT
             assert screen.opening_moves.highlighted_move is not None
             assert screen.opening_moves.highlighted_move.san == "d5"
 
-            await pilot.press("enter")
-            await pilot.pause()
-            assert screen.phase is AuthorPhase.WHITE_MOVE
-            assert screen.recommendation is None
-            assert screen.move_input.value == ""
-
-            _play(screen, "c1f4")
-            await pilot.pause()
-            screen.note_input.value = "Develop outside the pawn chain."
-            assert await pilot.click("#save-default")
-            await pilot.pause()
-
-            defaults = FlowStore().load(path).defaults
-            assert [(rule.step, rule.move_san) for rule in defaults] == [
-                (1, "d4"),
-                (2, "Bf4"),
-            ]
-
     asyncio.run(run_test())
 
 
-def test_author_q_quits_when_note_editor_is_hidden(tmp_path: Path) -> None:
+def test_flow_mismatch_retry_restores_position_and_tests_again(tmp_path: Path) -> None:
     async def run_test() -> None:
         path = tmp_path / "london.toml"
         shutil.copy2(LONDON_FLOW, path)
         app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
+            mode=AppMode.FLOW,
             renderer=create_piece_renderer(RendererMode.UNICODE),
             flow_path=path,
         )
@@ -101,70 +110,30 @@ def test_author_q_quits_when_note_editor_is_hidden(tmp_path: Path) -> None:
 
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
-            assert screen.note_input.disabled
-            assert screen.input.mode is InputMode.NAVIGATION
-            assert app.focused is None
-            assert screen.status.render_line(0).text.strip().startswith("[NAV]")
-
-            await pilot.press("q")
-            await pilot.pause()
-
-            assert not app.is_running
-
-    asyncio.run(run_test())
-
-
-def test_author_enter_confirms_highlighted_board_move(tmp_path: Path) -> None:
-    async def run_test() -> None:
-        path = tmp_path / "london.toml"
-        shutil.copy2(LONDON_FLOW, path)
-        app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
-            renderer=create_piece_renderer(RendererMode.UNICODE),
-            flow_path=path,
-        )
-        screen = app.initial_screen
-        assert isinstance(screen, AuthorScreen)
-
-        async with app.run_test(size=(120, 42)) as pilot:
-            await pilot.pause()
-            assert screen.input.mode is InputMode.NAVIGATION
-            await pilot.press("i")
-            screen.move_input.value = "d"
-            screen.on_chess_board_square_clicked(
-                ChessBoard.SquareClicked(square_from_name("d2"))
-            )
-            assert screen.move_input.value == ""
-            assert screen.input.mode is InputMode.NAVIGATION
-            screen.on_chess_board_square_clicked(
-                ChessBoard.SquareClicked(square_from_name("d4"))
-            )
-            assert screen.move_input.value == "d4"
-            assert screen.input.mode is InputMode.NAVIGATION
-
-            await pilot.press("enter")
-            await pilot.pause()
-
-            assert screen.history == ["d4"]
-            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
-            assert screen.move_input.value == ""
+            await _submit_board_move(screen, pilot, "e2e4")
+            assert screen.phase is FlowPhase.WHITE_RESULT_MISMATCH
+            assert screen.history == ["e4"]
+            assert "Saved rule:\nd4" in _panel_text(screen)
 
             await pilot.press("r")
             await pilot.pause()
+            assert screen.phase is FlowPhase.WHITE_TEST
             assert screen.history == []
-            assert screen.phase is AuthorPhase.WHITE_MOVE
+            assert screen.controller.board.piece_at(square_from_name("e2")) is not None
+            assert "d4" not in _panel_text(screen)
+
+            await _submit_board_move(screen, pilot, "d2d4")
+            assert screen.phase is FlowPhase.WHITE_RESULT_CORRECT
 
     asyncio.run(run_test())
 
 
-def test_author_accepts_typed_san_and_reports_invalid_input(tmp_path: Path) -> None:
+def test_flow_keep_saved_rule_rolls_back_wrong_move(tmp_path: Path) -> None:
     async def run_test() -> None:
         path = tmp_path / "london.toml"
         shutil.copy2(LONDON_FLOW, path)
         app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
+            mode=AppMode.FLOW,
             renderer=create_piece_renderer(RendererMode.UNICODE),
             flow_path=path,
         )
@@ -173,365 +142,174 @@ def test_author_accepts_typed_san_and_reports_invalid_input(tmp_path: Path) -> N
 
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
-            await pilot.press("i")
-            await pilot.pause()
-            assert screen.input.mode is InputMode.TEXT
-            assert app.focused is screen.move_input
-            screen.move_input.value = "not-a-move"
-            await pilot.press("enter")
-            await pilot.pause()
-            assert screen.history == []
-            assert "INVALID MOVE" in screen.status.render_line(0).text
-            assert screen.input.mode is InputMode.TEXT
+            await _play_correct_and_choose_black(screen, pilot, "d2d4")
+            assert screen.phase is FlowPhase.WHITE_TEST
 
-            screen.move_input.value = "d4"
+            await _submit_board_move(screen, pilot, "e2e3")
+            assert screen.phase is FlowPhase.WHITE_RESULT_MISMATCH
+            assert screen.history == ["d4", "d5", "e3"]
+
             await pilot.press("enter")
             await pilot.pause()
-            assert screen.history == ["d4"]
-            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
-            assert screen.move_input.value == ""
+            assert screen.history == ["d4", "d5", "Bf4"]
+            assert screen.controller.board.piece_at(square_from_name("f4")) is not None
+            assert screen.controller.board.piece_at(square_from_name("e2")) is not None
+            assert screen.phase is FlowPhase.BLACK_SELECT
+
+    asyncio.run(run_test())
+
+
+def test_flow_can_retry_then_edit_selected_move_as_default(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await _play_correct_and_choose_black(screen, pilot, "d2d4")
+            await _submit_board_move(screen, pilot, "c2c3")
+            assert screen.phase is FlowPhase.WHITE_RESULT_MISMATCH
+
+            await pilot.press("d")
+            await pilot.pause()
+            assert screen.phase is FlowPhase.RULE_NOTE
+            assert screen.input.mode is InputMode.TEXT
+            screen.note_input.value = "Build the pawn chain first."
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.phase is FlowPhase.RULE_NOTE
             assert screen.input.mode is InputMode.NAVIGATION
+            await pilot.press("s")
+            await pilot.pause()
 
+            assert screen.history == ["d4", "d5", "c3"]
+            saved = FlowStore().load(path)
+            assert saved.defaults[1].move_san == "c3"
+            assert saved.defaults[1].note == "Build the pawn chain first."
+
+    asyncio.run(run_test())
+
+
+def test_flow_exception_is_hidden_then_keep_applies_it(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await _play_correct_and_choose_black(screen, pilot, "d2d4", "d")
+            assert screen.history == ["d4", "e5"]
+            assert screen.phase is FlowPhase.WHITE_TEST
+            assert "dxe5" not in _panel_text(screen)
+
+            await _submit_board_move(screen, pilot, "c1f4")
+            assert screen.phase is FlowPhase.WHITE_RESULT_MISMATCH
+            assert "Saved rule:\ndxe5" in _panel_text(screen)
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.history == ["d4", "e5", "dxe5"]
+            assert screen.controller.board.piece_at(square_from_name("e5")) is not None
+            assert screen.phase is FlowPhase.BLACK_MANUAL
+
+    asyncio.run(run_test())
+
+
+def test_flow_frontier_saves_rule_then_tests_it_after_restart(tmp_path: Path) -> None:
+    async def advance_to_step_five(screen: AuthorScreen, pilot) -> None:
+        await _play_correct_and_choose_black(screen, pilot, "d2d4")
+        await _play_correct_and_choose_black(screen, pilot, "c1f4")
+        await _play_correct_and_choose_black(screen, pilot, "e2e3")
+        await _play_correct_and_choose_black(screen, pilot, "g1f3")
+
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await advance_to_step_five(screen, pilot)
+            assert screen.phase is FlowPhase.FRONTIER_MOVE
+            assert "No rule exists for White step 5" in _panel_text(screen)
+
+            await _submit_board_move(screen, pilot, "f1d3")
+            assert screen.phase is FlowPhase.RULE_NOTE
+            assert screen.input.mode is InputMode.TEXT
+            screen.note_input.value = "Prepare to castle."
+            await pilot.press("enter")
+            await pilot.pause()
+            assert screen.phase is FlowPhase.RULE_NOTE
+            await pilot.press("s")
+            await pilot.pause()
+            assert FlowStore().load(path).defaults[4].move_san == "Bd3"
+
+            screen.action_restart_line()
+            await pilot.pause()
+            await advance_to_step_five(screen, pilot)
+            assert screen.phase is FlowPhase.WHITE_TEST
+            assert "Bd3" not in _panel_text(screen)
+            assert "rule=hidden" in screen.debug_status.render_line(0).text
+
+    asyncio.run(run_test())
+
+
+def test_flow_text_mode_keeps_shortcut_characters_literal(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
             await pilot.press("i")
-            await pilot.pause()
-            assert screen.phase is AuthorPhase.BLACK_MOVE
-            assert screen.input.mode is InputMode.TEXT
-            screen.move_input.value = "d5"
-            await pilot.press("enter")
-            await pilot.pause()
-            assert screen.history == ["d4", "d5"]
-            assert screen.phase is AuthorPhase.WHITE_MOVE
-
-    asyncio.run(run_test())
-
-
-def test_author_can_switch_common_response_to_manual_board_entry(
-    tmp_path: Path,
-) -> None:
-    async def run_test() -> None:
-        path = tmp_path / "london.toml"
-        shutil.copy2(LONDON_FLOW, path)
-        app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
-            renderer=create_piece_renderer(RendererMode.UNICODE),
-            flow_path=path,
-        )
-        screen = app.initial_screen
-        assert isinstance(screen, AuthorScreen)
-
-        async with app.run_test(size=(120, 42)) as pilot:
-            await pilot.pause()
-            _play(screen, "d2d4")
-            await pilot.pause()
-            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
-
-            await pilot.press("m")
-            await pilot.pause()
-            assert screen.phase is AuthorPhase.BLACK_MOVE
-
-            screen.on_chess_board_square_clicked(
-                ChessBoard.SquareClicked(square_from_name("d7"))
-            )
-            screen.on_chess_board_square_clicked(
-                ChessBoard.SquareClicked(square_from_name("d5"))
-            )
-            assert screen.move_input.value == "d5"
-            await pilot.press("enter")
-            await pilot.pause()
-
-            assert screen.history == ["d4", "d5"]
-            assert screen.move_input.value == ""
-            assert FlowStore().load(path).opponent_replies[0].move_san == "d5"
-
-    asyncio.run(run_test())
-
-
-def test_author_falls_back_to_manual_black_entry_without_fixture_moves(
-    tmp_path: Path,
-) -> None:
-    async def run_test() -> None:
-        path = tmp_path / "empty.toml"
-        FlowStore().save(
-            path,
-            WhiteFlow(1, "Empty", DEFAULT_STARTING_FEN, (), ()),
-        )
-        app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
-            renderer=create_piece_renderer(RendererMode.UNICODE),
-            flow_path=path,
-        )
-        screen = app.initial_screen
-        assert isinstance(screen, AuthorScreen)
-
-        async with app.run_test(size=(120, 42)) as pilot:
-            await pilot.pause()
-            _play(screen, "e2e4")
-            await pilot.pause()
-            assert await pilot.click("#save-default")
-            await pilot.pause()
-
-            assert screen.phase is AuthorPhase.BLACK_MOVE
-            assert not screen.opening_moves.display
-            assert "legal black move" in screen.panel.render_line(2).text.lower()
-
-    asyncio.run(run_test())
-
-
-def test_author_text_mode_treats_shortcuts_as_literal_text(tmp_path: Path) -> None:
-    async def run_test() -> None:
-        path = tmp_path / "london.toml"
-        shutil.copy2(LONDON_FLOW, path)
-        app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
-            renderer=create_piece_renderer(RendererMode.UNICODE),
-            flow_path=path,
-        )
-        screen = app.initial_screen
-        assert isinstance(screen, AuthorScreen)
-
-        async with app.run_test(size=(120, 42)) as pilot:
-            await pilot.pause()
-            screen.move_input.value = "d4"
-            assert await pilot.click("#move-entry")
-            await pilot.pause()
-            assert screen.input.mode is InputMode.TEXT
-            assert screen.status.render_line(0).text.strip().startswith("[TEXT: MOVE]")
-
             await pilot.press("q", "e", "d", "r")
             await pilot.pause()
             assert app.is_running
-            assert "qedr" in screen.move_input.value
-            assert "d4" in screen.move_input.value
-
-            await pilot.press("escape")
-            await pilot.pause()
-            assert screen.input.mode is InputMode.NAVIGATION
-            assert screen.move_input.value == "d4"
-            assert app.focused is None
-
-    asyncio.run(run_test())
-
-
-def test_author_note_opens_in_text_mode_and_pending_quit_is_guarded(
-    tmp_path: Path,
-) -> None:
-    async def run_test() -> None:
-        path = tmp_path / "empty.toml"
-        FlowStore().save(
-            path,
-            WhiteFlow(1, "Empty London", DEFAULT_STARTING_FEN, (), ()),
-        )
-        app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
-            renderer=create_piece_renderer(RendererMode.UNICODE),
-            flow_path=path,
-        )
-        screen = app.initial_screen
-        assert isinstance(screen, AuthorScreen)
-
-        async with app.run_test(size=(120, 42)) as pilot:
-            await pilot.pause()
-            _play(screen, "d2d4")
-            await pilot.pause()
-            assert screen.phase is AuthorPhase.CHOOSE_RULE_CHANGE
             assert screen.input.mode is InputMode.TEXT
-            assert app.focused is screen.note_input
-            assert screen.status.render_line(0).text.strip().startswith("[TEXT: NOTE]")
-
-            await pilot.press("q")
-            await pilot.pause()
-            assert app.is_running
-            assert screen.note_input.value == "q"
-
-            await pilot.press("enter")
-            await pilot.pause()
-            assert screen.input.mode is InputMode.NAVIGATION
-
-            await pilot.press("q")
-            await pilot.pause()
-            assert app.is_running
-            assert "UNSAVED RULE CHANGE" in screen.panel.render_line(0).text
+            assert screen.move_input.value == "qedr"
 
             await pilot.press("escape")
             await pilot.pause()
-            assert app.is_running
-            assert screen.phase is AuthorPhase.CHOOSE_RULE_CHANGE
-
-            await pilot.press("q", "q")
-            await pilot.pause()
-            assert not app.is_running
-
-    asyncio.run(run_test())
-
-
-def test_author_persists_exact_exception_and_reloads_note(tmp_path: Path) -> None:
-    async def run_test() -> None:
-        path = tmp_path / "london.toml"
-        shutil.copy2(LONDON_FLOW, path)
-        app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
-            renderer=create_piece_renderer(RendererMode.UNICODE),
-            flow_path=path,
-        )
-        screen = app.initial_screen
-        assert isinstance(screen, AuthorScreen)
-
-        async with app.run_test(size=(120, 42)) as pilot:
-            await pilot.pause()
-            assert screen.recommendation is not None
-            assert screen.recommendation.move_san == "d4"
-
-            _play(screen, "d2d4")
-            _play(screen, "e7e5")
-            await pilot.pause()
-            assert screen.recommendation is not None
-            assert screen.recommendation.move_san == "Bf4"
-            assert screen.recommendation.source == "default"
-            assert "rule=default:Bf4" in screen.debug_status.render_line(0).text
-
-            _play(screen, "d4e5")
-            await pilot.pause()
-            assert screen.phase is AuthorPhase.CHOOSE_RULE_CHANGE
-            assert screen.pending_change is not None
-            assert screen.pending_change.decision is RuleDecision.DIFFERENT_FROM_DEFAULT
-            assert screen.board.geometry is not None
-            screen.note_input.value = "Capture the offered pawn."
-            assert await pilot.click("#add-exception")
-            await pilot.pause()
-
-            saved = FlowStore().load(path)
-            assert len(saved.exceptions) == 1
-            exception = saved.exceptions[0]
-            assert exception.id == "after-d4-e5"
-            assert exception.after_san == ("d4", "e5")
-            assert exception.move_san == "dxe5"
-
-            screen.action_restart_line()
-            _play(screen, "d2d4")
-            _play(screen, "d7d5")
-            await pilot.pause()
-            assert screen.recommendation is not None
-            assert screen.recommendation.move_san == "Bf4"
-            assert screen.recommendation.source == "default"
-
-            screen.action_restart_line()
-            _play(screen, "d2d4")
-            _play(screen, "e7e5")
-            await pilot.pause()
-            assert screen.recommendation is not None
-            assert screen.recommendation.move_san == "dxe5"
-            assert screen.recommendation.source == "exception"
-
-            text = path.read_text(encoding="utf-8").replace(
-                "Capture the offered pawn.",
-                "Reloaded note from disk.",
-            )
-            path.write_text(text, encoding="utf-8")
-            screen.action_reload_flow()
-            await pilot.pause()
-
-            assert screen.failure is None
-            assert screen.recommendation is not None
-            assert screen.recommendation.note == "Reloaded note from disk."
-
-            active_flow = screen.author.flow
-            path.write_text("version = 99\n", encoding="utf-8")
-            screen.action_reload_flow()
-            await pilot.pause()
-
-            assert screen.failure is not None
-            assert screen.author.flow is active_flow
-            assert screen.controller.board.fen() != chess_start_fen()
-
-    asyncio.run(run_test())
-
-
-def test_author_selects_and_persists_common_black_branches(tmp_path: Path) -> None:
-    async def run_test() -> None:
-        path = tmp_path / "london.toml"
-        shutil.copy2(LONDON_FLOW, path)
-        app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
-            renderer=create_piece_renderer(RendererMode.UNICODE),
-            flow_path=path,
-        )
-        screen = app.initial_screen
-        assert isinstance(screen, AuthorScreen)
-
-        async with app.run_test(size=(120, 42)) as pilot:
-            await pilot.pause()
-            _play(screen, "d2d4")
-            await pilot.pause()
-            assert screen.phase is AuthorPhase.SELECT_BLACK_MOVE
-            assert screen.opening_moves.highlighted_move is not None
-            assert screen.opening_moves.highlighted_move.san == "d5"
-
-            await pilot.press("enter")
-            await pilot.pause()
-            assert screen.history == ["d4", "d5"]
-            assert screen.move_input.value == ""
-            assert screen.recommendation is not None
-            assert screen.recommendation.move_san == "Bf4"
-
-            screen.action_restart_line()
-            _play(screen, "d2d4")
-            await pilot.pause()
-            await pilot.press("d", "enter")
-            await pilot.pause()
-            assert screen.history == ["d4", "e5"]
+            assert screen.input.mode is InputMode.NAVIGATION
             assert screen.move_input.value == ""
 
-            _play(screen, "d4e5")
-            await pilot.pause()
-            assert screen.pending_change is not None
-            assert screen.pending_change.decision is RuleDecision.DIFFERENT_FROM_DEFAULT
-            screen.note_input.value = "Capture the offered pawn."
-            assert await pilot.click("#add-exception")
-            await pilot.pause()
-
-            screen.action_restart_line()
-            _play(screen, "d2d4")
-            await pilot.pause()
-            await pilot.press("enter")
-            await pilot.pause()
-            assert screen.recommendation is not None
-            assert screen.recommendation.move_san == "Bf4"
-
-            screen.action_restart_line()
-            _play(screen, "d2d4")
-            await pilot.pause()
-            await pilot.press("d", "enter")
-            await pilot.pause()
-            assert screen.recommendation is not None
-            assert screen.recommendation.move_san == "dxe5"
-            assert screen.recommendation.source == "exception"
-
-            reopened = FlowStore().load(path)
-            assert {
-                (reply.after_san, reply.move_san) for reply in reopened.opponent_replies
-            } == {
-                (("d4",), "d5"),
-                (("d4",), "e5"),
-            }
-            assert len(reopened.exceptions) == 1
-
     asyncio.run(run_test())
 
 
-def test_author_resize_preserves_line_and_renderer(tmp_path: Path) -> None:
+def test_flow_resize_preserves_run_and_renderer(tmp_path: Path) -> None:
     async def run_test() -> None:
         path = tmp_path / "london.toml"
         shutil.copy2(LONDON_FLOW, path)
         renderer = create_piece_renderer(RendererMode.PIXEL_MASK)
         app = ChessTui(
-            parse_fen(DEFAULT_STARTING_FEN),
-            mode=AppMode.AUTHOR,
+            mode=AppMode.FLOW,
             renderer=renderer,
             flow_path=path,
         )
@@ -540,7 +318,7 @@ def test_author_resize_preserves_line_and_renderer(tmp_path: Path) -> None:
 
         async with app.run_test(size=(120, 42)) as pilot:
             await pilot.pause()
-            _play(screen, "d2d4")
+            await _submit_board_move(screen, pilot, "d2d4")
             assert screen.history == ["d4"]
             assert screen.layout_mode is QuizLayoutMode.LANDSCAPE
 
@@ -552,24 +330,11 @@ def test_author_resize_preserves_line_and_renderer(tmp_path: Path) -> None:
             await pilot.resize_terminal(70, 40)
             await pilot.pause()
             assert screen.layout_mode is QuizLayoutMode.COMPACT
-            assert screen.board.geometry is not None
             assert screen.renderer is renderer
 
             await pilot.resize_terminal(60, 30)
             await pilot.pause()
             assert isinstance(screen.failure, TerminalCapabilityError)
-            assert screen.board.geometry is None
-            assert screen.history == ["d4"]
-
-            await pilot.resize_terminal(120, 42)
-            await pilot.pause()
-            assert screen.failure is None
-            assert screen.board.geometry is not None
-            assert screen.renderer is renderer
             assert screen.history == ["d4"]
 
     asyncio.run(run_test())
-
-
-def chess_start_fen() -> str:
-    return "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"

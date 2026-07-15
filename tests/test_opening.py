@@ -31,6 +31,16 @@ def test_fixture_source_returns_ranked_london_responses() -> None:
     after_bf4 = asyncio.run(source.moves_for(_board_after("d4", "d5", "Bf4")))
     assert [move.san for move in after_bf4] == ["Nf6", "e6", "c5"]
 
+    after_e3 = asyncio.run(
+        source.moves_for(_board_after("d4", "d5", "Bf4", "Nf6", "e3"))
+    )
+    assert [move.san for move in after_e3] == ["e6", "c5", "g6"]
+
+    after_nf3 = asyncio.run(
+        source.moves_for(_board_after("d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3"))
+    )
+    assert [move.san for move in after_nf3] == ["c5", "Be7", "Bd6"]
+
     unknown = asyncio.run(source.moves_for(_board_after("e4")))
     assert unknown == ()
 
@@ -47,3 +57,18 @@ def test_opening_move_panel_has_one_authoritative_highlight() -> None:
 
     panel.highlight(3)
     assert panel.highlighted_move == moves[3]
+
+
+def test_opening_move_panel_marks_explored_responses() -> None:
+    moves = asyncio.run(FixtureOpeningMoveSource().moves_for(_board_after("d4")))
+    panel = OpeningMovePanel()
+
+    panel.set_moves(
+        moves,
+        context="After 1. d4:",
+        explored_sans=frozenset({"d5"}),
+    )
+
+    rendered = panel.render().plain
+    assert "d5" in rendered
+    assert rendered.count("explored") == 1

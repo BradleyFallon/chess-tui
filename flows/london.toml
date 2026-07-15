@@ -22,6 +22,13 @@ step = 4
 move = "Nf3"
 note = "Develop the king's knight and guard e5."
 
+[[exceptions]]
+id = "after-d4-e5"
+step = 2
+after = ["d4", "e5"]
+move = "dxe5"
+note = "Capture the offered pawn."
+
 [[opponent_replies]]
 id = "after-d4-d5"
 after = ["d4"]
@@ -31,3 +38,23 @@ move = "d5"
 id = "after-d4-d5-bf4-nf6"
 after = ["d4", "d5", "Bf4"]
 move = "Nf6"
+
+[[opponent_replies]]
+id = "after-d4-d5-bf4-nf6-e3-e6"
+after = ["d4", "d5", "Bf4", "Nf6", "e3"]
+move = "e6"
+
+[[opponent_replies]]
+id = "after-d4-d5-bf4-nf6-e3-e6-nf3-c5"
+after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3"]
+move = "c5"
+
+[[opponent_replies]]
+id = "after-d4-nf6"
+after = ["d4"]
+move = "Nf6"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-e5"
+after = ["d4", "Nf6", "Bf4"]
+move = "e5"
