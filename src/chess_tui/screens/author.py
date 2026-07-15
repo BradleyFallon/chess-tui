@@ -21,6 +21,7 @@ from ..flow import (
     WhiteMoveAttempt,
     WhiteTurn,
 )
+from ..engine import EngineError
 from ..input_mode import InputMode, InputModeController
 from ..layout import QuizLayoutMode, choose_quiz_layout
 from ..opening import MoveSuggestion, OpeningSourceError, OpponentMovePlanner
@@ -40,7 +41,9 @@ class FlowPhase(str, Enum):
     WHITE_RESULT_MISMATCH = "white-result-mismatch"
     BLACK_LOADING = "black-loading"
     BLACK_SELECT = "black-select"
+    BLACK_ENGINE_ERROR = "black-engine-error"
     BLACK_MANUAL = "black-manual"
+    GAME_OVER = "game-over"
     FRONTIER_MOVE = "frontier-move"
     RULE_NOTE = "rule-note"
     SAVING = "saving"
@@ -265,6 +268,17 @@ class AuthorScreen(Screen[None]):
         if not self.input.handles_global_shortcuts or self._quit_confirmation:
             return
         key = event.key.lower()
+        if self.phase is FlowPhase.BLACK_ENGINE_ERROR:
+            if key == "m":
+                event.stop()
+                self._enter_manual_black_turn()
+            elif key == "i":
+                event.stop()
+                self._enter_manual_black_turn(text_entry=True)
+            elif key == "r":
+                event.stop()
+                self._retry_engine()
+            return
         if self.phase is FlowPhase.WHITE_RESULT_MISMATCH:
             actions = {
                 "r": "retry",
@@ -361,6 +375,8 @@ class AuthorScreen(Screen[None]):
             self._enter_text_mode(self.move_input)
         elif self.phase is FlowPhase.BLACK_SELECT:
             self._enter_manual_black_turn(text_entry=True)
+        elif self.phase is FlowPhase.BLACK_ENGINE_ERROR:
+            self._enter_manual_black_turn(text_entry=True)
         elif self.phase in {FlowPhase.RULE_NOTE, FlowPhase.ERROR}:
             self._enter_text_mode(self.note_input)
 
@@ -427,6 +443,9 @@ class AuthorScreen(Screen[None]):
         self._move_error = None
         self.move_input.value = ""
         self._sync_board()
+        if self.workspace.outcome is not None:
+            self._enter_game_over()
+            return
         if attempt.result is AttemptResult.CORRECT:
             self.phase = FlowPhase.WHITE_RESULT_CORRECT
             self._hide_interaction_controls()
@@ -580,7 +599,10 @@ class AuthorScreen(Screen[None]):
         self._move_error = None
         self.move_input.value = ""
         self._sync_board()
-        self._enter_white_turn()
+        if self.workspace.outcome is not None:
+            self._enter_game_over()
+        else:
+            self._enter_white_turn()
 
     def action_cancel(self) -> None:
         if self.input.mode is InputMode.TEXT:
@@ -638,16 +660,22 @@ class AuthorScreen(Screen[None]):
     def _restart(self) -> None:
         self._suggestion_request_id += 1
         self._leave_text_mode()
-        turn = self.workspace.restart()
+        self.workspace.restart_position()
         self.move_input.value = ""
         self.note_input.value = ""
         self._reload_error = None
         self._move_error = None
         self._quit_confirmation = False
         self._note_action = None
-        self._enter_white_turn(turn)
+        if self.workspace.outcome is not None:
+            self._enter_game_over()
+        else:
+            self._enter_white_turn(self.workspace.begin_white_turn())
 
     def _enter_white_turn(self, turn: WhiteTurn | None = None) -> None:
+        if self.workspace.outcome is not None:
+            self._enter_game_over()
+            return
         turn = turn or self.workspace.begin_white_turn()
         self.phase = (
             FlowPhase.FRONTIER_MOVE
@@ -662,6 +690,9 @@ class AuthorScreen(Screen[None]):
         self._sync_board()
 
     def _enter_black_turn(self) -> None:
+        if self.workspace.outcome is not None:
+            self._enter_game_over()
+            return
         self.phase = FlowPhase.BLACK_LOADING
         self._hide_interaction_controls()
         self._hide_move_suggestions()
@@ -680,6 +711,11 @@ class AuthorScreen(Screen[None]):
     async def _load_black_moves(self, request_id: int, board: chess.Board) -> None:
         try:
             suggestions = await self.opponent_planner.suggestions_for(board)
+        except EngineError as error:
+            if not self._black_move_request_is_current(request_id, board):
+                return
+            self._show_engine_error(error)
+            return
         except OpeningSourceError as error:
             if not self._black_move_request_is_current(request_id, board):
                 return
@@ -711,6 +747,36 @@ class AuthorScreen(Screen[None]):
         self.panel.update("")
         self.move_suggestions.focus()
         self._update_status()
+
+    def _show_engine_error(self, error: EngineError) -> None:
+        self._suggestion_request_id += 1
+        self.failure = error
+        self.phase = FlowPhase.BLACK_ENGINE_ERROR
+        self._hide_move_suggestions()
+        self._hide_interaction_controls()
+        self.panel.update(
+            f"ENGINE SUGGESTION FAILED\n\n{error}\n\n"
+            "[M] Enter Black move manually\n"
+            "[I] Type Black SAN\n"
+            "[R] Retry engine"
+        )
+        self._sync_board()
+
+    def _retry_engine(self) -> None:
+        if self.phase is FlowPhase.BLACK_ENGINE_ERROR:
+            self._enter_black_turn()
+
+    def _enter_game_over(self) -> None:
+        outcome = self.workspace.outcome
+        if outcome is None:
+            return
+        self._suggestion_request_id += 1
+        self.phase = FlowPhase.GAME_OVER
+        self._hide_move_suggestions()
+        self._hide_interaction_controls()
+        self._clear_failure()
+        self.panel.update(_format_game_over(outcome))
+        self._sync_board()
 
     def _black_move_request_is_current(
         self, request_id: int, board: chess.Board
@@ -854,10 +920,16 @@ class AuthorScreen(Screen[None]):
             self.panel.update("BLACK RESPONSE\n\nPlanning opponent moves...")
         elif self.phase is FlowPhase.BLACK_SELECT:
             self.panel.update("")
+        elif self.phase is FlowPhase.BLACK_ENGINE_ERROR:
+            return
         elif self.phase is FlowPhase.BLACK_MANUAL:
             self.panel.update(
                 "BLACK RESPONSE\n\nPlay any legal Black move on the board or type SAN."
             )
+        elif self.phase is FlowPhase.GAME_OVER:
+            outcome = self.workspace.outcome
+            assert outcome is not None
+            self.panel.update(_format_game_over(outcome))
 
     def _mismatch_text(self) -> str:
         attempt = self.workspace.attempt
@@ -965,12 +1037,19 @@ class AuthorScreen(Screen[None]):
             FlowPhase.BLACK_SELECT: (
                 "UP/DOWN OR A/S/D/F SELECT · ENTER PLAY · M MANUAL · I TYPE"
             ),
+            FlowPhase.BLACK_ENGINE_ERROR: "M MANUAL · I TYPE SAN · R RETRY ENGINE",
             FlowPhase.BLACK_MANUAL: "PLAY BLACK · I TYPE SAN · ENTER CONFIRM",
+            FlowPhase.GAME_OVER: "R RESTART · Q QUIT",
             FlowPhase.SAVING: "SAVING",
             FlowPhase.ERROR: "ESC RETURN",
             FlowPhase.LOADING: "LOADING",
         }[self.phase]
-        self.status.update(f"[NAV] {instructions} · R RESTART · Q QUIT")
+        if self.phase is FlowPhase.BLACK_ENGINE_ERROR:
+            self.status.update(f"[NAV] {instructions} · CTRL+N RESTART · Q QUIT")
+        elif self.phase is FlowPhase.GAME_OVER:
+            self.status.update(f"[NAV] {instructions}")
+        else:
+            self.status.update(f"[NAV] {instructions} · R RESTART · Q QUIT")
 
     def _update_debug_status(self) -> None:
         turn = "white" if self.controller.board.turn is chess.WHITE else "black"
@@ -1011,3 +1090,24 @@ def _format_history(history: tuple[str, ...]) -> str:
         else:
             parts.append(san)
     return " ".join(parts)
+
+
+def _format_game_over(outcome: chess.Outcome) -> str:
+    labels = {
+        chess.Termination.CHECKMATE: "Checkmate",
+        chess.Termination.STALEMATE: "Stalemate",
+        chess.Termination.INSUFFICIENT_MATERIAL: "Insufficient material",
+        chess.Termination.SEVENTYFIVE_MOVES: "Seventy-five-move draw",
+        chess.Termination.FIVEFOLD_REPETITION: "Fivefold repetition",
+    }
+    termination = labels.get(
+        outcome.termination,
+        outcome.termination.name.replace("_", " ").title(),
+    )
+    if outcome.winner is chess.WHITE:
+        result = "White wins"
+    elif outcome.winner is chess.BLACK:
+        result = "Black wins"
+    else:
+        result = "Draw"
+    return f"GAME OVER\n\n{termination}\n{result}\n\n[R] Restart flow\n[Q] Quit"

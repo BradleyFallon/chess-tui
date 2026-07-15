@@ -4,11 +4,19 @@ import asyncio
 from pathlib import Path
 import shutil
 
+import chess
+
 from chess_tui import AppMode, DEFAULT_STARTING_FEN, parse_fen
-from chess_tui.flow import FlowStore
+from chess_tui.flow import DefaultRule, FlowStore, WhiteFlow
+from chess_tui.engine import ENGINE_PROTOTYPE_PROFILE, EngineProcessError, EngineProfile
 from chess_tui.game import square_from_name
 from chess_tui.input_mode import InputMode
 from chess_tui.layout import QuizLayoutMode
+from chess_tui.opening import (
+    FixtureOpeningMoveSource,
+    OpponentMovePlanner,
+    StockfishBotMoveSource,
+)
 from chess_tui.renderers.factory import create_piece_renderer
 from chess_tui.renderers.mode import RendererMode
 from chess_tui.runtime import TerminalCapabilityError
@@ -17,6 +25,14 @@ from chess_tui.tui import ChessBoard, ChessTui
 
 PROJECT_ROOT = Path(__file__).parents[1]
 LONDON_FLOW = PROJECT_ROOT / "flows" / "london.toml"
+
+
+def _write_flow(
+    path: Path,
+    start_fen: str,
+    defaults: tuple[DefaultRule, ...] = (),
+) -> None:
+    FlowStore().save(path, WhiteFlow(1, "Endgame test", start_fen, defaults, ()))
 
 
 def _click_move(screen: AuthorScreen, uci: str) -> None:
@@ -382,5 +398,160 @@ def test_flow_resize_preserves_run_and_renderer(tmp_path: Path) -> None:
             await pilot.pause()
             assert isinstance(screen.failure, TerminalCapabilityError)
             assert screen.history == ["d4"]
+
+    asyncio.run(run_test())
+
+
+def test_flow_enters_game_over_for_checkmate_after_white_move(
+    tmp_path: Path,
+) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "mate-white.toml"
+        _write_flow(path, "7k/8/5KQ1/8/8/8/8/8 w - - 0 1")
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await _submit_board_move(screen, pilot, "g6g7")
+
+            assert screen.phase is FlowPhase.GAME_OVER
+            assert "Checkmate\nWhite wins" in _panel_text(screen)
+            assert not screen.move_suggestions.display
+
+    asyncio.run(run_test())
+
+
+def test_flow_enters_game_over_for_checkmate_after_black_move(
+    tmp_path: Path,
+) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "mate-black.toml"
+        _write_flow(
+            path,
+            "rnbqkbnr/pppp1ppp/8/4p3/8/5P2/PPPPP1PP/RNBQKBNR " "w KQkq - 0 2",
+            (DefaultRule(1, "g4"),),
+        )
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await _submit_board_move(screen, pilot, "g2g4")
+            if screen.phase is FlowPhase.WHITE_RESULT_CORRECT:
+                await pilot.press("enter")
+                await pilot.pause()
+            assert screen.phase is FlowPhase.BLACK_SELECT
+
+            await pilot.press("m")
+            await pilot.pause()
+            await _submit_board_move(screen, pilot, "d8h4")
+
+            assert screen.phase is FlowPhase.GAME_OVER
+            assert "Checkmate\nBlack wins" in _panel_text(screen)
+
+    asyncio.run(run_test())
+
+
+def test_flow_enters_game_over_for_stalemate_and_can_restart(
+    tmp_path: Path,
+) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "stalemate.toml"
+        _write_flow(path, "k7/2Q5/2K5/8/8/8/8/8 w - - 0 1")
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await _submit_board_move(screen, pilot, "c7b6")
+            assert screen.phase is FlowPhase.GAME_OVER
+            assert "Stalemate\nDraw" in _panel_text(screen)
+
+            await pilot.press("r")
+            await pilot.pause()
+            assert screen.phase is FlowPhase.FRONTIER_MOVE
+            assert screen.history == []
+            assert screen.workspace.outcome is None
+
+    asyncio.run(run_test())
+
+
+def test_configured_engine_failure_is_explicit_and_retryable(
+    tmp_path: Path,
+) -> None:
+    async def run_test() -> None:
+        class FlakyEngine:
+            def __init__(self) -> None:
+                self.requests = 0
+                self.closed = False
+
+            async def choose_move(
+                self, board: chess.Board, profile: EngineProfile
+            ) -> chess.Move:
+                assert profile == ENGINE_PROTOTYPE_PROFILE
+                self.requests += 1
+                if self.requests == 1:
+                    raise EngineProcessError("simulated engine exit")
+                return chess.Move.from_uci("e7e5")
+
+            async def close(self) -> None:
+                self.closed = True
+
+        path = tmp_path / "engine-retry.toml"
+        _write_flow(path, DEFAULT_STARTING_FEN, (DefaultRule(1, "e4"),))
+        engine = FlakyEngine()
+        planner = OpponentMovePlanner(
+            FixtureOpeningMoveSource(),
+            StockfishBotMoveSource(engine),
+        )
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+            opponent_planner=planner,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await _submit_board_move(screen, pilot, "e2e4")
+            if screen.phase is FlowPhase.WHITE_RESULT_CORRECT:
+                await pilot.press("enter")
+                await pilot.pause()
+
+            assert screen.phase is FlowPhase.BLACK_ENGINE_ERROR
+            panel = _panel_text(screen)
+            assert "ENGINE SUGGESTION FAILED" in panel
+            assert "simulated engine exit" in panel
+            assert "[M] Enter Black move manually" in panel
+            assert screen.move_suggestions.suggestions == ()
+
+            await pilot.press("r")
+            await pilot.pause()
+            assert screen.phase is FlowPhase.BLACK_SELECT
+            suggestion = screen.move_suggestions.highlighted_suggestion
+            assert suggestion is not None
+            assert suggestion.san == "e5"
+            assert suggestion.label == "ENGINE PROTOTYPE"
+            assert engine.requests == 2
+
+        assert engine.closed
 
     asyncio.run(run_test())

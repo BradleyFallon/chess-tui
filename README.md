@@ -12,6 +12,7 @@ chess-tui --help
 chess-tui --mode local-game
 chess-tui --mode quiz-demo
 chess-tui --mode flow --flow flows/london.toml
+chess-tui --mode flow --flow flows/london.toml --engine /path/to/stockfish
 chess-tui --renderer pixel-mask
 chess-tui --renderer unicode
 chess-tui --renderer legacy-sprite
@@ -78,10 +79,15 @@ White step.
   selection autofills the SAN field. You can also type SAN and press `Enter`.
 - On Black's turn, book-backed responses appear with game counts and
   frequencies. When no book row exists, a deterministic prototype bot supplies
-  up to four legal suggestions at any depth. Rows identify their `BOOK` or
-  `BOT` source, and previously explored responses are marked. Use `Up`/`Down`
-  or `A`/`S`/`D`/`F` and press `Enter`; press `M` for manual board entry or `I`
-  to type SAN.
+  up to four legal suggestions at any depth. Pass an explicit executable with
+  `--engine /path/to/stockfish` to use one persistent Stockfish suggestion
+  instead when book data ends. Engine failures remain visible and support
+  retry or manual entry; they never fall back silently. Rows identify their
+  `BOOK` or `BOT` source, and previously explored responses are marked. Use
+  `Up`/`Down` or `A`/`S`/`D`/`F` and press `Enter`; press `M` for manual board
+  entry or `I` to type SAN.
+- Completed positions enter `GAME OVER` with the termination and result instead
+  of requesting another move. Press `R` to restart the flow or `Q` to quit.
 - Flow interaction starts in `[NAV]`, where board controls and shortcuts are
   active. Press `I` or click the SAN field to enter `[TEXT: MOVE]`; printable
   keys are literal until `Enter` submits or `Escape` cancels the edit.
@@ -259,6 +265,7 @@ Copy this block when providing the project structure to an LLM:
 ## Customize me
 
 - Use `chess_tui.parse_fen()` to validate and normalize FEN strings.
-- The CLI accepts `--mode`, `--renderer`, and `--fen`; local-game opens the
+- The CLI accepts `--mode`, `--renderer`, and `--fen`; flow mode also accepts
+  `--flow` and an optional explicit `--engine` path. Local-game opens the
   standard starting position by default.
 - Add dependencies under `[project.dependencies]` in `pyproject.toml`.

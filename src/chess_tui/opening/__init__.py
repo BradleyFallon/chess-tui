@@ -1,7 +1,8 @@
 """Book-or-bot opponent suggestion boundary and local implementations."""
 
 from .bot import FixtureBotMoveSource
-from .errors import OpeningDataError, OpeningSourceError
+from .engine_bot import StockfishBotMoveSource
+from .errors import OpeningDataError, OpeningSourceError, OpponentPlannerError
 from .fixture import FixtureOpeningMoveSource
 from .models import MoveSuggestion, OpeningMove, SuggestionKind
 from .planner import OpponentMovePlanner
@@ -16,6 +17,8 @@ __all__ = [
     "OpeningMove",
     "OpeningMoveSource",
     "OpeningSourceError",
+    "OpponentPlannerError",
     "OpponentMovePlanner",
+    "StockfishBotMoveSource",
     "SuggestionKind",
 ]

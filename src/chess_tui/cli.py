@@ -9,6 +9,7 @@ import sys
 
 from . import DEFAULT_STARTING_FEN, __version__
 from .board import FenError, parse_fen
+from .engine import EngineError, validate_engine_path
 from .flow import FlowError
 from .modes import AppMode
 from .renderers.mode import RendererMode
@@ -37,6 +38,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=None,
         help="White-flow TOML file (required for flow mode).",
+    )
+    parser.add_argument(
+        "--engine",
+        type=Path,
+        default=None,
+        help="Explicit Stockfish executable path (flow mode only).",
     )
     parser.add_argument(
         "--renderer",
@@ -84,6 +91,13 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--flow is required when --mode flow is selected")
     if mode is not AppMode.FLOW and args.flow is not None:
         parser.error("--flow is only supported with --mode flow")
+    if mode is not AppMode.FLOW and args.engine is not None:
+        parser.error("--engine is only supported with --mode flow")
+    if args.engine is not None:
+        try:
+            args.engine = validate_engine_path(args.engine)
+        except EngineError as exc:
+            parser.error(str(exc))
 
     try:
         position = parse_fen(args.fen)
@@ -98,9 +112,23 @@ def main(argv: list[str] | None = None) -> int:
             renderer_mode=renderer_mode,
         )
         if mode is AppMode.FLOW:
-            run_chess_app(position, renderer=renderer, mode=mode, flow_path=args.flow)
+            if args.engine is None:
+                run_chess_app(
+                    position,
+                    renderer=renderer,
+                    mode=mode,
+                    flow_path=args.flow,
+                )
+            else:
+                run_chess_app(
+                    position,
+                    renderer=renderer,
+                    mode=mode,
+                    flow_path=args.flow,
+                    engine_path=args.engine,
+                )
         else:
             run_chess_app(position, renderer=renderer, mode=mode)
-    except (RuntimeRequirementError, FlowError) as exc:
+    except (RuntimeRequirementError, FlowError, EngineError) as exc:
         parser.exit(2, f"{parser.prog}: error: {exc}\n")
     return 0

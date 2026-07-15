@@ -387,6 +387,7 @@ class ChessTui(App[None]):
         renderer: PieceRenderer | None = None,
         fen: str | None = None,
         flow_path: Path | None = None,
+        engine_path: Path | None = None,
         opponent_planner: OpponentMovePlanner | None = None,
         opening_source: OpeningMoveSource | None = None,
     ) -> None:
@@ -421,6 +422,10 @@ class ChessTui(App[None]):
         else:
             if flow_path is None:
                 raise ValueError("flow mode requires a flow_path")
+            if engine_path is not None and opponent_planner is not None:
+                raise ValueError("Pass engine_path or opponent_planner, not both.")
+            if engine_path is not None and opening_source is not None:
+                raise ValueError("Pass engine_path or opening_source, not both.")
             if opponent_planner is not None and opening_source is not None:
                 raise ValueError("Pass opponent_planner or opening_source, not both.")
             if opponent_planner is None:
@@ -428,11 +433,20 @@ class ChessTui(App[None]):
                     FixtureBotMoveSource,
                     FixtureOpeningMoveSource,
                     OpponentMovePlanner,
+                    StockfishBotMoveSource,
                 )
 
+                if engine_path is not None:
+                    from .engine import StockfishEngineService
+
+                    bot_source = StockfishBotMoveSource(
+                        StockfishEngineService(engine_path)
+                    )
+                else:
+                    bot_source = FixtureBotMoveSource()
                 opponent_planner = OpponentMovePlanner(
                     opening_source or FixtureOpeningMoveSource(),
-                    FixtureBotMoveSource(),
+                    bot_source,
                 )
             self.initial_screen = AuthorScreen(
                 flow_path,
@@ -488,6 +502,7 @@ def run_chess_app(
     renderer: PieceRenderer | None = None,
     mode: AppMode = AppMode.LOCAL_GAME,
     flow_path: Path | None = None,
+    engine_path: Path | None = None,
     opponent_planner: OpponentMovePlanner | None = None,
     opening_source: OpeningMoveSource | None = None,
 ) -> None:
@@ -498,6 +513,7 @@ def run_chess_app(
         mode=mode,
         renderer=renderer,
         flow_path=flow_path,
+        engine_path=engine_path,
         opponent_planner=opponent_planner,
         opening_source=opening_source,
     )

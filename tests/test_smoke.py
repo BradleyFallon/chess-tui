@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import TextIO, cast
 
 import pytest
@@ -139,6 +140,21 @@ def test_cli_parser_accepts_flow_mode_with_flow() -> None:
     assert str(args.flow) == "flows/london.toml"
 
 
+def test_cli_parser_accepts_explicit_engine_path() -> None:
+    args = build_parser().parse_args(
+        [
+            "--mode",
+            "flow",
+            "--flow",
+            "flows/london.toml",
+            "--engine",
+            "/opt/stockfish",
+        ]
+    )
+
+    assert str(args.engine) == "/opt/stockfish"
+
+
 def test_cli_requires_flow_for_flow_mode(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -147,6 +163,35 @@ def test_cli_requires_flow_for_flow_mode(
 
     assert exc_info.value.code == 2
     assert "--flow is required" in capsys.readouterr().err
+
+
+def test_cli_rejects_engine_outside_flow_mode(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--engine", "/missing/stockfish"])
+
+    assert exc_info.value.code == 2
+    assert "--engine is only supported with --mode flow" in capsys.readouterr().err
+
+
+def test_cli_rejects_missing_engine_executable(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(
+            [
+                "--mode",
+                "flow",
+                "--flow",
+                "flows/london.toml",
+                "--engine",
+                "/missing/stockfish",
+            ]
+        )
+
+    assert exc_info.value.code == 2
+    assert "Engine executable does not exist" in capsys.readouterr().err
 
 
 def test_cli_renderer_flag_overrides_environment(
@@ -236,6 +281,47 @@ def test_cli_passes_flow_to_app(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert main(["--mode", "flow", "--flow", "flows/london.toml"]) == 0
     assert captured == [(AppMode.FLOW, "flows/london.toml")]
+
+
+def test_cli_passes_explicit_engine_to_flow_app(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = tmp_path / "stockfish"
+    engine.write_text("fixture", encoding="utf-8")
+    engine.chmod(0o755)
+    captured: list[tuple[AppMode, str, str]] = []
+    monkeypatch.setattr(
+        "chess_tui.cli.validate_textual_runtime",
+        lambda stream, *, renderer_mode=None: object(),
+    )
+
+    def fake_run(
+        position,
+        *,
+        renderer=None,
+        mode=AppMode.LOCAL_GAME,
+        flow_path=None,
+        engine_path=None,
+    ) -> None:
+        captured.append((mode, str(flow_path), str(engine_path)))
+
+    monkeypatch.setattr("chess_tui.cli.run_chess_app", fake_run)
+
+    assert (
+        main(
+            [
+                "--mode",
+                "flow",
+                "--flow",
+                "flows/london.toml",
+                "--engine",
+                str(engine),
+            ]
+        )
+        == 0
+    )
+    assert captured == [(AppMode.FLOW, "flows/london.toml", str(engine.resolve()))]
 
 
 def test_package_smoke() -> None:

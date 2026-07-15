@@ -53,18 +53,32 @@ class FlowWorkspace:
     def board(self) -> chess.Board:
         return self.controller.board
 
+    @property
+    def outcome(self) -> chess.Outcome | None:
+        return self.board.outcome(claim_draw=False)
+
     def restart(self) -> WhiteTurn:
+        self.restart_position()
+        return self.begin_white_turn()
+
+    def restart_position(self) -> None:
         self.controller.reset(chess.Board(self.author.flow.start_fen))
         self.history.clear()
         self.attempt = None
-        return self.begin_white_turn()
+        self.white_turn = None
 
     def reload(self) -> WhiteTurn | None:
         self.author.reload()
         self.attempt = None
-        return self.begin_white_turn() if self.board.turn is chess.WHITE else None
+        return (
+            self.begin_white_turn()
+            if self.board.turn is chess.WHITE and self.outcome is None
+            else None
+        )
 
     def begin_white_turn(self) -> WhiteTurn:
+        if self.outcome is not None:
+            raise FlowValidationError("Cannot begin a White turn after game over.")
         if self.board.turn is not chess.WHITE:
             raise FlowValidationError("Cannot begin a White turn with Black to move.")
         step = (len(self.history) // 2) + 1

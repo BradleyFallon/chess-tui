@@ -3,11 +3,15 @@ from __future__ import annotations
 import asyncio
 
 import chess
+import pytest
 
 from chess_tui.opening import (
     FixtureBotMoveSource,
     FixtureOpeningMoveSource,
     OpponentMovePlanner,
+    OpponentPlannerError,
+    MoveSuggestion,
+    OpeningMove,
     SuggestionKind,
 )
 from chess_tui.widgets import MoveSuggestionPanel
@@ -126,3 +130,74 @@ def test_move_suggestion_panel_shows_source_and_explored_state() -> None:
     bot = asyncio.run(planner.suggestions_for(_board_after("e4")))
     panel.set_suggestions(bot, context="After 1. e4:")
     assert "BOT · DETERMINISTIC PROTOTYPE" in panel.render().plain
+
+
+class StubBookSource:
+    def __init__(self, moves: tuple[OpeningMove, ...] = ()) -> None:
+        self.moves = moves
+
+    async def moves_for(self, board: chess.Board) -> tuple[OpeningMove, ...]:
+        return self.moves
+
+
+class StubBotSource:
+    def __init__(self, suggestions: tuple[MoveSuggestion, ...]) -> None:
+        self.suggestions = suggestions
+
+    async def moves_for(self, board: chess.Board) -> tuple[MoveSuggestion, ...]:
+        return self.suggestions
+
+    async def close(self) -> None:
+        return None
+
+
+def _bot_suggestion(
+    *,
+    uci: str = "e7e5",
+    san: str = "e5",
+    profile_id: str | None = "prototype",
+) -> MoveSuggestion:
+    return MoveSuggestion(
+        uci=uci,
+        san=san,
+        kind=SuggestionKind.BOT,
+        label="BOT",
+        profile_id=profile_id,
+    )
+
+
+@pytest.mark.parametrize(
+    ("suggestions", "message"),
+    [
+        ((_bot_suggestion(uci="bad"),), "invalid UCI"),
+        ((_bot_suggestion(uci="e2e4", san="e4"),), "not legal"),
+        ((_bot_suggestion(san="wrong"),), "canonical SAN"),
+        ((_bot_suggestion(), _bot_suggestion()), "duplicates UCI"),
+        ((_bot_suggestion(profile_id=""),), "empty BOT profile_id"),
+    ],
+)
+def test_planner_rejects_malformed_bot_suggestions(
+    suggestions: tuple[MoveSuggestion, ...],
+    message: str,
+) -> None:
+    planner = OpponentMovePlanner(StubBookSource(), StubBotSource(suggestions))
+
+    with pytest.raises(OpponentPlannerError, match=message):
+        asyncio.run(planner.suggestions_for(_board_after("e4")))
+
+
+@pytest.mark.parametrize(
+    "move",
+    [
+        OpeningMove("e7e5", "e5", -1, 0.2),
+        OpeningMove("e7e5", "e5", 10, 1.1),
+    ],
+)
+def test_planner_rejects_invalid_book_metadata(move: OpeningMove) -> None:
+    planner = OpponentMovePlanner(
+        StubBookSource((move,)),
+        StubBotSource(()),
+    )
+
+    with pytest.raises(OpponentPlannerError, match="invalid BOOK"):
+        asyncio.run(planner.suggestions_for(_board_after("e4")))

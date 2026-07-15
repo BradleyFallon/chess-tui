@@ -59,11 +59,17 @@ from `OpeningMoveSource` into generic `MoveSuggestion` values when book data is
 available. Otherwise it asks `BotMoveSource`; the current
 `FixtureBotMoveSource` deterministically ranks legal moves from the normalized
 position, profile id, and session seed. It works beyond the authored fixture
-depth but is not intended to model realistic chess strength. A later engine
-source can replace it without changing `FlowWorkspace` or the screen.
+depth but is not intended to model realistic chess strength. With
+`--engine /path/to/stockfish`, `StockfishBotMoveSource` instead uses a persistent
+UCI process through `StockfishEngineService` and returns one `ENGINE PROTOTYPE`
+move. Engine calls are serialized and kept off the Textual event loop. A
+configured engine failure is shown explicitly with retry and manual-entry
+controls; it never silently selects the fixture bot.
 
 `MoveSuggestionPanel` labels book and bot rows and marks explored branches.
 Manual board and typed-SAN entry remain available.
+Completed boards enter a dedicated `GAME_OVER` phase that reports checkmate,
+stalemate, automatic draw terminations, or other python-chess outcomes.
 Explicit `[NAV]`, `[TEXT: MOVE]`, and `[TEXT: NOTE]` modes determine whether
 printable keys invoke application shortcuts or enter literal text.
 Flow files persist explored SAN branches but not opening statistics, source
