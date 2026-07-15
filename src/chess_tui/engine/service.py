@@ -6,7 +6,7 @@ from typing import Protocol
 
 import chess
 
-from .models import EngineProfile
+from .models import AnalysedMove, EngineProfile
 
 
 class ChessEngineService(Protocol):
@@ -15,5 +15,12 @@ class ChessEngineService(Protocol):
         board: chess.Board,
         profile: EngineProfile,
     ) -> chess.Move: ...
+
+    async def analyse(
+        self,
+        board: chess.Board,
+        *,
+        count: int = 4,
+    ) -> tuple[AnalysedMove, ...]: ...
 
     async def close(self) -> None: ...

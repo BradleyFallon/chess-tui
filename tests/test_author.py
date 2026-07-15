@@ -8,7 +8,12 @@ import chess
 
 from chess_tui import AppMode, DEFAULT_STARTING_FEN, parse_fen
 from chess_tui.flow import DefaultRule, FlowStore, WhiteFlow
-from chess_tui.engine import ENGINE_PROTOTYPE_PROFILE, EngineProcessError, EngineProfile
+from chess_tui.engine import (
+    ENGINE_PROTOTYPE_PROFILE,
+    AnalysedMove,
+    EngineProcessError,
+    EngineProfile,
+)
 from chess_tui.game import square_from_name
 from chess_tui.input_mode import InputMode
 from chess_tui.layout import QuizLayoutMode
@@ -510,6 +515,19 @@ def test_configured_engine_failure_is_explicit_and_retryable(
                     raise EngineProcessError("simulated engine exit")
                 return chess.Move.from_uci("e7e5")
 
+            async def analyse(
+                self, board: chess.Board, *, count: int = 4
+            ) -> tuple[AnalysedMove, ...]:
+                move = next(iter(board.legal_moves))
+                return (
+                    AnalysedMove(
+                        move.uci(),
+                        board.san(move),
+                        0,
+                        (move.uci(),),
+                    ),
+                )
+
             async def close(self) -> None:
                 self.closed = True
 
@@ -551,6 +569,60 @@ def test_configured_engine_failure_is_explicit_and_retryable(
             assert suggestion.san == "e5"
             assert suggestion.label == "ENGINE PROTOTYPE"
             assert engine.requests == 2
+
+        assert engine.closed
+
+    asyncio.run(run_test())
+
+
+def test_mismatching_white_move_shows_structured_engine_review(
+    tmp_path: Path,
+) -> None:
+    async def run_test() -> None:
+        class ReviewEngine:
+            def __init__(self) -> None:
+                self.closed = False
+
+            async def choose_move(
+                self, board: chess.Board, profile: EngineProfile
+            ) -> chess.Move:
+                return next(iter(board.legal_moves))
+
+            async def analyse(
+                self, board: chess.Board, *, count: int = 4
+            ) -> tuple[AnalysedMove, ...]:
+                if board.turn is chess.WHITE:
+                    return (AnalysedMove("d2d4", "d4", 50, ("d2d4", "d7d5")),)
+                return (AnalysedMove("e7e5", "e5", -210, ("e7e5", "g1f3")),)
+
+            async def close(self) -> None:
+                self.closed = True
+
+        path = tmp_path / "review.toml"
+        _write_flow(path, DEFAULT_STARTING_FEN, (DefaultRule(1, "d4"),))
+        engine = ReviewEngine()
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+            analysis_engine=engine,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await _submit_board_move(screen, pilot, "e2e4")
+            await pilot.pause()
+
+            assert screen.phase is FlowPhase.WHITE_RESULT_MISMATCH
+            panel = _panel_text(screen)
+            assert "Engine review:\nBLUNDER" in panel
+            assert "Approximately 2.6 pawns worse than the best move." in panel
+            assert "Best move:\nd4" in panel
+            assert "[R] Retry" in panel
+            assert "[Enter] Keep saved rule" in panel
+            assert FlowStore().load(path).defaults[0].move_san == "d4"
 
         assert engine.closed
 

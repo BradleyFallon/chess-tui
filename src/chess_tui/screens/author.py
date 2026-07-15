@@ -21,7 +21,14 @@ from ..flow import (
     WhiteMoveAttempt,
     WhiteTurn,
 )
-from ..engine import EngineError
+from ..engine import (
+    DEFAULT_QUALITY_THRESHOLDS,
+    ChessEngineService,
+    EngineError,
+    MoveAssessment,
+    QualityThresholds,
+    assess_white_move,
+)
 from ..input_mode import InputMode, InputModeController
 from ..layout import QuizLayoutMode, choose_quiz_layout
 from ..opening import MoveSuggestion, OpeningSourceError, OpponentMovePlanner
@@ -123,6 +130,10 @@ class AuthorScreen(Screen[None]):
         flow_path: Path,
         renderer: PieceRenderer,
         opponent_planner: OpponentMovePlanner,
+        *,
+        analysis_engine: ChessEngineService | None = None,
+        analysis_engine_owned_by_planner: bool = False,
+        quality_thresholds: QualityThresholds | None = None,
     ) -> None:
         super().__init__()
         self.flow_path = flow_path
@@ -132,6 +143,9 @@ class AuthorScreen(Screen[None]):
         self.history = self.workspace.history
         self.renderer_controller = RendererController(renderer)
         self.opponent_planner = opponent_planner
+        self.analysis_engine = analysis_engine
+        self.analysis_engine_owned_by_planner = analysis_engine_owned_by_planner
+        self.quality_thresholds = quality_thresholds or DEFAULT_QUALITY_THRESHOLDS
         self.board = ChessBoard(
             self.controller.position,
             renderer=renderer,
@@ -160,6 +174,10 @@ class AuthorScreen(Screen[None]):
         self._suggestion_request_id = 0
         self._note_action: RuleNoteAction | None = None
         self._note_return_phase: FlowPhase | None = None
+        self._assessment: MoveAssessment | None = None
+        self._assessment_error: EngineError | None = None
+        self._assessment_loading = False
+        self._assessment_request_id = 0
 
     @property
     def renderer(self) -> PieceRenderer:
@@ -201,7 +219,14 @@ class AuthorScreen(Screen[None]):
         self._restart()
 
     async def on_unmount(self) -> None:
-        await self.opponent_planner.close()
+        try:
+            await self.opponent_planner.close()
+        finally:
+            if (
+                self.analysis_engine is not None
+                and not self.analysis_engine_owned_by_planner
+            ):
+                await self.analysis_engine.close()
 
     def on_resize(self, event: Resize) -> None:
         try:
@@ -467,6 +492,7 @@ class AuthorScreen(Screen[None]):
             self._start_rule_note(action)
         else:
             self.phase = FlowPhase.WHITE_RESULT_MISMATCH
+            self._start_engine_review(attempt)
             self._show_mismatch_controls()
             self._refresh_panel()
             self._update_status()
@@ -815,6 +841,62 @@ class AuthorScreen(Screen[None]):
         self._set_button_available("replace-exception", is_exception)
         self._set_button_available("delete-exception", is_exception)
 
+    def _start_engine_review(self, attempt: WhiteMoveAttempt) -> None:
+        self._assessment_request_id += 1
+        self._assessment = None
+        self._assessment_error = None
+        engine = self.analysis_engine
+        if engine is None:
+            self._assessment_loading = False
+            return
+        self._assessment_loading = True
+        request_id = self._assessment_request_id
+        self.run_worker(
+            self._review_white_attempt(request_id, attempt),
+            name="review-white-move",
+            group="engine-analysis",
+            exclusive=True,
+        )
+
+    async def _review_white_attempt(
+        self,
+        request_id: int,
+        attempt: WhiteMoveAttempt,
+    ) -> None:
+        engine = self.analysis_engine
+        assert engine is not None
+        move = chess.Move.from_uci(attempt.selected_move.move.uci)
+        try:
+            assessment = await assess_white_move(
+                engine,
+                attempt.board_before,
+                move,
+                thresholds=self.quality_thresholds,
+            )
+        except EngineError as error:
+            if not self._assessment_request_is_current(request_id, attempt):
+                return
+            self._assessment_error = error
+            self._assessment_loading = False
+        else:
+            if not self._assessment_request_is_current(request_id, attempt):
+                return
+            self._assessment = assessment
+            self._assessment_loading = False
+        if self.phase is FlowPhase.WHITE_RESULT_MISMATCH:
+            self._refresh_panel()
+            self._update_status()
+
+    def _assessment_request_is_current(
+        self,
+        request_id: int,
+        attempt: WhiteMoveAttempt,
+    ) -> bool:
+        return (
+            request_id == self._assessment_request_id
+            and self.workspace.attempt is attempt
+        )
+
     def _hide_interaction_controls(self) -> None:
         self._leave_text_mode()
         self.move_input.display = False
@@ -949,11 +1031,42 @@ class AuthorScreen(Screen[None]):
             "[E] Make selected move an exception\n[D] Make selected move the default\n"
             "[N] Edit saved note"
         )
+        engine_review = self._engine_review_text(attempt)
         return (
             "RULE MISMATCH\n\n"
             f"You played:\n{attempt.selected_move.san}\n\n"
             f"Saved rule:\n{recommendation.move_san}\n\n"
-            f"Source:\n{source}\n\n{controls}"
+            f"Source:\n{source}\n\n{engine_review}{controls}"
+        )
+
+    def _engine_review_text(self, attempt: WhiteMoveAttempt) -> str:
+        if self.analysis_engine is None:
+            return ""
+        if self._assessment_loading:
+            return "Engine review:\nAnalysing...\n\n"
+        if self._assessment_error is not None:
+            return "Engine review:\nUnavailable\n" f"{self._assessment_error}\n\n"
+        assessment = self._assessment
+        if assessment is None:
+            return ""
+        best_move = chess.Move.from_uci(assessment.best_uci)
+        best_san = attempt.board_before.san(best_move)
+        if assessment.loss_cp is not None:
+            detail = (
+                f"Approximately {assessment.loss_cp / 100:.1f} pawns worse "
+                "than the best move."
+            )
+        elif assessment.mate_after is not None and assessment.mate_after < 0:
+            detail = "Allows a forced mate for Black."
+        elif assessment.mate_before is not None and assessment.mate_before > 0:
+            detail = "Misses a forced mate for White."
+        else:
+            detail = "Mate score detected; centipawn loss is not used."
+        return (
+            "Engine review:\n"
+            f"{assessment.quality.value.upper()}\n"
+            f"{detail}\n\n"
+            f"Best move:\n{best_san}\n\n"
         )
 
     def _rule_note_text(self) -> str:

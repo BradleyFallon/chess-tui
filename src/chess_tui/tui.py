@@ -40,6 +40,7 @@ from .runtime import TerminalCapabilityError
 from .view import BoardInputMode, BoardViewState
 
 if TYPE_CHECKING:
+    from .engine import ChessEngineService, QualityThresholds
     from .opening import OpeningMoveSource, OpponentMovePlanner
 
 BOARD_LEFT_MARGIN = 3
@@ -388,6 +389,8 @@ class ChessTui(App[None]):
         fen: str | None = None,
         flow_path: Path | None = None,
         engine_path: Path | None = None,
+        analysis_engine: ChessEngineService | None = None,
+        quality_thresholds: QualityThresholds | None = None,
         opponent_planner: OpponentMovePlanner | None = None,
         opening_source: OpeningMoveSource | None = None,
     ) -> None:
@@ -424,6 +427,8 @@ class ChessTui(App[None]):
                 raise ValueError("flow mode requires a flow_path")
             if engine_path is not None and opponent_planner is not None:
                 raise ValueError("Pass engine_path or opponent_planner, not both.")
+            if engine_path is not None and analysis_engine is not None:
+                raise ValueError("Pass engine_path or analysis_engine, not both.")
             if engine_path is not None and opening_source is not None:
                 raise ValueError("Pass engine_path or opening_source, not both.")
             if opponent_planner is not None and opening_source is not None:
@@ -439,19 +444,25 @@ class ChessTui(App[None]):
                 if engine_path is not None:
                     from .engine import StockfishEngineService
 
-                    bot_source = StockfishBotMoveSource(
-                        StockfishEngineService(engine_path)
-                    )
+                    analysis_engine = StockfishEngineService(engine_path)
+                    bot_source = StockfishBotMoveSource(analysis_engine)
+                    analysis_engine_owned_by_planner = True
                 else:
                     bot_source = FixtureBotMoveSource()
+                    analysis_engine_owned_by_planner = False
                 opponent_planner = OpponentMovePlanner(
                     opening_source or FixtureOpeningMoveSource(),
                     bot_source,
                 )
+            else:
+                analysis_engine_owned_by_planner = False
             self.initial_screen = AuthorScreen(
                 flow_path,
                 selected_renderer,
                 opponent_planner,
+                analysis_engine=analysis_engine,
+                analysis_engine_owned_by_planner=analysis_engine_owned_by_planner,
+                quality_thresholds=quality_thresholds,
             )
 
     def on_mount(self) -> None:
@@ -503,6 +514,8 @@ def run_chess_app(
     mode: AppMode = AppMode.LOCAL_GAME,
     flow_path: Path | None = None,
     engine_path: Path | None = None,
+    analysis_engine: ChessEngineService | None = None,
+    quality_thresholds: QualityThresholds | None = None,
     opponent_planner: OpponentMovePlanner | None = None,
     opening_source: OpeningMoveSource | None = None,
 ) -> None:
@@ -514,6 +527,8 @@ def run_chess_app(
         renderer=renderer,
         flow_path=flow_path,
         engine_path=engine_path,
+        analysis_engine=analysis_engine,
+        quality_thresholds=quality_thresholds,
         opponent_planner=opponent_planner,
         opening_source=opening_source,
     )

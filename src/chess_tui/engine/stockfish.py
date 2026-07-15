@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypeVar
 
 import chess
 import chess.engine
@@ -17,9 +17,10 @@ from .errors import (
     EngineStartupError,
     EngineTimeoutError,
 )
-from .models import EngineProfile
+from .models import AnalysedMove, EngineProfile
 
 EngineFactory = Callable[[str], chess.engine.SimpleEngine]
+ResultT = TypeVar("ResultT")
 
 
 def validate_engine_path(path: Path | str) -> Path:
@@ -45,9 +46,15 @@ class StockfishEngineService:
         executable_path: Path | str,
         *,
         engine_factory: EngineFactory | None = None,
+        analysis_time_limit_seconds: float = 0.1,
     ) -> None:
         self.executable_path = validate_engine_path(executable_path)
+        if analysis_time_limit_seconds <= 0:
+            raise EngineConfigurationError(
+                "analysis_time_limit_seconds must be greater than zero."
+            )
         self._engine_factory = engine_factory or _start_uci_engine
+        self.analysis_time_limit_seconds = analysis_time_limit_seconds
         self._engine: chess.engine.SimpleEngine | None = None
         self._lock = asyncio.Lock()
         self._closed = False
@@ -70,7 +77,7 @@ class StockfishEngineService:
                 raise EngineProcessError("The Stockfish engine service is closed.")
             engine = await self._ensure_engine()
             try:
-                result = await asyncio.to_thread(
+                result = await _run_blocking(
                     engine.play,
                     position,
                     chess.engine.Limit(time=profile.time_limit_seconds),
@@ -102,6 +109,48 @@ class StockfishEngineService:
                 )
             return move
 
+    async def analyse(
+        self,
+        board: chess.Board,
+        *,
+        count: int = 4,
+    ) -> tuple[AnalysedMove, ...]:
+        if not 1 <= count <= 4:
+            raise EngineConfigurationError("Analysis count must be between 1 and 4.")
+        position = board.copy(stack=False)
+        if position.outcome(claim_draw=False) is not None:
+            raise EngineResultError("The completed position has no engine analysis.")
+
+        async with self._lock:
+            if self._closed:
+                raise EngineProcessError("The Stockfish engine service is closed.")
+            engine = await self._ensure_engine()
+            try:
+                result = await _run_blocking(
+                    engine.analyse,
+                    position,
+                    chess.engine.Limit(time=self.analysis_time_limit_seconds),
+                    multipv=count,
+                )
+            except TimeoutError as error:
+                raise EngineTimeoutError(
+                    "Stockfish timed out while analysing the position."
+                ) from error
+            except chess.engine.EngineTerminatedError as error:
+                self._engine = None
+                raise EngineProcessError(
+                    "Stockfish exited while analysing the position."
+                ) from error
+            except chess.engine.EngineError as error:
+                raise EngineProcessError(
+                    f"Stockfish could not analyse the position: {error}"
+                ) from error
+            except (OSError, RuntimeError) as error:
+                raise EngineProcessError(
+                    f"Stockfish process failed during analysis: {error}"
+                ) from error
+            return _validated_analysis(position, result, count)
+
     async def close(self) -> None:
         async with self._lock:
             if self._closed:
@@ -111,7 +160,7 @@ class StockfishEngineService:
             if engine is None:
                 return
             try:
-                await asyncio.to_thread(engine.quit)
+                await _run_blocking(engine.quit)
             except chess.engine.EngineTerminatedError:
                 return
             except (chess.engine.EngineError, OSError, RuntimeError) as error:
@@ -123,7 +172,7 @@ class StockfishEngineService:
         if self._engine is not None:
             return self._engine
         try:
-            engine = await asyncio.to_thread(
+            engine = await _run_blocking(
                 self._engine_factory,
                 str(self.executable_path),
             )
@@ -145,3 +194,74 @@ class StockfishEngineService:
 
 def _start_uci_engine(path: str) -> chess.engine.SimpleEngine:
     return chess.engine.SimpleEngine.popen_uci(path)
+
+
+async def _run_blocking(
+    function: Callable[..., ResultT],
+    *args: object,
+    **kwargs: object,
+) -> ResultT:
+    """Keep the serialized lock held until a cancelled thread call really ends."""
+
+    task = asyncio.create_task(asyncio.to_thread(function, *args, **kwargs))
+    try:
+        return await asyncio.shield(task)
+    except asyncio.CancelledError:
+        try:
+            await task
+        except Exception:
+            pass
+        raise
+
+
+def _validated_analysis(
+    board: chess.Board,
+    result: chess.engine.InfoDict | list[chess.engine.InfoDict],
+    count: int,
+) -> tuple[AnalysedMove, ...]:
+    rows = result if isinstance(result, list) else [result]
+    suggestions: list[AnalysedMove] = []
+    seen: set[str] = set()
+    for index, info in enumerate(rows[:count], start=1):
+        pv = info.get("pv")
+        score = info.get("score")
+        if not pv or not isinstance(score, chess.engine.PovScore):
+            raise EngineResultError(
+                f"Stockfish analysis row {index} has no score or principal variation."
+            )
+        pv_board = board.copy(stack=False)
+        for ply, pv_move in enumerate(pv, start=1):
+            if (
+                not isinstance(pv_move, chess.Move)
+                or pv_move not in pv_board.legal_moves
+            ):
+                raise EngineResultError(
+                    f"Stockfish analysis row {index} has an illegal principal-"
+                    f"variation move at ply {ply}."
+                )
+            pv_board.push(pv_move)
+        move = pv[0]
+        if move.uci() in seen:
+            raise EngineResultError(
+                f"Stockfish analysis duplicated root move {move.uci()!r}."
+            )
+        seen.add(move.uci())
+        white_score = score.pov(chess.WHITE)
+        evaluation_cp = white_score.score()
+        mate_in = white_score.mate()
+        if evaluation_cp is None and mate_in is None:
+            raise EngineResultError(
+                f"Stockfish analysis row {index} returned an unsupported score."
+            )
+        suggestions.append(
+            AnalysedMove(
+                uci=move.uci(),
+                san=board.san(move),
+                evaluation_cp=evaluation_cp,
+                principal_variation=tuple(item.uci() for item in pv),
+                mate_in=mate_in,
+            )
+        )
+    if not suggestions:
+        raise EngineResultError("Stockfish returned no analysis rows.")
+    return tuple(suggestions)

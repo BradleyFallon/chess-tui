@@ -66,6 +66,12 @@ move. Engine calls are serialized and kept off the Textual event loop. A
 configured engine failure is shown explicitly with retry and manual-entry
 controls; it never silently selects the fixture bot.
 
+The same service analyses a mismatching White move before and after it is
+played. Scores are normalized to White before calculating centipawn loss, and
+mate scores remain separate from centipawn values. The screen reports a
+configurable quality band and the best alternative while leaving every retry,
+keep, and repertoire-edit choice under user control.
+
 `MoveSuggestionPanel` labels book and bot rows and marks explored branches.
 Manual board and typed-SAN entry remain available.
 Completed boards enter a dedicated `GAME_OVER` phase that reports checkmate,

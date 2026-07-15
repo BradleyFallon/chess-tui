@@ -72,6 +72,9 @@ White step.
   apply the saved rule, and continue. Press `E` to make the move an exception,
   `D` to replace the numbered default, or `N` to edit the saved note. Exception
   mismatches also support `X` to replace the exception and `Delete` to remove it.
+  When `--engine` is configured, the mismatch also receives a White-normalized
+  engine review with `BEST`, `GOOD`, `INACCURACY`, `MISTAKE`, or `BLUNDER`, its
+  centipawn loss, and the engine's best move. This advice never edits the flow.
 - At the flow frontier, play the desired move, enter its note, and save it as the
   next default. If the numbered default is illegal in the current position, the
   legal move is saved as an exact-position exception instead.
