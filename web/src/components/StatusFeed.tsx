@@ -1,33 +1,262 @@
-import { type FormEvent, useEffect, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type KeyboardEvent,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 
-import type { AttemptSnapshot, WorkspaceSnapshot } from "../types/workspace";
+import type {
+  AttemptSnapshot,
+  PositionAnalysisSnapshot,
+  WorkspaceSnapshot,
+} from "../types/workspace";
 
 interface Props {
-  workspace: WorkspaceSnapshot; pending: boolean; hintVisible: boolean;
-  onHint: () => void; onRetry: () => void; onContinue: () => void;
-  onNextOpponent: () => void; onSubmitSan: (san: string) => void;
+  workspace: WorkspaceSnapshot;
+  pending: boolean;
+  hintVisible: boolean;
+  onHint: () => void;
+  onRetry: () => void;
+  onContinue: () => void;
+  onNextOpponent: () => void;
+  onSubmitSan: (san: string) => void;
+  onBack: () => void;
+  onRestart: () => void;
+  onAnalyse: () => void;
 }
 
-export function StatusFeed({ workspace, pending, hintVisible, onHint, onRetry, onContinue, onNextOpponent, onSubmitSan }: Props) {
+interface ChatCommand {
+  name: string;
+  description: string;
+  available: boolean;
+  run: () => void;
+}
+
+export function StatusFeed({
+  workspace,
+  pending,
+  hintVisible,
+  onHint,
+  onRetry,
+  onContinue,
+  onNextOpponent,
+  onSubmitSan,
+  onBack,
+  onRestart,
+  onAnalyse,
+}: Props) {
   const feedRef = useRef<HTMLDivElement>(null);
   const [moveText, setMoveText] = useState("");
-  const disabled = pending || workspace.phase === "policy-result" || workspace.phase === "game-over";
-  const submit = (event: FormEvent) => { event.preventDefault(); const san = moveText.trim(); if (!san || disabled) return; setMoveText(""); onSubmitSan(san); };
-  useEffect(() => { if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight; }, [workspace.activity.length, workspace.phase]);
-  return <aside className="workspace-panel status-panel" aria-labelledby="status-heading">
-    <div className="section-heading-row status-heading-row"><h2 id="status-heading">Game status</h2><span className="status-chip">live</span></div>
-    <div className="status-feed" role="log" aria-live="polite" ref={feedRef}>
-      {workspace.activity.map((item) => <article className={`status-note status-note-${item.kind}`} key={item.id}><span className="status-note-marker" aria-hidden="true" /><div><strong>{item.title}</strong><p>{item.message}</p></div></article>)}
-      <CurrentStatus workspace={workspace} pending={pending} hintVisible={hintVisible} onHint={onHint} onRetry={onRetry} onContinue={onContinue} onNextOpponent={onNextOpponent} />
-    </div>
-    <form className="status-composer" onSubmit={submit}>
-      <input aria-label="Enter move in SAN" value={moveText} onChange={(event) => setMoveText(event.target.value)} placeholder={disabled ? "Resolve the current result first" : "Type a move in SAN…"} disabled={disabled} autoComplete="off" spellCheck={false} enterKeyHint="send" data-move-composer="true" />
-      <button type="submit" aria-label="Submit move" disabled={disabled || !moveText.trim()}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-6-7-1Z" /><path d="m12 13 7-8" /></svg></button>
-    </form>
-  </aside>;
+  const [selectedCommand, setSelectedCommand] = useState(0);
+  const commandMode = moveText.startsWith("/");
+  const sanUnavailable =
+    workspace.phase === "policy-result" || workspace.phase === "game-over";
+  const commands: ChatCommand[] = [
+    {
+      name: "/analyse",
+      description: "Show local book moves and Stockfish's best candidates.",
+      available:
+        workspace.phase !== "game-over" &&
+        workspace.evaluation.status !== "engine-off",
+      run: onAnalyse,
+    },
+    {
+      name: "/hint",
+      description: "Highlight the piece selected by the current policy.",
+      available:
+        workspace.phase === "policy-ready" && Boolean(workspace.decision?.moveUci),
+      run: onHint,
+    },
+    {
+      name: "/next",
+      description: "Ask the engine to play the opponent's next move.",
+      available: workspace.phase === "opponent-ready",
+      run: onNextOpponent,
+    },
+    {
+      name: "/retry",
+      description: "Discard the attempted move and try the policy turn again.",
+      available: workspace.phase === "policy-result",
+      run: onRetry,
+    },
+    {
+      name: "/continue",
+      description: "Discard the mismatch and play the selected policy move.",
+      available:
+        workspace.phase === "policy-result" &&
+        workspace.attempt?.result === "mismatch",
+      run: onContinue,
+    },
+    {
+      name: "/back",
+      description: "Return to the previous policy decision.",
+      available: workspace.navigation.canBack,
+      run: onBack,
+    },
+    {
+      name: "/restart",
+      description: "Restart this line from its initial position.",
+      available: workspace.navigation.canRestart,
+      run: onRestart,
+    },
+    {
+      name: "/help",
+      description: "Show all chat commands.",
+      available: true,
+      run: () => setMoveText("/"),
+    },
+  ];
+  const commandQuery = commandMode ? moveText.slice(1).trim().toLowerCase() : "";
+  const visibleCommands = commands.filter(
+    (command) =>
+      command.available && command.name.slice(1).startsWith(commandQuery),
+  );
+
+  const executeCommand = (command: ChatCommand | undefined) => {
+    if (!command?.available || pending) return;
+    if (command.name !== "/help") setMoveText("");
+    command.run();
+  };
+  const submit = (event: FormEvent) => {
+    event.preventDefault();
+    const value = moveText.trim();
+    if (!value || pending) return;
+    if (commandMode) {
+      const exact = commands.find((command) => command.name === value.toLowerCase());
+      executeCommand(exact ?? visibleCommands[selectedCommand]);
+      return;
+    }
+    if (sanUnavailable) return;
+    setMoveText("");
+    onSubmitSan(value);
+  };
+  const handleComposerKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (!commandMode || !visibleCommands.length) return;
+    if (event.key === "ArrowDown") {
+      event.preventDefault();
+      setSelectedCommand((current) => (current + 1) % visibleCommands.length);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      setSelectedCommand(
+        (current) => (current - 1 + visibleCommands.length) % visibleCommands.length,
+      );
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      setMoveText("");
+    }
+  };
+
+  useEffect(() => {
+    if (feedRef.current) feedRef.current.scrollTop = feedRef.current.scrollHeight;
+  }, [workspace.activity.length, workspace.phase]);
+
+  return (
+    <aside className="workspace-panel status-panel" aria-labelledby="status-heading">
+      <div className="section-heading-row status-heading-row">
+        <h2 id="status-heading">Game status</h2>
+        <span className="status-chip">live</span>
+      </div>
+      <div className="status-feed" role="log" aria-live="polite" ref={feedRef}>
+        {workspace.activity.map((item) => (
+          <article className={`status-note status-note-${item.kind}`} key={item.id}>
+            <span className="status-note-marker" aria-hidden="true" />
+            <div>
+              <strong>{item.title}</strong>
+              <p>{item.message}</p>
+              {item.analysis && <PositionAnalysis analysis={item.analysis} />}
+            </div>
+          </article>
+        ))}
+        <CurrentStatus
+          workspace={workspace}
+          pending={pending}
+          hintVisible={hintVisible}
+          onHint={onHint}
+          onRetry={onRetry}
+          onContinue={onContinue}
+          onNextOpponent={onNextOpponent}
+        />
+      </div>
+      <div className="status-composer-shell">
+        {commandMode && (
+          <div className="command-menu" id="chat-command-menu" role="listbox" aria-label="Chat commands">
+            {visibleCommands.length ? (
+              visibleCommands.map((command, index) => (
+                <button
+                  className={index === selectedCommand ? "selected" : undefined}
+                  id={`chat-command-${command.name.slice(1)}`}
+                  key={command.name}
+                  type="button"
+                  role="option"
+                  aria-selected={index === selectedCommand}
+                  disabled={pending}
+                  onMouseEnter={() => setSelectedCommand(index)}
+                  onClick={() => executeCommand(command)}
+                >
+                  <strong>{command.name}</strong>
+                  <span title={command.description}>{command.description}</span>
+                </button>
+              ))
+            ) : (
+              <p className="command-menu-empty">No matching commands</p>
+            )}
+          </div>
+        )}
+        <form className="status-composer" onSubmit={submit}>
+          <input
+            aria-label="Enter move in SAN"
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={commandMode}
+            aria-controls={commandMode ? "chat-command-menu" : undefined}
+            aria-activedescendant={
+              commandMode && visibleCommands[selectedCommand]
+                ? `chat-command-${visibleCommands[selectedCommand].name.slice(1)}`
+                : undefined
+            }
+            value={moveText}
+            onChange={(event) => {
+              setMoveText(event.target.value);
+              setSelectedCommand(0);
+            }}
+            onKeyDown={handleComposerKeyDown}
+            placeholder="Type a move or / command…"
+            disabled={pending}
+            autoComplete="off"
+            spellCheck={false}
+            enterKeyHint="send"
+            data-move-composer="true"
+          />
+          <button
+            type="submit"
+            aria-label="Submit move"
+            disabled={
+              pending ||
+              !moveText.trim() ||
+              (!commandMode && sanUnavailable)
+            }
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true">
+              <path d="m5 12 14-7-4 14-3-6-7-1Z" />
+              <path d="m12 13 7-8" />
+            </svg>
+          </button>
+        </form>
+      </div>
+    </aside>
+  );
 }
 
-function CurrentStatus({ workspace, pending, hintVisible, onHint, onRetry, onContinue, onNextOpponent }: Omit<Props, "onSubmitSan">) {
+function CurrentStatus({
+  workspace,
+  pending,
+  hintVisible,
+  onHint,
+  onRetry,
+  onContinue,
+  onNextOpponent,
+}: Omit<Props, "onSubmitSan" | "onBack" | "onRestart" | "onAnalyse">) {
   if (workspace.phase === "policy-ready") {
     const side = capitalize(workspace.flow.side);
     return <article className="status-note status-note-prompt status-note-current"><span className="status-note-marker" aria-hidden="true" /><div>
@@ -61,6 +290,53 @@ function EngineReview({ attempt }: { attempt: AttemptSnapshot }) {
   if (review.status === "engine-off") return <p>Engine review is unavailable.</p>;
   if (review.status === "error") return <p className="inline-error">Engine review: {review.errorMessage}</p>;
   return <p className="status-engine-review">Engine: <strong>{review.quality}</strong>{review.lossCp === null ? "." : `, ${(review.lossCp / 100).toFixed(2)} pawns lost.`}{review.bestMoveSan ? ` Best move: ${review.bestMoveSan}.` : ""}</p>;
+}
+
+function PositionAnalysis({ analysis }: { analysis: PositionAnalysisSnapshot }) {
+  return (
+    <div className="position-analysis">
+      <AnalysisGroup title="Book moves" empty="No local book moves found.">
+        {analysis.bookMoves.map((move) => (
+          <li key={move.uci}>
+            <strong>{move.san}</strong>
+            <span>{bookMoveLabel(move.source, move.frequency)}</span>
+          </li>
+        ))}
+      </AnalysisGroup>
+      <AnalysisGroup title="Engine best" empty="No engine candidates returned.">
+        {analysis.engineMoves.map((move, index) => (
+          <li key={move.uci}>
+            <strong>{index + 1}. {move.san}</strong>
+            <span>{analysisScore(move.evaluationCp, move.mateIn)}</span>
+          </li>
+        ))}
+      </AnalysisGroup>
+    </div>
+  );
+}
+
+function AnalysisGroup({ title, empty, children }: { title: string; empty: string; children: React.ReactNode }) {
+  const items = Array.isArray(children) ? children : [children];
+  return (
+    <section>
+      <h3>{title}</h3>
+      {items.length ? <ol>{children}</ol> : <p>{empty}</p>}
+    </section>
+  );
+}
+
+function bookMoveLabel(source: string, frequency: number | null): string {
+  if (frequency !== null) return `${Math.round(frequency * 100)}% · local book`;
+  if (source === "policy") return "selected policy";
+  return "authored branch";
+}
+
+function analysisScore(cp: number | null, mate: number | null): string {
+  if (mate !== null) return `${mate >= 0 ? "+" : "-"}M${Math.abs(mate)}`;
+  if (cp === null) return "—";
+  const pawns = cp / 100;
+  if (pawns === 0) return "0.00";
+  return `${pawns > 0 ? "+" : ""}${pawns.toFixed(2)}`;
 }
 
 function decisionMessage(workspace: WorkspaceSnapshot): string {

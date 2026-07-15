@@ -4,15 +4,16 @@ import { EvaluationBar } from "../components/EvaluationBar";
 import { workspaceFixture } from "./fixtures";
 
 test("evaluation shows only the signed current score and bar", () => {
-  render(<EvaluationBar evaluation={{
-    ...workspaceFixture().evaluation,
-    centipawns: 80,
-    previousCentipawns: 20,
-    changeCentipawns: 60,
-  }} />);
+  const { container } = render(<EvaluationBar evaluation={{
+      ...workspaceFixture().evaluation,
+      centipawns: 80,
+      previousCentipawns: 20,
+      changeCentipawns: 60,
+    }} />);
 
   expect(screen.getByText("+0.80")).toBeInTheDocument();
   expect(screen.getByRole("meter", { name: "White-perspective evaluation: +0.80" })).toBeInTheDocument();
+  expect(container.querySelector(".evaluation-center-marker")).toBeInTheDocument();
   expect(screen.queryByText("Previous")).not.toBeInTheDocument();
   expect(screen.queryByText("Change")).not.toBeInTheDocument();
 });

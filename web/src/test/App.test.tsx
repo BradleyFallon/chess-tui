@@ -50,7 +50,7 @@ test("correct move advances directly to opponent and Enter calls Next", async ()
   vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
   await userEvent.click(await screen.findByRole("button", { name: "Play d4" }));
   expect(await screen.findByRole("button", { name: "Next" })).toBeInTheDocument();
-  const composer = screen.getByRole("textbox", { name: "Enter move in SAN" });
+  const composer = screen.getByRole("combobox", { name: "Enter move in SAN" });
   composer.focus(); fireEvent.keyDown(composer, { key: "Enter" });
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions/session-1/opponent/next", expect.objectContaining({ method: "POST" })));
 });
@@ -58,8 +58,70 @@ test("correct move advances directly to opponent and Enter calls Next", async ()
 test("SAN composer submits moves", async () => {
   const fetchMock = vi.fn().mockResolvedValue(jsonResponse(workspaceFixture()));
   vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
-  await userEvent.type(await screen.findByRole("textbox", { name: "Enter move in SAN" }), "d4{Enter}");
+  await userEvent.type(await screen.findByRole("combobox", { name: "Enter move in SAN" }), "d4{Enter}");
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions/session-1/moves/san", expect.objectContaining({ method: "POST", body: JSON.stringify({ san: "d4" }) })));
+});
+
+test("slash commands show concise help, filter, and execute from the composer", async () => {
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture())));
+  renderRoute("/develop");
+  const composer = await screen.findByRole("combobox", { name: "Enter move in SAN" });
+
+  await userEvent.type(composer, "/");
+  const menu = screen.getByRole("listbox", { name: "Chat commands" });
+  expect(within(menu).getByRole("option", { name: /\/hint/ })).toBeInTheDocument();
+  expect(within(menu).getByRole("option", { name: /\/help/ })).toBeInTheDocument();
+  expect(within(menu).queryByRole("option", { name: /\/next/ })).not.toBeInTheDocument();
+  expect(
+    within(menu).getByTitle("Highlight the piece selected by the current policy."),
+  ).toBeInTheDocument();
+
+  await userEvent.type(composer, "hin");
+  expect(within(menu).getAllByRole("option")).toHaveLength(1);
+  await userEvent.keyboard("{Enter}");
+  expect(screen.getByTestId("chessboard")).toHaveAttribute("data-hint", "d2");
+});
+
+test("analyse command adds book and engine suggestions to the status feed", async () => {
+  const initial = workspaceFixture();
+  const analysed = workspaceFixture({
+    activity: [
+      ...initial.activity,
+      {
+        id: 2,
+        kind: "info",
+        title: "Position analysis",
+        message: "Candidate moves for White from the local book and Stockfish.",
+        analysis: {
+          bookMoves: [
+            { uci: "d2d4", san: "d4", source: "policy", games: null, frequency: null },
+          ],
+          engineMoves: [
+            { uci: "d2d4", san: "d4", evaluationCp: 32, mateIn: null, principalVariation: ["d2d4", "g8f6"] },
+            { uci: "g1f3", san: "Nf3", evaluationCp: 20, mateIn: null, principalVariation: ["g1f3"] },
+          ],
+        },
+      },
+    ],
+  });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(initial))
+    .mockResolvedValueOnce(jsonResponse(analysed));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+
+  await userEvent.type(
+    await screen.findByRole("combobox", { name: "Enter move in SAN" }),
+    "/analyse{Enter}",
+  );
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/analysis",
+    expect.objectContaining({ method: "POST" }),
+  ));
+  expect(await screen.findByRole("heading", { name: "Book moves" })).toBeInTheDocument();
+  expect(screen.getByText("selected policy")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Engine best" })).toBeInTheDocument();
+  expect(screen.getByText("+0.32")).toBeInTheDocument();
 });
 
 test("mismatch shows retry, selected continuation, engine review, and editor direction", async () => {

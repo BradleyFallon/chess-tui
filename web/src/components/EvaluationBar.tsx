@@ -20,6 +20,7 @@ export function EvaluationBar({ evaluation }: EvaluationBarProps) {
       >
         <div className="evaluation-black" style={{ width: `${100 - percentage}%` }} />
         <div className="evaluation-white" style={{ width: `${percentage}%` }} />
+        <span className="evaluation-center-marker" aria-hidden="true" />
       </div>
       {evaluation.errorMessage && <p className="inline-error">{evaluation.errorMessage}</p>}
     </section>

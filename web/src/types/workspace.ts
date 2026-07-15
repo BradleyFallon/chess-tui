@@ -69,7 +69,21 @@ export interface EvaluationSnapshot {
   changeCentipawns: number | null; errorMessage: string | null;
 }
 
-export interface ActivitySnapshot { id: number; kind: "info" | "move" | "success" | "warning"; title: string; message: string; }
+export interface BookMoveSnapshot {
+  uci: string; san: string; source: "local-book" | "policy" | "opponent-branch";
+  games: number | null; frequency: number | null;
+}
+export interface EngineMoveSnapshot {
+  uci: string; san: string; evaluationCp: number | null; mateIn: number | null;
+  principalVariation: string[];
+}
+export interface PositionAnalysisSnapshot {
+  bookMoves: BookMoveSnapshot[]; engineMoves: EngineMoveSnapshot[];
+}
+export interface ActivitySnapshot {
+  id: number; kind: "info" | "move" | "success" | "warning";
+  title: string; message: string; analysis?: PositionAnalysisSnapshot | null;
+}
 export interface WorkspaceSnapshot {
   sessionId: string; mode: "develop";
   phase: "policy-ready" | "policy-result" | "opponent-ready" | "game-over";

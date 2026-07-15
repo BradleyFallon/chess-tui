@@ -30,6 +30,7 @@ from ..flow import (
     normalized_position_key,
 )
 from ..flow.position import replay_san
+from ..opening import FixtureOpeningMoveSource, OpeningSourceError
 from ..policy import MoveAction, OriginalPieceId, condition_to_data, parse_condition
 from ..policy.conditions import ConditionEvaluator
 from ..policy.models import EffectiveRuleStatus
@@ -42,9 +43,11 @@ from ..policy.runtime import (
 from .api_models import (
     ActivitySnapshot,
     AttemptSnapshot,
+    BookMoveSnapshot,
     ConditionSnapshot,
     DecisionSnapshot,
     EngineHealth,
+    EngineMoveSnapshot,
     EngineReviewSnapshot,
     EvaluationSnapshot,
     FlowSnapshot,
@@ -53,6 +56,7 @@ from .api_models import (
     NavigationSnapshot,
     OverrideRuntimeSnapshot,
     PositionSnapshot,
+    PositionAnalysisSnapshot,
     RuleGroupsSnapshot,
     RuleRuntimeSnapshot,
     UpdateOverrideRequest,
@@ -83,7 +87,7 @@ class EvaluationCache:
         self.engine = engine
         self.engine_identity = engine_identity
         self.profile_id = profile_id
-        self._cache: dict[tuple[str, str, str], AnalysedMove] = {}
+        self._cache: dict[tuple[str, str, str], tuple[AnalysedMove, ...]] = {}
         self._lock = asyncio.Lock()
         self._status = "off" if engine is None else "configured"
         self.last_error: str | None = None
@@ -93,24 +97,34 @@ class EvaluationCache:
         return EngineHealth(status=self._status)  # type: ignore[arg-type]
 
     async def analyse(self, board: chess.Board) -> AnalysedMove:
+        return (await self.analyse_lines(board, count=1))[0]
+
+    async def analyse_lines(
+        self, board: chess.Board, *, count: int
+    ) -> tuple[AnalysedMove, ...]:
         if self.engine is None:
             raise RuntimeError("Engine analysis is disabled.")
+        legal_count = board.legal_moves.count()
+        if legal_count == 0:
+            raise RuntimeError("The position has no legal moves to analyse.")
+        requested = min(count, legal_count)
         key = (normalized_position_key(board), self.profile_id, self.engine_identity)
         async with self._lock:
-            if key in self._cache:
-                return self._cache[key]
+            cached = self._cache.get(key, ())
+            if len(cached) >= requested:
+                return cached[:requested]
             try:
-                lines = await self.engine.analyse(board, count=1)
+                lines = await self.engine.analyse(board, count=requested)
                 if not lines:
                     raise RuntimeError("Engine returned no analysis rows.")
             except EngineError as error:
                 self._status = "error"
                 self.last_error = str(error)
                 raise
-            self._cache[key] = lines[0]
+            self._cache[key] = lines
             self._status = "ready"
             self.last_error = None
-            return lines[0]
+            return lines
 
 
 class SessionManager:
@@ -129,6 +143,7 @@ class SessionManager:
             startup_flow_path.resolve() if startup_flow_path else None
         )
         self.evaluations = EvaluationCache(engine, engine_identity=engine_identity)
+        self.opening_source = FixtureOpeningMoveSource()
         self.sessions: dict[str, DevelopmentSession] = {}
 
     async def create_session(
@@ -272,6 +287,113 @@ class SessionManager:
             if workspace.outcome is None:
                 workspace.begin_policy_turn()
             return await self._snapshot(session)
+
+    async def analyse_position(self, session_id: str) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            if workspace.outcome is not None:
+                raise WebApiError(
+                    ApiErrorCode.INVALID_REQUEST,
+                    "The finished position has no candidate moves to analyse.",
+                )
+            if self.evaluations.engine is None:
+                raise WebApiError(
+                    ApiErrorCode.ENGINE_ERROR,
+                    "Position analysis requires a configured chess engine.",
+                    status_code=503,
+                )
+            board = workspace.board.copy(stack=False)
+            try:
+                book_moves = await self._book_moves(workspace, board)
+                engine_lines = await self.evaluations.analyse_lines(board, count=4)
+            except OpeningSourceError as error:
+                raise WebApiError(
+                    ApiErrorCode.INVALID_REQUEST,
+                    f"The local opening book could not analyse this position: {error}",
+                    status_code=500,
+                ) from error
+            except (EngineError, RuntimeError) as error:
+                raise WebApiError(
+                    ApiErrorCode.ENGINE_ERROR,
+                    f"The chess engine could not analyse this position: {error}",
+                    status_code=502,
+                ) from error
+            analysis = PositionAnalysisSnapshot(
+                book_moves=book_moves,
+                engine_moves=[
+                    EngineMoveSnapshot(
+                        uci=line.uci,
+                        san=line.san,
+                        evaluation_cp=line.evaluation_cp,
+                        mate_in=line.mate_in,
+                        principal_variation=list(line.principal_variation),
+                    )
+                    for line in engine_lines
+                ],
+            )
+            side = "White" if board.turn == chess.WHITE else "Black"
+            self._append_activity(
+                session,
+                "info",
+                "Position analysis",
+                f"Candidate moves for {side} from the local book and Stockfish.",
+                analysis=analysis,
+            )
+            return await self._snapshot(session)
+
+    async def _book_moves(
+        self, workspace: FlowWorkspace, board: chess.Board
+    ) -> list[BookMoveSnapshot]:
+        suggestions: list[BookMoveSnapshot] = []
+        seen: set[str] = set()
+        for move in await self.opening_source.moves_for(board):
+            suggestions.append(
+                BookMoveSnapshot(
+                    uci=move.uci,
+                    san=move.san,
+                    source="local-book",
+                    games=move.games,
+                    frequency=move.frequency,
+                )
+            )
+            seen.add(move.uci)
+
+        if workspace.attempt is None and workspace.is_policy_turn:
+            decision = workspace.policy_turn or workspace.begin_policy_turn()
+            if decision.decision.move is not None:
+                move = decision.decision.move
+                if move.uci() not in seen:
+                    suggestions.append(
+                        BookMoveSnapshot(
+                            uci=move.uci(),
+                            san=decision.decision.move_san or board.san(move),
+                            source="policy",
+                        )
+                    )
+                    seen.add(move.uci())
+
+        visible_history = tuple(workspace.history)
+        if workspace.attempt is not None:
+            visible_history += (workspace.attempt.selected_move.san,)
+        for reply in workspace.author.flow.opponent_replies:
+            if reply.after_san != visible_history:
+                continue
+            try:
+                move = board.parse_san(reply.move_san)
+            except ValueError:
+                continue
+            if move.uci() in seen:
+                continue
+            suggestions.append(
+                BookMoveSnapshot(
+                    uci=move.uci(),
+                    san=board.san(move),
+                    source="opponent-branch",
+                )
+            )
+            seen.add(move.uci())
+        return suggestions[:6]
 
     async def update_rule(
         self, session_id: str, rule_id: str, payload: UpdateRuleRequest
@@ -604,10 +726,16 @@ class SessionManager:
         kind: Literal["info", "move", "success", "warning"],
         title: str,
         message: str,
+        *,
+        analysis: PositionAnalysisSnapshot | None = None,
     ) -> None:
         session.activity.append(
             ActivitySnapshot(
-                id=session.next_activity_id, kind=kind, title=title, message=message
+                id=session.next_activity_id,
+                kind=kind,
+                title=title,
+                message=message,
+                analysis=analysis,
             )
         )
         session.next_activity_id += 1

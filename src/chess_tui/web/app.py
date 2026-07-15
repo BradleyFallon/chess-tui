@@ -204,6 +204,13 @@ def _register_api_routes(application: FastAPI) -> None:
     ) -> WorkspaceSnapshot:
         return await _manager(request).play_next_opponent(session_id)
 
+    @application.post(
+        "/api/sessions/{session_id}/analysis",
+        response_model=WorkspaceSnapshot,
+    )
+    async def analyse_position(request: Request, session_id: str) -> WorkspaceSnapshot:
+        return await _manager(request).analyse_position(session_id)
+
     @application.put(
         "/api/sessions/{session_id}/rules/{rule_id}",
         response_model=WorkspaceSnapshot,

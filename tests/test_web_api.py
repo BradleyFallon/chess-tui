@@ -109,6 +109,74 @@ def test_engine_review_and_next_opponent(tmp_path: Path) -> None:
         assert response.json()["phase"] == "policy-ready"
 
 
+def test_position_analysis_returns_book_and_engine_candidates(tmp_path: Path) -> None:
+    class CountingEngine(FixtureEngineService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.analysis_counts: list[int] = []
+
+        async def analyse(self, board, *, count=4):
+            self.analysis_counts.append(count)
+            return await super().analyse(board, count=count)
+
+    engine = CountingEngine()
+    with web_client(tmp_path, engine=engine) as (client, _):
+        created = session(client)
+        session_id = created["sessionId"]
+        move(client, session_id, "d2d4")
+        response = client.post(f"/api/sessions/{session_id}/analysis", json={})
+
+        assert response.status_code == 200
+        snapshot = response.json()
+        assert snapshot["phase"] == "opponent-ready"
+        assert snapshot["position"]["historySan"] == ["d4"]
+        activity = snapshot["activity"][-1]
+        assert activity["title"] == "Position analysis"
+        analysis = activity["analysis"]
+        assert analysis["bookMoves"][0] == {
+            "uci": "d7d5",
+            "san": "d5",
+            "source": "local-book",
+            "games": 800_000,
+            "frequency": 0.46,
+        }
+        assert len(analysis["engineMoves"]) == 4
+        assert all(row["principalVariation"] for row in analysis["engineMoves"])
+
+        client.post(f"/api/sessions/{session_id}/analysis", json={})
+        assert engine.analysis_counts.count(4) == 1
+
+
+def test_position_analysis_includes_policy_move_and_requires_engine(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path, engine=FixtureEngineService()) as (client, _):
+        created = session(client)
+        response = client.post(
+            f"/api/sessions/{created['sessionId']}/analysis", json={}
+        )
+        book_moves = response.json()["activity"][-1]["analysis"]["bookMoves"]
+        assert book_moves == [
+            {
+                "uci": "d2d4",
+                "san": "d4",
+                "source": "policy",
+                "games": None,
+                "frequency": None,
+            }
+        ]
+
+    with web_client(tmp_path) as (client, _):
+        created = session(client)
+        response = client.post(
+            f"/api/sessions/{created['sessionId']}/analysis", json={}
+        )
+        assert response.status_code == 503
+        assert response.json()["error"]["code"] == "ENGINE_ERROR"
+        unchanged = client.get(f"/api/sessions/{created['sessionId']}").json()
+        assert len(unchanged["activity"]) == 1
+
+
 def test_engine_failure_returns_valid_snapshot_with_visible_error(
     tmp_path: Path,
 ) -> None:

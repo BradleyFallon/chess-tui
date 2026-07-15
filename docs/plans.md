@@ -7,3 +7,4 @@ How can we test for if there are any blunder scenarios with our current move seq
 put a center marker at the middle of the advantage bar.
 
 
+add commands to the chat. i want to type / and then it shows a list of commands I can use with a very short description of what they mean. if the description cant fit it should be truncated with elipses and show the full thing if I hover

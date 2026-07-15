@@ -19,6 +19,7 @@ export function DevelopPage() {
     retryPolicy,
     continuePolicy,
     playNextOpponent,
+    analysePosition,
     updateRule,
     updateOverride,
     back,
@@ -111,6 +112,9 @@ export function DevelopPage() {
             onContinue={() => void continuePolicy()}
             onNextOpponent={() => void playNextOpponent()}
             onSubmitSan={(san) => void submitSanMove(san)}
+            onBack={() => void back()}
+            onRestart={() => void restart()}
+            onAnalyse={() => void analysePosition()}
           />
         </div>
       </div>

@@ -84,6 +84,7 @@ export const workspaceApi = {
   retryPolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/retry`),
   continuePolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/continue`),
   playNextOpponent: (sessionId: string) => post(`/api/sessions/${sessionId}/opponent/next`),
+  analysePosition: (sessionId: string) => post(`/api/sessions/${sessionId}/analysis`),
   updateRule: (sessionId: string, ruleId: string, update: RuleUpdate) =>
     put(`/api/sessions/${sessionId}/rules/${encodeURIComponent(ruleId)}`, update),
   updateOverride: (sessionId: string, overrideId: string, update: OverrideUpdate) =>

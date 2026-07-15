@@ -208,11 +208,33 @@ class NavigationSnapshot(ApiModel):
     can_restart: bool
 
 
+class BookMoveSnapshot(ApiModel):
+    uci: str
+    san: str
+    source: Literal["local-book", "policy", "opponent-branch"]
+    games: int | None = None
+    frequency: float | None = None
+
+
+class EngineMoveSnapshot(ApiModel):
+    uci: str
+    san: str
+    evaluation_cp: int | None = None
+    mate_in: int | None = None
+    principal_variation: list[str] = Field(default_factory=list)
+
+
+class PositionAnalysisSnapshot(ApiModel):
+    book_moves: list[BookMoveSnapshot] = Field(default_factory=list)
+    engine_moves: list[EngineMoveSnapshot] = Field(default_factory=list)
+
+
 class ActivitySnapshot(ApiModel):
     id: int
     kind: Literal["info", "move", "success", "warning"]
     title: str
     message: str
+    analysis: PositionAnalysisSnapshot | None = None
 
 
 class WorkspaceSnapshot(ApiModel):

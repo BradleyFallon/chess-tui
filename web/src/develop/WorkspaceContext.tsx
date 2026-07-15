@@ -25,6 +25,7 @@ interface WorkspaceContextValue {
   retryPolicy: () => Promise<void>;
   continuePolicy: () => Promise<void>;
   playNextOpponent: () => Promise<void>;
+  analysePosition: () => Promise<void>;
   updateRule: (ruleId: string, update: RuleUpdate) => Promise<void>;
   updateOverride: (overrideId: string, update: OverrideUpdate) => Promise<void>;
   back: () => Promise<void>;
@@ -107,6 +108,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       retryPolicy: () => operate(workspaceApi.retryPolicy),
       continuePolicy: () => operate(workspaceApi.continuePolicy),
       playNextOpponent: () => operate(workspaceApi.playNextOpponent),
+      analysePosition: () => operate(workspaceApi.analysePosition),
       updateRule: (ruleId, update) => operate((id) => workspaceApi.updateRule(id, ruleId, update)),
       updateOverride: (overrideId, update) => operate((id) => workspaceApi.updateOverride(id, overrideId, update)),
       back: () => operate(workspaceApi.back),
