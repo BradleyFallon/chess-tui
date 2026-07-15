@@ -23,7 +23,7 @@ DEFAULT_FLOW_DIRECTORY = Path("flows")
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="chess-tui",
-        description="Play local chess or test and edit a White flow.",
+        description="Play local chess or test a deterministic opening flow.",
     )
     parser.add_argument(
         "--fen",
@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--flow",
         type=Path,
         default=None,
-        help="White-flow TOML file (defaults to the most recently saved flow).",
+        help="Version 2 flow TOML file (defaults to the most recently saved flow).",
     )
     parser.add_argument(
         "--engine",
@@ -82,7 +82,7 @@ def build_web_parser() -> argparse.ArgumentParser:
         "--flow",
         type=Path,
         default=None,
-        help="White-flow TOML file (defaults to the most recently saved flow).",
+        help="Version 2 flow TOML file (defaults to the most recently saved flow).",
     )
     parser.add_argument(
         "--engine",

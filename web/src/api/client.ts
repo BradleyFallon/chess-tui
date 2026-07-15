@@ -1,4 +1,4 @@
-import type { ApiErrorItem, WorkspaceSnapshot } from "../types/workspace";
+import type { ApiErrorItem, OverrideUpdate, RuleUpdate, WorkspaceSnapshot } from "../types/workspace";
 
 interface ErrorEnvelope {
   error: ApiErrorItem;
@@ -67,6 +67,9 @@ const post = (path: string, body?: unknown) =>
     body: JSON.stringify(body ?? {}),
   });
 
+const put = (path: string, body: unknown) =>
+  request<WorkspaceSnapshot>(path, { method: "PUT", body: JSON.stringify(body) });
+
 export const workspaceApi = {
   createSession: (flowPath?: string) =>
     post("/api/sessions", flowPath ? { flowPath } : {}),
@@ -78,21 +81,13 @@ export const workspaceApi = {
     post(`/api/sessions/${sessionId}/moves`, { uci }),
   submitSanMove: (sessionId: string, san: string) =>
     post(`/api/sessions/${sessionId}/moves/san`, { san }),
-  retryWhite: (sessionId: string) =>
-    post(`/api/sessions/${sessionId}/white/retry`),
-  keepWhite: (sessionId: string) =>
-    post(`/api/sessions/${sessionId}/white/keep`),
-  continueWhite: (sessionId: string) =>
-    post(`/api/sessions/${sessionId}/white/continue`),
-  playNextBlack: (sessionId: string) =>
-    post(`/api/sessions/${sessionId}/black/next`),
-  updateRule: (
-    sessionId: string,
-    ruleId: string,
-    kind: "default" | "exception" | "opponent-reply",
-    moveSan: string,
-    note: string | null,
-  ) => post(`/api/sessions/${sessionId}/rules/update`, { ruleId, kind, moveSan, note }),
+  retryPolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/retry`),
+  continuePolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/continue`),
+  playNextOpponent: (sessionId: string) => post(`/api/sessions/${sessionId}/opponent/next`),
+  updateRule: (sessionId: string, ruleId: string, update: RuleUpdate) =>
+    put(`/api/sessions/${sessionId}/rules/${encodeURIComponent(ruleId)}`, update),
+  updateOverride: (sessionId: string, overrideId: string, update: OverrideUpdate) =>
+    put(`/api/sessions/${sessionId}/overrides/${encodeURIComponent(overrideId)}`, update),
   back: (sessionId: string) => post(`/api/sessions/${sessionId}/back`),
   restart: (sessionId: string) => post(`/api/sessions/${sessionId}/restart`),
 };

@@ -1,24 +1,38 @@
-"""Immutable models for a local White opening policy."""
+"""Immutable persisted models for deterministic version 2 flows."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, TypeAlias
+
+from ..policy.models import Condition, MoveAction
+
+FlowSide: TypeAlias = Literal["white", "black"]
 
 
 @dataclass(frozen=True, slots=True)
-class DefaultRule:
-    step: int
-    move_san: str
-    note: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class ExceptionRule:
+class NamedState:
     id: str
-    step: int
+    when: Condition
+
+
+@dataclass(frozen=True, slots=True)
+class PolicyRule:
+    id: str
+    priority: int
+    move: MoveAction
+    enabled: bool = True
+    note: str | None = None
+    activate_when: Condition | None = None
+    retire_when: Condition | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ExactOverride:
+    id: str
     after_san: tuple[str, ...]
-    move_san: str
+    move: MoveAction
+    enabled: bool = True
     note: str | None = None
 
 
@@ -31,19 +45,12 @@ class OpponentReply:
 
 
 @dataclass(frozen=True, slots=True)
-class WhiteFlow:
+class Flow:
     version: int
     name: str
     start_fen: str
-    defaults: tuple[DefaultRule, ...]
-    exceptions: tuple[ExceptionRule, ...]
+    side: FlowSide
+    states: tuple[NamedState, ...] = ()
+    rules: tuple[PolicyRule, ...] = ()
+    overrides: tuple[ExactOverride, ...] = ()
     opponent_replies: tuple[OpponentReply, ...] = ()
-
-
-@dataclass(frozen=True, slots=True)
-class Recommendation:
-    step: int
-    move_san: str
-    note: str | None
-    source: Literal["default", "exception"]
-    exception_id: str | None = None

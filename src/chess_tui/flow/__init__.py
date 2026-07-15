@@ -1,44 +1,30 @@
-"""Persistent local White-flow authoring domain."""
+"""Persistent deterministic flow authoring domain."""
 
-from .author import AuthorBoardController, ConfirmedAuthorMove, WhiteFlowAuthor
-from .errors import (
-    FlowError,
-    FlowPolicyError,
-    FlowStorageError,
-    FlowValidationError,
-    RuleUnavailableError,
-)
-from .models import DefaultRule, ExceptionRule, OpponentReply, Recommendation, WhiteFlow
-from .policy import WhitePolicy
+from .author import AuthorBoardController, ConfirmedAuthorMove, FlowAuthor
+from .errors import FlowError, FlowPolicyError, FlowStorageError, FlowValidationError
+from .models import ExactOverride, Flow, NamedState, OpponentReply, PolicyRule
 from .position import normalized_position_key, replay_san
 from .store import FlowStore
-from .workspace import (
-    AttemptResult,
-    FlowWorkspace,
-    WhiteMoveAttempt,
-    WhiteTurn,
-)
+from .workspace import AttemptResult, FlowWorkspace, PolicyMoveAttempt, PolicyTurn
 
 __all__ = [
-    "DefaultRule",
+    "AttemptResult",
     "AuthorBoardController",
     "ConfirmedAuthorMove",
-    "ExceptionRule",
+    "ExactOverride",
+    "Flow",
+    "FlowAuthor",
     "FlowError",
     "FlowPolicyError",
     "FlowStorageError",
-    "FlowWorkspace",
     "FlowStore",
     "FlowValidationError",
+    "FlowWorkspace",
+    "NamedState",
     "OpponentReply",
-    "Recommendation",
-    "RuleUnavailableError",
-    "WhiteFlow",
-    "WhiteFlowAuthor",
-    "WhitePolicy",
-    "WhiteMoveAttempt",
-    "WhiteTurn",
-    "AttemptResult",
+    "PolicyMoveAttempt",
+    "PolicyRule",
+    "PolicyTurn",
     "normalized_position_key",
     "replay_san",
 ]

@@ -1,4 +1,4 @@
-"""Typed request and complete-workspace response models."""
+"""Typed request and complete-workspace response models for the v2 web API."""
 
 from __future__ import annotations
 
@@ -16,9 +16,7 @@ def _to_camel(value: str) -> str:
 
 class ApiModel(BaseModel):
     model_config = ConfigDict(
-        alias_generator=_to_camel,
-        populate_by_name=True,
-        extra="forbid",
+        alias_generator=_to_camel, populate_by_name=True, extra="forbid"
     )
 
 
@@ -34,11 +32,25 @@ class SanMoveRequest(ApiModel):
     san: str = Field(min_length=1, max_length=20)
 
 
+class MoveActionRequest(ApiModel):
+    piece: str = Field(min_length=3)
+    to: str = Field(min_length=2, max_length=2)
+
+
 class UpdateRuleRequest(ApiModel):
-    rule_id: str = Field(min_length=1)
-    kind: Literal["default", "exception", "opponent-reply"]
-    move_san: str = Field(min_length=1)
+    priority: int
+    enabled: bool = True
     note: str | None = None
+    move: MoveActionRequest
+    activate_when: dict[str, object] | None = None
+    retire_when: dict[str, object] | None = None
+
+
+class UpdateOverrideRequest(ApiModel):
+    after_san: list[str]
+    enabled: bool = True
+    note: str | None = None
+    move: MoveActionRequest
 
 
 class ApiErrorItem(ApiModel):
@@ -69,7 +81,8 @@ class FlowSnapshot(ApiModel):
     name: str
     version: int
     path: str
-    policy_model: Literal["legacy-v1"] = "legacy-v1"
+    side: Literal["white", "black"]
+    policy_model: Literal["deterministic-v2"] = "deterministic-v2"
 
 
 class GameOverSnapshot(ApiModel):
@@ -88,44 +101,69 @@ class PositionSnapshot(ApiModel):
     game_over: GameOverSnapshot | None
 
 
-class DecisionSnapshot(ApiModel):
-    status: Literal["ready", "frontier", "unavailable"]
+class ConditionSnapshot(ApiModel):
+    expression: dict[str, object]
+    value: bool
+    explanation: str
+
+
+class RuleRuntimeSnapshot(ApiModel):
+    kind: Literal["rule"] = "rule"
+    id: str
+    priority: int
+    enabled: bool
+    piece: str
+    destination: str
     move_uci: str | None
     move_san: str | None
-    source: Literal["default", "exception", "frontier"]
-    source_id: str | None
-    step: int
-    priority: int | None = None
+    legal: bool
+    lifecycle: Literal["dormant", "active", "retired"]
+    status: Literal["selected", "active", "waiting", "dormant", "retired", "disabled"]
+    selected: bool
+    shadowed: bool
     note: str | None
-    unavailable_reason: str | None = None
+    activate_when: ConditionSnapshot | None
+    retire_when: ConditionSnapshot | None
+    activated_at_ply: int | None
+    retired_at_ply: int | None
+    reason: str
 
 
-class RuleSummary(ApiModel):
-    source: Literal["default", "exception"]
-    source_id: str | None
-    step: int
-    move_san: str
-    note: str | None
-
-
-class ApplicableRuleSnapshot(ApiModel):
+class OverrideRuntimeSnapshot(ApiModel):
+    kind: Literal["exact-override"] = "exact-override"
     id: str
-    kind: Literal["default", "exception", "opponent-reply"]
-    status: Literal["selected", "fallback", "applicable"]
-    step: int
-    move_san: str
+    enabled: bool
+    after_san: list[str]
+    piece: str
+    destination: str
+    move_uci: str | None
+    move_san: str | None
+    matched: bool
+    legal: bool
+    selected: bool
     note: str | None
-    after_san: list[str] = Field(default_factory=list)
-    editable: bool
+    reason: str
 
 
 class RuleGroupsSnapshot(ApiModel):
-    selected: RuleSummary | None
-    applicable: list[ApplicableRuleSnapshot] = Field(default_factory=list)
-    active: list[RuleSummary] = Field(default_factory=list)
-    dormant: list[RuleSummary] = Field(default_factory=list)
-    retired: list[RuleSummary] = Field(default_factory=list)
-    model_message: str
+    selected: RuleRuntimeSnapshot | OverrideRuntimeSnapshot | None
+    applies_now: list[RuleRuntimeSnapshot] = Field(default_factory=list)
+    waiting: list[RuleRuntimeSnapshot] = Field(default_factory=list)
+    dormant: list[RuleRuntimeSnapshot] = Field(default_factory=list)
+    retired: list[RuleRuntimeSnapshot] = Field(default_factory=list)
+    disabled: list[RuleRuntimeSnapshot] = Field(default_factory=list)
+    overrides: list[OverrideRuntimeSnapshot] = Field(default_factory=list)
+
+
+class DecisionSnapshot(ApiModel):
+    status: Literal["ready", "frontier"]
+    move_uci: str | None
+    move_san: str | None
+    source: Literal["rule", "exact-override", "frontier"]
+    source_id: str | None
+    priority: int | None
+    note: str | None
+    trace: list[str] = Field(default_factory=list)
 
 
 class EngineReviewSnapshot(ApiModel):
@@ -142,18 +180,15 @@ class EngineReviewSnapshot(ApiModel):
 
 
 class AttemptSnapshot(ApiModel):
-    result: Literal[
-        "correct",
-        "mismatch-default",
-        "mismatch-exception",
-        "frontier",
-        "rule-unavailable",
-    ]
+    result: Literal["correct", "mismatch", "frontier"]
     played_uci: str
     played_san: str
     expected_uci: str | None
     expected_san: str | None
-    source: Literal["default", "exception", "frontier"]
+    source: Literal["rule", "exact-override", "frontier"]
+    source_id: str | None
+    note: str | None
+    trace: list[str] = Field(default_factory=list)
     engine_review: EngineReviewSnapshot | None
 
 
@@ -183,7 +218,7 @@ class ActivitySnapshot(ApiModel):
 class WorkspaceSnapshot(ApiModel):
     session_id: str
     mode: Literal["develop"] = "develop"
-    phase: Literal["white-ready", "white-result", "black-ready", "game-over"]
+    phase: Literal["policy-ready", "policy-result", "opponent-ready", "game-over"]
     flow: FlowSnapshot
     position: PositionSnapshot
     decision: DecisionSnapshot | None

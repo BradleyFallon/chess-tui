@@ -35,30 +35,25 @@ terminal changes. Renderer selection is strict: a screen that is too small
 shows a resize requirement and restores the same renderer and session state
 when enlarged.
 
-## Unified White-flow mode
+## Deterministic flow mode
 
-Plain `chess-tui` uses one test-first workflow in flow mode. It selects the most
-recently saved `flows/*.toml` file and discovers `stockfish` from `PATH`, failing
-startup rather than degrading to the deterministic bot when Stockfish is
-unavailable. `--flow` and `--engine` explicitly override those selections.
-The first ranked Black response is committed automatically in normal flow mode;
-`--select-black` restores the interactive suggestion panel when branch choice
-or manual entry is desired.
-The TOML file contains numbered White defaults and readable SAN histories for
-exact-position exceptions. `WhitePolicy` derives normalized position keys and
-resolves exceptions before defaults; `FlowStore` validates and atomically saves
-changes with a backup.
+Plain `chess-tui` selects the most recently saved strict version 2 flow and
+discovers Stockfish from `PATH`, failing startup rather than degrading to a
+fixture bot. `--flow` and `--engine` override those selections. The first ranked
+opponent response is committed automatically; `--select-black` restores the
+interactive selector and manual entry.
 
-Known White rules stay hidden until the user submits a board or SAN move. A
-correct attempt reveals the move and note; a mismatch can be retried, kept, or
-edited inline. Keeping a saved rule restores the pre-attempt position before
-applying it. At an undefined step, the selected move and note become the next
-default. If a numbered default is illegal, the selected legal move is offered
-as an exact-position exception.
+`FlowStore` parses named states, abstract rules, exact overrides, and separate
+opponent branch data. `PolicyRuntime` tracks original pieces, latched activation,
+retirement, legality, priority, and decision traces. Resolution is exact
+override, highest-priority active legal rule, then frontier. Version 1 and mixed
+schemas are rejected.
 
-`FlowWorkspace` owns the current board, SAN history, attempted White move,
-rollback, and turn transitions. The Textual screen renders that state while
-`WhiteFlowAuthor` owns policy and file writes.
+`FlowWorkspace` owns the board, committed SAN history, provisional controlled
+move, rollback, replay, and generic controlled/opponent turns. Back, Restart,
+reload, and edits reconstruct original-piece and lifecycle state by replaying
+the retained prefix. The Textual screen is a play and diagnostics surface; rule
+editing is provided by the local web UI and direct TOML editing.
 
 Black responses come from `OpponentMovePlanner`. It converts statistical rows
 from `OpeningMoveSource` into generic `MoveSuggestion` values when book data is
@@ -87,18 +82,16 @@ the active flow phase.
 Manual board and typed-SAN entry remain available.
 Completed boards enter a dedicated `GAME_OVER` phase that reports checkmate,
 stalemate, automatic draw terminations, or other python-chess outcomes.
-Default CLI flow sessions focus SAN entry in `[TEXT: MOVE]`. `Escape` returns to
-`[NAV]` for board shortcuts and `I` focuses SAN entry again. Explicit
-`[NAV]`, `[TEXT: MOVE]`, and `[TEXT: NOTE]` modes determine whether printable
-keys invoke application shortcuts or enter literal text.
+Default CLI flow sessions focus SAN entry. `Escape` returns to navigation for
+board shortcuts and `I` focuses SAN entry again.
 Flow files persist explored SAN branches but not opening statistics, source
 labels, bot profiles, or evaluations.
 
 ## Local web Development Mode
 
-The first browser slice lives in `web/` and communicates with
+The browser application lives in `web/` and communicates with
 `src/chess_tui/web/` through ordinary JSON HTTP. FastAPI routes adapt the same
-`FlowWorkspace`, `FlowStore`, `WhitePolicy`, and engine service used elsewhere;
+`FlowWorkspace`, `FlowStore`, `PolicyRuntime`, and engine service used elsewhere;
 complete snapshots keep React from reconstructing chess or policy state.
 
 ```bash
@@ -113,11 +106,13 @@ chess-tui web \
 ```
 
 The default bind is `127.0.0.1:8765`. Omitting `--engine` is supported and
-reported as `engine-off`. Development Mode supports controlled board input,
-White-result retry/continuation, manual Black moves, Back, Restart, legacy-v1
-rule/source inspection, structured errors, and White-normalized evaluation.
-Back replays the retained SAN prefix and never deletes persisted policy or
-branches.
+reported as `engine-off`. Development Mode supports controlled board/SAN input,
+generic policy retry/continuation, manual or engine opponent moves, Back,
+Restart, deterministic-v2 traces and lifecycle groups, rule and exact-override
+editing, structured errors, and White-normalized evaluation. Conditions are
+edited as JSON objects matching the TOML condition language. Python validates
+the whole flow, atomically saves it, and replays the active line before returning
+a new snapshot.
 
 For frontend development, run these in separate terminals:
 
@@ -130,8 +125,8 @@ cd web
 npm run dev
 ```
 
-Web Quiz, visual rule editing, version 2 rule parsing/lifecycle, forward
-navigation, WebSockets, accounts, databases, and hosted deployment are
-deferred. The authoritative specifications are
+Web Quiz, graphical condition construction, rule creation/deletion, forward
+navigation, WebSockets, accounts, databases, and hosted deployment are deferred.
+The authoritative specifications are
 `docs/design/rule-policy-v2.md` and
 `docs/design/web-development-mode.md`.

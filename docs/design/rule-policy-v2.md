@@ -2,13 +2,13 @@
 
 ## Status
 
-Draft design specification.
+Implemented design specification.
 
-This document defines the planned version 2 flow schema and policy runtime for deterministic, rule-based chess opening flows.
+This document defines the active version 2 flow schema and policy runtime for deterministic, rule-based chess opening flows.
 
 ## 1. Purpose
 
-Version 1 flows represent White’s opening primarily as:
+The retired version 1 format represented White’s opening primarily as:
 
 * Numbered default moves
 * Exact-position exceptions
@@ -65,7 +65,6 @@ Version 2 should support:
 * Explicit priority ordering
 * Automatic legality filtering
 * Exact-position overrides
-* Legacy numbered-default compatibility
 * Deterministic replay
 * Back navigation
 * Decision traces
@@ -87,7 +86,7 @@ The first implementation will not support:
 * Reusable rules that reactivate repeatedly
 * Generic tactical move selection
 * Automatic flow-strength or Elo ratings
-* Full visual rule editing
+* A graphical condition-builder UI
 
 Every rule must identify one concrete move.
 
@@ -349,6 +348,7 @@ A rule has:
 * An optional activation condition
 * An optional retirement condition
 * An optional note
+* An optional enabled flag
 
 ```toml
 [[rules]]
@@ -382,6 +382,7 @@ retire_when = { moved = "white:c2" }
 | Field           | Default                           |
 | --------------- | --------------------------------- |
 | `note`          | No explanation                    |
+| `enabled`       | `true`                           |
 | `activate_when` | Rule begins active                |
 | `retire_when`   | Rule retires only after execution |
 
@@ -791,8 +792,7 @@ At every controlled-side turn:
 ```text
 1. Exact-position override
 2. Highest-priority active legal abstract rule
-3. Legacy numbered default
-4. Flow frontier
+3. Flow frontier
 ```
 
 This ordering must remain explicit.
@@ -825,10 +825,10 @@ def resolve(
             move=move,
         )
 
-    return runtime.resolve_legacy_default(board)
+    return PolicyDecision.frontier(runtime.trace)
 ```
 
-If no abstract rule or legacy default resolves, the policy reaches the flow frontier.
+If no exact override or abstract rule resolves, the policy reaches the flow frontier.
 
 ---
 
@@ -1190,6 +1190,21 @@ They are appropriate when:
 
 Exact overrides do not need abstract lifecycle behavior in the initial implementation.
 
+They are authored with a legal SAN prefix and the same original-piece action
+used by abstract rules:
+
+```toml
+[[overrides]]
+id = "after-d4-e5"
+after = ["d4", "e5"]
+note = "Capture the offered pawn."
+move = { piece = "white:d2", to = "e5" }
+```
+
+The loader replays `after` from `start_fen` and indexes the override by the
+first four FEN fields. Duplicate normalized positions are rejected. Overrides
+may set `enabled = false`; they do not otherwise have lifecycle state.
+
 ---
 
 # 26. Determinism and replay
@@ -1306,7 +1321,6 @@ class OriginalPieceId:
 class MoveAction:
     piece: OriginalPieceId
     to_square: chess.Square
-    promotion: chess.PieceType | None = None
 ```
 
 ```python
@@ -1350,28 +1364,10 @@ class PolicyDecision:
 
 ---
 
-# 30. Version 1 compatibility
+# 30. Version compatibility
 
-Version 1 flows should remain loadable during migration.
-
-The resolution order is:
-
-```text
-1. Exact-position override
-2. Abstract rule
-3. Legacy numbered default
-4. Flow frontier
-```
-
-Existing numbered defaults should not be automatically rewritten as abstract rules.
-
-A flow may temporarily contain:
-
-* Abstract rules
-* Legacy defaults
-* Exact overrides
-
-This allows gradual migration.
+Only version 2 is supported. Version 1 files and mixed schemas fail validation;
+there is no fallback parser or resolver.
 
 ---
 
@@ -1388,7 +1384,6 @@ Implement:
 * Named states
 * TOML parsing
 * Validation
-* Version 1 compatibility
 
 Exit criterion:
 
@@ -1431,13 +1426,12 @@ Implement:
 * Priority ordering
 * Move construction
 * Automatic legality filtering
-* Legacy default fallback
 * Flow frontier
 * Decision traces
 
 Exit criterion:
 
-> Every tested White position returns one deterministic move or frontier.
+> Every tested controlled-side position returns one deterministic move or frontier.
 
 ## Phase 5: workspace integration
 
@@ -1478,12 +1472,11 @@ The version 2 policy foundation is complete when:
 10. Illegal active moves are skipped automatically.
 11. Illegal active moves do not retire their rules.
 12. Exact overrides outrank abstract rules.
-13. Abstract rules outrank legacy defaults.
-14. Replay produces deterministic lifecycle state.
-15. Back restores complete policy state.
-16. Decision traces identify the winning rule.
-17. Version 1 flows continue to load.
-18. No authored legality predicate exists.
+13. Replay produces deterministic lifecycle state.
+14. Back restores complete policy state.
+15. Decision traces identify the winning rule.
+16. Version 1 flows fail strict validation.
+17. No authored legality predicate exists.
 
 ---
 

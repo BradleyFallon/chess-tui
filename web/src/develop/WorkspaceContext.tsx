@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { ApiError, workspaceApi } from "../api/client";
-import type { WorkspaceSnapshot } from "../types/workspace";
+import type { OverrideUpdate, RuleUpdate, WorkspaceSnapshot } from "../types/workspace";
 
 const SESSION_KEY = "chess-flow-development-session";
 
@@ -22,16 +22,11 @@ interface WorkspaceContextValue {
   initialize: () => Promise<void>;
   submitMove: (uci: string) => Promise<void>;
   submitSanMove: (san: string) => Promise<void>;
-  retryWhite: () => Promise<void>;
-  keepWhite: () => Promise<void>;
-  continueWhite: () => Promise<void>;
-  playNextBlack: () => Promise<void>;
-  updateRule: (
-    ruleId: string,
-    kind: "default" | "exception" | "opponent-reply",
-    moveSan: string,
-    note: string | null,
-  ) => Promise<void>;
+  retryPolicy: () => Promise<void>;
+  continuePolicy: () => Promise<void>;
+  playNextOpponent: () => Promise<void>;
+  updateRule: (ruleId: string, update: RuleUpdate) => Promise<void>;
+  updateOverride: (overrideId: string, update: OverrideUpdate) => Promise<void>;
   back: () => Promise<void>;
   restart: () => Promise<void>;
 }
@@ -109,12 +104,11 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       initialize,
       submitMove: (uci) => operate((id) => workspaceApi.submitMove(id, uci)),
       submitSanMove: (san) => operate((id) => workspaceApi.submitSanMove(id, san)),
-      retryWhite: () => operate(workspaceApi.retryWhite),
-      keepWhite: () => operate(workspaceApi.keepWhite),
-      continueWhite: () => operate(workspaceApi.continueWhite),
-      playNextBlack: () => operate(workspaceApi.playNextBlack),
-      updateRule: (ruleId, kind, moveSan, note) =>
-        operate((id) => workspaceApi.updateRule(id, ruleId, kind, moveSan, note)),
+      retryPolicy: () => operate(workspaceApi.retryPolicy),
+      continuePolicy: () => operate(workspaceApi.continuePolicy),
+      playNextOpponent: () => operate(workspaceApi.playNextOpponent),
+      updateRule: (ruleId, update) => operate((id) => workspaceApi.updateRule(id, ruleId, update)),
+      updateOverride: (overrideId, update) => operate((id) => workspaceApi.updateOverride(id, overrideId, update)),
       back: () => operate(workspaceApi.back),
       restart: () => operate(workspaceApi.restart),
     }),

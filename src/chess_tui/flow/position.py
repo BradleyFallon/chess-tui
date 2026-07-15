@@ -23,7 +23,7 @@ def replay_san(
     context: str = "move history",
 ) -> chess.Board:
     try:
-        board = chess.Board(start_fen)
+        board = chess.Board() if start_fen == "startpos" else chess.Board(start_fen)
     except ValueError as exc:
         raise FlowValidationError(f"Invalid start_fen: {exc}") from exc
 

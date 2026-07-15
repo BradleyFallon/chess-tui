@@ -1,244 +1,232 @@
 from __future__ import annotations
 
 from pathlib import Path
-import shutil
 
 import chess
 import pytest
 
-from chess_tui.flow import (
-    DefaultRule,
-    ExceptionRule,
-    FlowStore,
-    FlowStorageError,
-    FlowValidationError,
-    OpponentReply,
-    RuleUnavailableError,
-    WhiteFlow,
-    WhiteFlowAuthor,
-    WhitePolicy,
-    normalized_position_key,
-    replay_san,
-)
+from chess_tui.flow import FlowStore, FlowValidationError
+from chess_tui.policy import ConditionEvaluator, OriginalPieceTracker, parse_condition
+from chess_tui.policy.runtime import DecisionSource, PolicyRuntime
 
-PROJECT_ROOT = Path(__file__).parents[1]
-LONDON_FLOW = PROJECT_ROOT / "tests" / "fixtures" / "london-flow.toml"
+FIXTURE = Path(__file__).parent / "fixtures" / "london-flow.toml"
 
 
-def test_store_loads_human_readable_london_flow() -> None:
-    flow = FlowStore().load(LONDON_FLOW)
-
-    assert flow.name == "London System"
-    assert [rule.move_san for rule in flow.defaults] == ["d4", "Bf4", "e3", "Nf3"]
-    assert flow.exceptions == (
-        ExceptionRule(
-            "after-d4-e5",
-            2,
-            ("d4", "e5"),
-            "dxe5",
-            "Capture the offered pawn.",
-        ),
-    )
-    assert [reply.move_san for reply in flow.opponent_replies] == [
-        "d5",
-        "Nf6",
-        "e6",
-        "c5",
+def test_loads_strict_v2_flow_and_round_trips() -> None:
+    store = FlowStore()
+    flow = store.load(FIXTURE)
+    assert flow.version == 2
+    assert flow.side == "white"
+    assert [rule.id for rule in flow.rules] == [
+        "develop-d-pawn",
+        "develop-dark-bishop",
+        "develop-e-pawn",
+        "develop-knight",
     ]
+    assert flow.overrides[0].after_san == ("d4", "e5")
+    assert store.decode(store.encode(flow)) == flow
 
 
-def test_author_persists_explored_opponent_reply_without_statistics(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    author = WhiteFlowAuthor(path)
-    after_d4 = replay_san(author.flow.start_fen, ("d4",))
-
-    author.record_opponent_reply(after_d4, ("d4",), "d5")
-    author.record_opponent_reply(after_d4, ("d4",), "d5")
-
-    reloaded = FlowStore().load(path)
-    expected = OpponentReply("after-d4-d5", ("d4",), "d5")
-    assert reloaded.opponent_replies.count(expected) == 1
-    assert len(reloaded.opponent_replies) == 4
-    encoded = path.read_text(encoding="utf-8")
-    assert "[[opponent_replies]]" in encoded
-    assert "games" not in encoded
-    assert "frequency" not in encoded
+def test_rejects_version_one_without_fallback() -> None:
+    with pytest.raises(FlowValidationError, match="expected 2"):
+        FlowStore().decode(
+            'version=1\nname="Old"\nstart_fen="startpos"\nside="white"\n'
+        )
 
 
-def test_normalized_position_key_ignores_only_move_clocks() -> None:
-    first = chess.Board()
-    second = chess.Board()
-    second.halfmove_clock = 17
-    second.fullmove_number = 42
+@pytest.mark.parametrize(
+    "condition, expected",
+    [
+        ({"moved": "white:d2"}, False),
+        ({"at": {"piece": "white:d2", "square": "d2"}}, True),
+        ({"occupied": "d2"}, True),
+        ({"empty": "e4"}, True),
+        ({"occupied_by": {"square": "d2", "color": "white", "type": "pawn"}}, True),
+        ({"attacked": "white:e1"}, False),
+        ({"attacked_by": {"target": "white:d2", "attacker": "black:d7"}}, False),
+        ({"in_check": "white"}, False),
+        ({"all": [{"occupied": "d2"}, {"empty": "d4"}]}, True),
+        ({"any": [{"empty": "d2"}, {"occupied": "e2"}]}, True),
+        ({"not": {"empty": "d2"}}, True),
+    ],
+)
+def test_evaluates_complete_condition_language(condition: dict, expected: bool) -> None:
+    board = chess.Board()
+    tracker = OriginalPieceTracker(board)
+    result = ConditionEvaluator(board, tracker, {}).evaluate(parse_condition(condition))
+    assert result.value is expected
+    assert result.explanation
 
-    assert normalized_position_key(first) == normalized_position_key(second)
 
-    second.turn = chess.BLACK
-    assert normalized_position_key(first) != normalized_position_key(second)
-
-    without_castling = first.copy(stack=False)
-    without_castling.castling_rights = chess.BB_EMPTY
-    assert normalized_position_key(first) != normalized_position_key(without_castling)
-
-    after_e4 = chess.Board()
-    after_e4.push_san("e4")
-    without_en_passant = after_e4.copy(stack=False)
-    without_en_passant.ep_square = None
-    assert normalized_position_key(after_e4) != normalized_position_key(
-        without_en_passant
+def test_named_state_reference_evaluates() -> None:
+    board = chess.Board()
+    tracker = OriginalPieceTracker(board)
+    states = {"ready": parse_condition({"at": {"piece": "white:d2", "square": "d2"}})}
+    result = ConditionEvaluator(board, tracker, states).evaluate(
+        parse_condition({"state": "ready"})
     )
+    assert result.value
 
 
-def test_policy_uses_default_then_exact_position_exception(tmp_path: Path) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    author = WhiteFlowAuthor(path)
-    author.remove_exception("after-d4-e5")
+def test_rejects_state_cycles_duplicate_priorities_and_missing_pieces() -> None:
+    cycle = """
+version=2
+name="Cycle"
+start_fen="startpos"
+side="white"
+[[states]]
+id="a"
+when={state="b"}
+[[states]]
+id="b"
+when={state="a"}
+"""
+    with pytest.raises(FlowValidationError, match="cycle"):
+        FlowStore().decode(cycle)
 
-    after_d5 = replay_san(author.flow.start_fen, ("d4", "d5"))
-    after_e5 = replay_san(author.flow.start_fen, ("d4", "e5"))
-    assert author.recommend(after_d5, 2).move_san == "Bf4"  # type: ignore[union-attr]
-    assert author.recommend(after_e5, 2).move_san == "Bf4"  # type: ignore[union-attr]
+    duplicate = """
+version=2
+name="Duplicate"
+start_fen="startpos"
+side="white"
+[[rules]]
+id="one"
+priority=1
+move={piece="white:d2",to="d4"}
+[[rules]]
+id="two"
+priority=1
+move={piece="white:e2",to="e4"}
+"""
+    with pytest.raises(FlowValidationError, match="duplicate 1"):
+        FlowStore().decode(duplicate)
 
-    author.add_exception(
-        after_e5,
-        2,
-        ("d4", "e5"),
-        "dxe5",
-        "Capture the offered pawn.",
+    missing = duplicate.replace('piece="white:d2"', 'piece="white:d3"').replace(
+        'priority=1\nmove={piece="white:e2"', 'priority=2\nmove={piece="white:e2"'
     )
-
-    d5_recommendation = author.recommend(after_d5, 2)
-    e5_recommendation = author.recommend(after_e5, 2)
-    assert d5_recommendation is not None
-    assert d5_recommendation.move_san == "Bf4"
-    assert d5_recommendation.source == "default"
-    assert e5_recommendation is not None
-    assert e5_recommendation.move_san == "dxe5"
-    assert e5_recommendation.source == "exception"
-    assert e5_recommendation.exception_id == "after-d4-e5"
+    with pytest.raises(FlowValidationError, match="absent from start_fen"):
+        FlowStore().decode(missing)
 
 
-def test_store_writes_atomically_and_keeps_backup(tmp_path: Path) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    original = path.read_text(encoding="utf-8")
+def test_resolver_uses_override_then_highest_legal_rule_and_frontier() -> None:
+    flow = FlowStore().load(FIXTURE)
+    runtime, board = PolicyRuntime.replay(flow, ("d4", "e5"))
+    decision = runtime.resolve(board)
+    assert decision.source is DecisionSource.EXACT_OVERRIDE
+    assert decision.move_san == "dxe5"
 
-    updated = FlowStore().replace_default(path, 2, "Bg5", "Pin the knight.")
+    runtime = PolicyRuntime(flow)
+    decision = runtime.resolve(chess.Board())
+    assert decision.source is DecisionSource.RULE
+    assert decision.source_id == "develop-d-pawn"
+    assert decision.move_san == "d4"
 
-    assert updated.defaults[1] == DefaultRule(2, "Bg5", "Pin the knight.")
-    assert FlowStore().load(path) == updated
-    assert path.with_suffix(".toml.bak").read_text(encoding="utf-8") == original
-    assert not [item for item in tmp_path.iterdir() if item.suffix == ".tmp"]
-
-
-def test_invalid_save_leaves_original_unchanged(tmp_path: Path) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    original = path.read_bytes()
-    flow = FlowStore().load(path)
-    invalid = WhiteFlow(
-        flow.version,
-        flow.name,
-        flow.start_fen,
-        (flow.defaults[1],),
-        flow.exceptions,
+    empty = FlowStore().decode(
+        'version=2\nname="Empty"\nstart_fen="startpos"\nside="white"\n'
     )
-
-    with pytest.raises(FlowValidationError, match="start at 1"):
-        FlowStore().save(path, invalid)
-
-    assert path.read_bytes() == original
+    assert PolicyRuntime(empty).resolve(chess.Board()).source is DecisionSource.FRONTIER
 
 
-def test_later_default_must_be_legal_in_a_realizable_line() -> None:
-    flow = FlowStore().load(LONDON_FLOW)
-    invalid = WhiteFlow(
-        flow.version,
-        flow.name,
-        flow.start_fen,
-        (
-            DefaultRule(1, "e4"),
-            DefaultRule(2, "e3"),
+def test_illegal_active_rule_waits_and_lower_priority_rule_wins() -> None:
+    flow = FlowStore().decode("""
+version=2
+name="Fallback"
+start_fen="startpos"
+side="white"
+[[rules]]
+id="blocked-bishop"
+priority=20
+move={piece="white:c1",to="f4"}
+[[rules]]
+id="pawn"
+priority=10
+move={piece="white:d2",to="d4"}
+""")
+    decision = PolicyRuntime(flow).resolve(chess.Board())
+    assert decision.source_id == "pawn"
+    blocked = next(
+        item for item in decision.rule_resolutions if item.rule.id == "blocked-bishop"
+    )
+    assert blocked.status.value == "waiting"
+    assert not blocked.legal
+
+
+def test_activation_latches_and_retirement_wins_same_transition() -> None:
+    flow = FlowStore().decode("""
+version=2
+name="Lifecycle"
+start_fen="startpos"
+side="white"
+[[rules]]
+id="c4-after-nc6"
+priority=20
+move={piece="white:c2",to="c4"}
+activate_when={at={piece="black:b8",square="c6"}}
+retire_when={moved="white:c2"}
+[[rules]]
+id="retirement-wins"
+priority=10
+move={piece="white:c2",to="c3"}
+activate_when={moved="white:c2"}
+retire_when={moved="white:c2"}
+""")
+    runtime, _ = PolicyRuntime.replay(flow, ("d4", "Nc6", "Nf3", "Nb8"))
+    assert runtime.rule_states["c4-after-nc6"].lifecycle.value == "active"
+    runtime, _ = PolicyRuntime.replay(flow, ("c3",))
+    assert runtime.rule_states["retirement-wins"].lifecycle.value == "retired"
+    assert runtime.rule_states["retirement-wins"].activated_at_ply is None
+
+
+def test_disabled_rule_is_visible_but_does_not_resolve() -> None:
+    flow = FlowStore().decode("""
+version=2
+name="Disabled"
+start_fen="startpos"
+side="white"
+[[rules]]
+id="disabled"
+priority=20
+enabled=false
+move={piece="white:e2",to="e4"}
+[[rules]]
+id="selected"
+priority=10
+move={piece="white:d2",to="d4"}
+""")
+    decision = PolicyRuntime(flow).resolve(chess.Board())
+    assert decision.source_id == "selected"
+    disabled = next(
+        item for item in decision.rule_resolutions if item.rule.id == "disabled"
+    )
+    assert disabled.status.value == "disabled"
+
+
+def test_tracker_handles_capture_castling_en_passant_and_promotion() -> None:
+    runtime, board = PolicyRuntime.replay(
+        FlowStore().decode(
+            'version=2\nname="Track"\nstart_fen="startpos"\nside="white"\n'
         ),
-        (),
+        ("e4", "a6", "e5", "d5", "exd6", "Nf6", "Nf3", "e6", "Be2", "Be7", "O-O"),
     )
-
-    with pytest.raises(FlowValidationError, match="legal realization"):
-        FlowStore().validate(invalid)
-
-
-def test_failed_atomic_replace_leaves_original_unchanged(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    original = path.read_bytes()
-    flow = FlowStore().load(path)
-
-    def fail_replace(source: Path, destination: Path) -> None:
-        raise OSError("simulated rename failure")
-
-    monkeypatch.setattr("chess_tui.flow.store.os.replace", fail_replace)
-
-    with pytest.raises(FlowStorageError, match="simulated rename failure"):
-        FlowStore().save(path, flow)
-
-    assert path.read_bytes() == original
-    assert not [item for item in tmp_path.iterdir() if item.suffix == ".tmp"]
-
-
-def test_duplicate_exception_positions_are_rejected() -> None:
-    base = FlowStore().load(LONDON_FLOW)
-    flow = WhiteFlow(
-        base.version,
-        base.name,
-        base.start_fen,
-        base.defaults,
-        (
-            ExceptionRule(
-                "knight-first",
-                3,
-                ("Nf3", "Nf6", "g3", "g6"),
-                "Bg2",
-            ),
-            ExceptionRule(
-                "pawn-first",
-                3,
-                ("g3", "g6", "Nf3", "Nf6"),
-                "Bg2",
-            ),
-        ),
+    white_pawn = runtime.tracker.get(
+        next(item.id for item in runtime.tracker.pieces if str(item.id) == "white:e2")
     )
+    black_pawn = runtime.tracker.get(
+        next(item.id for item in runtime.tracker.pieces if str(item.id) == "black:d7")
+    )
+    rook = runtime.tracker.get(
+        next(item.id for item in runtime.tracker.pieces if str(item.id) == "white:h1")
+    )
+    assert white_pawn.current_square is not None
+    assert chess.square_name(white_pawn.current_square) == "d6"
+    assert black_pawn.captured and black_pawn.current_square is None
+    assert rook.current_square is not None
+    assert rook.has_moved and chess.square_name(rook.current_square) == "f1"
+    assert board.king(chess.WHITE) == chess.G1
 
-    with pytest.raises(FlowValidationError, match="duplicates a normalized position"):
-        FlowStore().validate(flow)
-
-
-def test_policy_reports_illegal_default_without_skipping() -> None:
-    flow = FlowStore().load(LONDON_FLOW)
-    board = replay_san(flow.start_fen, ("d4", "d5", "e4", "e6"))
-
-    with pytest.raises(RuleUnavailableError, match="e3 is not legal") as exc_info:
-        WhitePolicy(flow).recommend(board, 3)
-
-    assert exc_info.value.recommendation.step == 3
-    assert exc_info.value.recommendation.move_san == "e3"
-
-
-def test_reload_failure_keeps_current_policy_in_memory(tmp_path: Path) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    author = WhiteFlowAuthor(path)
-    previous_flow = author.flow
-    previous_policy = author.policy
-    path.write_text("version = 99\n", encoding="utf-8")
-
-    with pytest.raises(FlowValidationError):
-        author.reload()
-
-    assert author.flow is previous_flow
-    assert author.policy is previous_policy
+    promotion_flow = FlowStore().decode(
+        'version=2\nname="Promotion"\nstart_fen="8/P7/8/8/8/8/7p/k6K w - - 0 1"\nside="white"\n'
+    )
+    promoted, _ = PolicyRuntime.replay(promotion_flow, ("a8=Q",))
+    pawn = next(item for item in promoted.tracker.pieces if str(item.id) == "white:a7")
+    assert pawn.piece_type == chess.QUEEN and pawn.has_moved

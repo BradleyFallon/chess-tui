@@ -22,6 +22,7 @@ from .api_models import (
     HealthResponse,
     MoveRequest,
     SanMoveRequest,
+    UpdateOverrideRequest,
     UpdateRuleRequest,
     WorkspaceSnapshot,
 )
@@ -181,49 +182,51 @@ def _register_api_routes(application: FastAPI) -> None:
         return await _manager(request).submit_san_move(session_id, payload.san)
 
     @application.post(
-        "/api/sessions/{session_id}/white/retry",
+        "/api/sessions/{session_id}/policy/retry",
         response_model=WorkspaceSnapshot,
     )
-    async def retry_white(request: Request, session_id: str) -> WorkspaceSnapshot:
-        return await _manager(request).retry_white(session_id)
+    async def retry_policy(request: Request, session_id: str) -> WorkspaceSnapshot:
+        return await _manager(request).retry_policy(session_id)
 
     @application.post(
-        "/api/sessions/{session_id}/white/keep",
+        "/api/sessions/{session_id}/policy/continue",
         response_model=WorkspaceSnapshot,
     )
-    async def keep_white(request: Request, session_id: str) -> WorkspaceSnapshot:
-        return await _manager(request).keep_white(session_id)
+    async def continue_policy(request: Request, session_id: str) -> WorkspaceSnapshot:
+        return await _manager(request).continue_policy(session_id)
 
     @application.post(
-        "/api/sessions/{session_id}/white/continue",
+        "/api/sessions/{session_id}/opponent/next",
         response_model=WorkspaceSnapshot,
     )
-    async def continue_white(request: Request, session_id: str) -> WorkspaceSnapshot:
-        return await _manager(request).continue_white(session_id)
+    async def play_next_opponent(
+        request: Request, session_id: str
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).play_next_opponent(session_id)
 
-    @application.post(
-        "/api/sessions/{session_id}/black/next",
-        response_model=WorkspaceSnapshot,
-    )
-    async def play_next_black(request: Request, session_id: str) -> WorkspaceSnapshot:
-        return await _manager(request).play_next_black(session_id)
-
-    @application.post(
-        "/api/sessions/{session_id}/rules/update",
+    @application.put(
+        "/api/sessions/{session_id}/rules/{rule_id}",
         response_model=WorkspaceSnapshot,
     )
     async def update_rule(
         request: Request,
         session_id: str,
+        rule_id: str,
         payload: UpdateRuleRequest,
     ) -> WorkspaceSnapshot:
-        return await _manager(request).update_rule(
-            session_id,
-            rule_id=payload.rule_id,
-            kind=payload.kind,
-            move_san=payload.move_san,
-            note=payload.note,
-        )
+        return await _manager(request).update_rule(session_id, rule_id, payload)
+
+    @application.put(
+        "/api/sessions/{session_id}/overrides/{override_id}",
+        response_model=WorkspaceSnapshot,
+    )
+    async def update_override(
+        request: Request,
+        session_id: str,
+        override_id: str,
+        payload: UpdateOverrideRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).update_override(session_id, override_id, payload)
 
     @application.post(
         "/api/sessions/{session_id}/back", response_model=WorkspaceSnapshot

@@ -2,7 +2,9 @@
 
 ## Status
 
-Draft design specification.
+Active design specification. The first local Development Mode slice and the
+deterministic-v2 rule editor are implemented; later analysis and Quiz surfaces
+remain planned.
 
 This document defines the planned local web application, its relationship to the existing Python core and terminal interface, and the product behavior of Quiz Mode and Flow Development Mode.
 
@@ -446,7 +448,6 @@ A more detailed trace may include:
 * Retirement explanation
 * Rule move construction
 * Rules skipped because their moves were illegal
-* Legacy-default fallback
 * Exact-override precedence
 
 The Python backend produces the trace. The browser only presents it.

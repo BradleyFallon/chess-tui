@@ -1,170 +1,82 @@
-"""Application service for persistent White-flow edits."""
+"""Application service for persisted version 2 flow data and board interaction."""
 
 from __future__ import annotations
 
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
-from dataclasses import dataclass
 
 import chess
 
 from ..board import ParsedFen, parse_fen
 from ..game import BoardInteraction, ChessMove
-from .models import ExceptionRule, OpponentReply, Recommendation, WhiteFlow
-from .policy import WhitePolicy
 from .errors import FlowValidationError
+from .models import ExactOverride, Flow, OpponentReply, PolicyRule
 from .position import normalized_position_key, parse_legal_san, replay_san
 from .store import FlowStore
 
 
-class WhiteFlowAuthor:
+class FlowAuthor:
     def __init__(self, path: Path, store: FlowStore | None = None) -> None:
         self.path = path
         self.store = store or FlowStore()
         self.flow = self.store.load(path)
-        self.policy = WhitePolicy(self.flow)
 
-    def reload(self) -> WhiteFlow:
-        flow = self.store.load(self.path)
-        policy = WhitePolicy(flow)
-        self.flow = flow
-        self.policy = policy
-        return flow
+    def reload(self) -> Flow:
+        self.flow = self.store.load(self.path)
+        return self.flow
 
-    def recommend(self, board: chess.Board, white_step: int) -> Recommendation | None:
-        return self.policy.recommend(board, white_step)
+    def save_candidate(self, candidate: Flow) -> Flow:
+        self.store.save(self.path, candidate)
+        self.flow = candidate
+        return candidate
 
-    def replace_default(
-        self,
-        board: chess.Board,
-        step: int,
-        move_san: str,
-        note: str | None,
-    ) -> WhiteFlow:
-        parse_legal_san(board, move_san, context=f"Default step {step}")
-        updated = self.store.replace_default(self.path, step, move_san, note)
-        self.flow = updated
-        self.policy = WhitePolicy(updated)
-        return updated
-
-    def add_exception(
-        self,
-        board: chess.Board,
-        step: int,
-        after_san: tuple[str, ...],
-        move_san: str,
-        note: str | None,
-    ) -> WhiteFlow:
-        parse_legal_san(board, move_san, context="Position exception")
-        replayed = replay_san(self.flow.start_fen, after_san)
-        if normalized_position_key(replayed) != normalized_position_key(board):
-            raise FlowValidationError(
-                "Exception SAN history does not resolve to the authored position."
-            )
-        exception = ExceptionRule(
-            id=_exception_id(after_san),
-            step=step,
-            after_san=after_san,
-            move_san=move_san,
-            note=note,
+    def candidate_with_rule(self, replacement: PolicyRule) -> Flow:
+        if all(rule.id != replacement.id for rule in self.flow.rules):
+            raise FlowValidationError(f"Unknown rule id: {replacement.id!r}.")
+        return replace(
+            self.flow,
+            rules=tuple(
+                replacement if rule.id == replacement.id else rule
+                for rule in self.flow.rules
+            ),
         )
-        updated = self.store.add_exception(self.path, exception)
-        self.flow = updated
-        self.policy = WhitePolicy(updated)
-        return updated
 
-    def remove_exception(self, exception_id: str) -> WhiteFlow:
-        updated = self.store.remove_exception(self.path, exception_id)
-        self.flow = updated
-        self.policy = WhitePolicy(updated)
-        return updated
-
-    def replace_exception(
-        self,
-        board: chess.Board,
-        exception_id: str,
-        move_san: str,
-        note: str | None,
-    ) -> WhiteFlow:
-        existing = next(
-            (rule for rule in self.flow.exceptions if rule.id == exception_id),
-            None,
+    def candidate_with_override(self, replacement: ExactOverride) -> Flow:
+        if all(item.id != replacement.id for item in self.flow.overrides):
+            raise FlowValidationError(f"Unknown override id: {replacement.id!r}.")
+        return replace(
+            self.flow,
+            overrides=tuple(
+                replacement if item.id == replacement.id else item
+                for item in self.flow.overrides
+            ),
         )
-        if existing is None:
-            raise FlowValidationError(f"Unknown exception id: {exception_id!r}.")
-        target = replay_san(self.flow.start_fen, existing.after_san)
-        if normalized_position_key(target) != normalized_position_key(board):
-            raise FlowValidationError(
-                "The exception does not apply to the current position."
-            )
-        parse_legal_san(board, move_san, context=f"Exception {exception_id!r}")
-        replacement = ExceptionRule(
-            existing.id,
-            existing.step,
-            existing.after_san,
-            move_san,
-            note,
-        )
-        updated = self.store.add_exception(self.path, replacement)
-        self.flow = updated
-        self.policy = WhitePolicy(updated)
-        return updated
-
-    def replace_opponent_reply(
-        self,
-        board: chess.Board,
-        reply_id: str,
-        move_san: str,
-        note: str | None,
-    ) -> WhiteFlow:
-        existing = next(
-            (rule for rule in self.flow.opponent_replies if rule.id == reply_id),
-            None,
-        )
-        if existing is None:
-            raise FlowValidationError(f"Unknown opponent reply id: {reply_id!r}.")
-        target = replay_san(self.flow.start_fen, existing.after_san)
-        if normalized_position_key(target) != normalized_position_key(board):
-            raise FlowValidationError(
-                "The opponent reply does not apply to the current position."
-            )
-        if board.turn is not chess.BLACK:
-            raise FlowValidationError("Opponent replies must target Black to move.")
-        parse_legal_san(board, move_san, context=f"Opponent reply {reply_id!r}")
-        replacement = OpponentReply(
-            existing.id,
-            existing.after_san,
-            move_san,
-            note,
-        )
-        updated = self.store.add_opponent_reply(self.path, replacement)
-        self.flow = updated
-        self.policy = WhitePolicy(updated)
-        return updated
 
     def record_opponent_reply(
         self,
         board: chess.Board,
         after_san: tuple[str, ...],
         move_san: str,
-    ) -> WhiteFlow:
+    ) -> Flow:
         replayed = replay_san(self.flow.start_fen, after_san)
         if normalized_position_key(replayed) != normalized_position_key(board):
             raise FlowValidationError(
                 "Opponent reply SAN history does not resolve to the authored position."
             )
-        if board.turn is not chess.BLACK:
-            raise FlowValidationError("Opponent replies must be recorded for Black.")
+        controlled = chess.WHITE if self.flow.side == "white" else chess.BLACK
+        if board.turn == controlled:
+            raise FlowValidationError(
+                "Opponent replies must target the uncontrolled side."
+            )
         parse_legal_san(board, move_san, context="Opponent reply")
         reply = OpponentReply(
             id=_branch_id(after_san + (move_san,)),
             after_san=after_san,
             move_san=move_san,
         )
-        updated = self.store.add_opponent_reply(self.path, reply)
-        self.flow = updated
-        self.policy = WhitePolicy(updated)
-        return updated
+        self.flow = self.store.add_opponent_reply(self.path, reply)
+        return self.flow
 
 
 @dataclass(frozen=True, slots=True)
@@ -215,13 +127,9 @@ class AuthorBoardController:
         return self._commit_move(chess.Move.from_uci(pending.uci))
 
     def confirm_san(self, san: str) -> ConfirmedAuthorMove:
-        """Parse and commit a typed legal SAN move."""
-
         return self._commit_move(self.board.parse_san(san))
 
     def confirm_uci(self, uci: str) -> ConfirmedAuthorMove:
-        """Parse and commit a legal UCI move supplied by a suggestion source."""
-
         move = chess.Move.from_uci(uci)
         if move not in self.board.legal_moves:
             raise ValueError(f"{uci!r} is not legal in {self.board.fen()}.")
@@ -284,10 +192,6 @@ class AuthorBoardController:
         self.interaction.checked_king = (
             self.board.king(self.board.turn) if self.board.is_check() else None
         )
-
-
-def _exception_id(history: tuple[str, ...]) -> str:
-    return _branch_id(history)
 
 
 def _branch_id(history: tuple[str, ...]) -> str:

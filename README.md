@@ -60,12 +60,14 @@ The server binds to `127.0.0.1:8765` and opens a browser by default. Use
 default Textual flow, the web workspace may omit `--engine`; evaluation then
 shows `engine-off` and never substitutes fixture analysis.
 
-Development Mode displays the Python-owned board, SAN history, current
-legacy-v1 recommendation, White result, Back/Restart navigation, and optional
-Stockfish evaluation. White and Black moves travel as UCI over HTTP, but Python
-remains authoritative for legality, SAN, policy, persistence, replay, and
-analysis. Web Quiz is a placeholder, while web rule editing and version 2
-abstract rules remain deferred. The Textual application remains supported.
+Development Mode displays the Python-owned board, SAN history, deterministic-v2
+decision and trace, grouped rule lifecycle, Back/Restart navigation, and
+optional Stockfish evaluation. Rules and exact-position overrides can be edited
+in the left panel using original-piece actions and JSON condition expressions;
+the complete flow is validated, saved atomically, and replayed after each edit.
+Moves travel as UCI or SAN over HTTP, but Python remains authoritative for
+legality, policy, persistence, replay, and analysis. Web Quiz remains a
+placeholder and the Textual application remains supported.
 
 For two-process frontend development:
 
@@ -109,58 +111,28 @@ data in ChessFlow.
 
 ## Flow controls
 
-Flow mode tests and edits one local White-flow TOML file. White recommendations
-resolve an exact-position exception first, then the numbered default for that
-White step.
+Flow mode runs a strict version 2 deterministic policy. Each rule has a unique
+priority, an original-piece action, optional activation and retirement
+conditions, and a one-shot lifecycle. Resolution is exact-position override,
+then the highest-priority active legal rule, then frontier.
 
-- When a White rule exists, play without seeing its move or note. Correct moves
-  reveal the saved rule briefly, then continue to Black's response.
-- On a mismatch, press `R` to retry or `Enter` to roll back the attempted move,
-  apply the saved rule, and continue. Press `E` to make the move an exception,
-  `D` to replace the numbered default, or `N` to edit the saved note. Exception
-  mismatches also support `X` to replace the exception and `Delete` to remove it.
-  When `--engine` is configured, the mismatch also receives a White-normalized
-  engine review with `BEST`, `GOOD`, `INACCURACY`, `MISTAKE`, or `BLUNDER`, its
-  centipawn loss, and the engine's best move. This advice never edits the flow.
-- At the flow frontier, play the desired move, enter its note, and save it as the
-  next default. If the numbered default is illegal in the current position, the
-  legal move is saved as an exact-position exception instead.
-- Play on the board and press `Enter` after highlighting the destination; board
-  selection autofills the SAN field. You can also type SAN and press `Enter`.
-- On Black's turn, the first ranked book response is played automatically; when
-  book data ends, Stockfish supplies and plays one response. Engine failures
-  remain visible and support retry or manual entry; they never fall back
-  silently. Launch with `--select-black` to show source-labelled suggestion
-  rows and explored state instead. In selector mode use `Up`/`Down` or
-  `A`/`S`/`D`/`F` and press `Enter`; press `M` for manual board entry or `I` to
-  type SAN.
-- Completed positions enter `GAME OVER` with the termination and result instead
-  of requesting another move. Press `R` to restart the flow or `Q` to quit.
-- A live Black/White advantage bar tracks each committed flow position using
-  the configured Stockfish service. Scores are normalized to White and display
-  pawn advantage, forced mate, draw, or final result without analysing hover,
-  selection, or other uncommitted board interactions.
-- Default flow interaction starts in `[TEXT: MOVE]` with the SAN field focused;
-  printable keys are literal until `Enter` submits. Press `Escape` to return to
-  `[NAV]` for board controls and shortcuts, and press `I` to focus SAN entry
-  again.
-- Rule notes open in `[TEXT: NOTE]`. `Enter` finishes text entry, then `S` saves
-  the selected rule action.
-- `R` restarts the line from the flow's starting FEN; `Ctrl+N` remains an alias.
-- `Ctrl+R` reloads and validates hand edits without discarding the active policy
-  when the file is invalid.
-- `Escape` leaves text mode or cancels a pending move or rule decision. `Q`
-  quits in NAV mode and types a literal `q` in TEXT mode.
-- A minimal debug line shows the current Flow phase, turn, White step, ply,
-  active rule source, and error state.
+- Play on the board or type SAN. A correct controlled-side move commits
+  immediately and advances to the opponent; a mismatch supports `R`/`Escape`
+  to retry and `Enter` to use the selected policy move.
+- The Textual side panel shows the selected rule, note, and full decision trace.
+  Edit v2 rules in local Web Development Mode or directly in TOML, then use
+  `Ctrl+R` to validate and deterministically replay the active line.
+- On the opponent turn, normal mode automatically plays the first ranked book
+  or Stockfish response. `--select-black` restores interactive selection and
+  manual board/SAN entry. Recorded replies are branch data, never policy rules.
+- The advantage bar and mismatch engine review are White-normalized; mate
+  scores remain separate and engine advice never edits policy.
+- `Ctrl+N` restarts, `I` focuses SAN entry, `Escape` leaves text entry or retries
+  a pending result, and `Q` quits from navigation mode.
 
-Flow files store readable SAN histories and explored Black replies. Opening
-counts, frequencies, bot profiles, and suggestion labels remain source data and
-are not persisted. The prototype bot is deterministic infrastructure, not a
-realistic strength or Elo model. Position matching derives piece placement,
-side to move, castling rights, and en-passant state while ignoring move clocks.
-Saves are atomic and preserve the previous file as `<flow>.bak`; generated
-backup files are ignored by Git.
+Version 1 flows are rejected. Saves are atomic and preserve the previous file
+as `<flow>.bak`; Back and Restart rebuild original-piece and lifecycle state by
+replaying SAN without deleting rules, overrides, or explored branches.
 
 ## Runtime contract
 

@@ -1,204 +1,144 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import shutil
 
 import pytest
 
-from chess_tui import DEFAULT_STARTING_FEN
-from chess_tui.flow import (
-    AttemptResult,
-    DefaultRule,
-    FlowStore,
-    FlowValidationError,
-    FlowWorkspace,
-    WhiteFlow,
-    replay_san,
-)
+from chess_tui.flow import AttemptResult, FlowStore, FlowValidationError, FlowWorkspace
+from chess_tui.policy import MoveAction, OriginalPieceId
 
-PROJECT_ROOT = Path(__file__).parents[1]
-LONDON_FLOW = PROJECT_ROOT / "tests" / "fixtures" / "london-flow.toml"
+FIXTURE = Path(__file__).parent / "fixtures" / "london-flow.toml"
 
 
-def test_workspace_retries_and_keeps_saved_rule_from_original_position(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    workspace = FlowWorkspace(path)
-
-    turn = workspace.restart()
-    assert turn.recommendation is not None
-    assert turn.recommendation.move_san == "d4"
-
-    mismatch = workspace.submit_white_uci("e2e4")
-    assert mismatch.result is AttemptResult.MISMATCH_DEFAULT
-    assert workspace.history == ["e4"]
-
-    workspace.retry_white_move()
-    assert workspace.history == []
-    assert workspace.board.fen() == replay_san(DEFAULT_STARTING_FEN, ()).fen()
-
-    workspace.submit_white_uci("e2e4")
-    kept = workspace.keep_saved_rule()
-    assert kept.san == "d4"
-    assert workspace.history == ["d4"]
-    assert workspace.board.piece_at(27) is not None
-
-
-def test_workspace_saves_frontier_move_as_next_default(tmp_path: Path) -> None:
-    path = tmp_path / "empty.toml"
-    FlowStore().save(path, WhiteFlow(1, "Empty", DEFAULT_STARTING_FEN, (), ()))
-    workspace = FlowWorkspace(path)
-
-    turn = workspace.restart()
-    assert turn.recommendation is None
-    attempt = workspace.submit_white_uci("d2d4")
-    assert attempt.result is AttemptResult.FRONTIER
-
-    workspace.save_selected_default("Control the center.")
-    saved = FlowStore().load(path)
-    assert saved.defaults[0].move_san == "d4"
-    assert saved.defaults[0].note == "Control the center."
-
-
-def test_workspace_requires_exception_when_numbered_default_is_illegal(
-    tmp_path: Path,
-) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    workspace = FlowWorkspace(path)
-    history = ("d4", "d5", "e4", "e6")
-    workspace.controller.reset(replay_san(workspace.author.flow.start_fen, history))
-    workspace.history[:] = history
-
-    turn = workspace.begin_white_turn()
-    assert turn.recommendation is not None
-    assert turn.recommendation.move_san == "e3"
-    assert turn.unavailable_reason is not None
-
-    attempt = workspace.submit_white_uci("g1f3")
-    assert attempt.result is AttemptResult.RULE_UNAVAILABLE
-    workspace.save_selected_exception("Develop instead.")
-
-    saved = FlowStore().load(path)
-    assert saved.exceptions[-1].after_san == history
-    assert saved.exceptions[-1].move_san == "Nf3"
-
-
-def test_workspace_does_not_remove_exception_without_a_legal_default(
-    tmp_path: Path,
-) -> None:
+def workspace(tmp_path: Path) -> FlowWorkspace:
     path = tmp_path / "flow.toml"
-    FlowStore().save(
-        path,
-        WhiteFlow(1, "Exception only", DEFAULT_STARTING_FEN, (), ()),
-    )
-    workspace = FlowWorkspace(path)
-    workspace.author.add_exception(
-        workspace.board,
-        1,
-        (),
-        "d4",
-        "Only rule.",
-    )
-    workspace.begin_white_turn()
-    attempt = workspace.submit_white_uci("e2e4")
-    assert attempt.result is AttemptResult.MISMATCH_EXCEPTION
-
-    with pytest.raises(FlowValidationError, match="No numbered default"):
-        workspace.remove_exception_and_keep_default()
-
-    assert FlowStore().load(path).exceptions[0].move_san == "d4"
+    shutil.copy2(FIXTURE, path)
+    result = FlowWorkspace(path)
+    result.restart()
+    return result
 
 
-def test_workspace_back_restores_active_attempt(tmp_path: Path) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    workspace = FlowWorkspace(path)
-    workspace.restart()
+def test_correct_mismatch_retry_and_continue(tmp_path: Path) -> None:
+    work = workspace(tmp_path)
+    assert work.policy_turn and work.policy_turn.decision.move_san == "d4"
+    mismatch = work.submit_policy_uci("e2e4")
+    assert mismatch.result is AttemptResult.MISMATCH
+    assert work.history == []
+    work.retry_policy_move()
+    assert work.board.fen() == mismatch.board_before.fen()
 
-    workspace.submit_white_uci("e2e4")
-    turn = workspace.go_back_to_previous_decision()
-
-    assert workspace.history == []
-    assert workspace.board.fen() == replay_san(DEFAULT_STARTING_FEN, ()).fen()
-    assert turn.recommendation is not None
-    assert turn.recommendation.move_san == "d4"
-
-
-def test_workspace_back_from_black_and_later_white_turn(tmp_path: Path) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    workspace = FlowWorkspace(path)
-    workspace.restart()
-    workspace.submit_white_uci("d2d4")
-    workspace.complete_correct_move()
-
-    workspace.go_back_to_previous_decision()
-    assert workspace.history == []
-
-    workspace.submit_white_uci("d2d4")
-    workspace.complete_correct_move()
-    workspace.submit_black_uci("d7d5")
-    workspace.begin_white_turn()
-    turn = workspace.go_back_to_previous_decision()
-
-    assert workspace.history == []
-    assert turn.recommendation is not None
-    assert turn.recommendation.move_san == "d4"
+    mismatch = work.submit_policy_uci("e2e4")
+    kept = work.continue_with_policy_move()
+    assert kept.san == "d4"
+    assert work.history == ["d4"]
+    assert work.runtime.rule_states["develop-d-pawn"].lifecycle.value == "retired"
 
 
-def test_workspace_back_preserves_persisted_opponent_replies(tmp_path: Path) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    workspace = FlowWorkspace(path)
-    workspace.restart()
-    workspace.submit_white_uci("d2d4")
-    workspace.complete_correct_move()
-    workspace.submit_black_uci("g8f6")
-    saved_before = FlowStore().load(path).opponent_replies
-
-    workspace.begin_white_turn()
-    workspace.go_back_to_previous_decision()
-
-    assert FlowStore().load(path).opponent_replies == saved_before
-
-
-def test_workspace_back_at_beginning_is_explicit(tmp_path: Path) -> None:
-    path = tmp_path / "london.toml"
-    shutil.copy2(LONDON_FLOW, path)
-    workspace = FlowWorkspace(path)
-    workspace.restart()
-
-    assert not workspace.can_go_back
-    assert not workspace.can_restart
-    with pytest.raises(FlowValidationError, match="no earlier White decision"):
-        workspace.go_back_to_previous_decision()
-
-
-def test_workspace_back_from_game_over_replays_to_white_decision(
+def test_correct_move_commits_and_opponent_reply_recomputes_decision(
     tmp_path: Path,
 ) -> None:
-    path = tmp_path / "mate.toml"
-    FlowStore().save(
-        path,
-        WhiteFlow(
-            1,
-            "Mate",
-            "7k/8/5KQ1/8/8/8/8/8 w - - 0 1",
-            (DefaultRule(1, "Qg7#"),),
-            (),
-        ),
+    work = workspace(tmp_path)
+    attempt = work.submit_policy_san("d4")
+    assert attempt.result is AttemptResult.CORRECT
+    work.complete_correct_move()
+    work.submit_opponent_san("d5")
+    decision = work.begin_policy_turn().decision
+    assert work.history == ["d4", "d5"]
+    assert decision.move_san == "Bf4"
+
+
+def test_back_from_attempt_opponent_turn_and_later_policy_turn(tmp_path: Path) -> None:
+    work = workspace(tmp_path)
+    work.submit_policy_san("e4")
+    work.go_back_to_previous_decision()
+    assert work.history == []
+
+    work.submit_policy_san("d4")
+    work.complete_correct_move()
+    work.go_back_to_previous_decision()
+    assert work.history == []
+
+    work.submit_policy_san("d4")
+    work.complete_correct_move()
+    work.submit_opponent_san("d5")
+    work.begin_policy_turn()
+    work.go_back_to_previous_decision()
+    assert work.history == []
+    assert work.policy_turn and work.policy_turn.decision.move_san == "d4"
+
+
+def test_restart_and_replay_are_deterministic_and_non_destructive(
+    tmp_path: Path,
+) -> None:
+    work = workspace(tmp_path)
+    work.submit_policy_san("d4")
+    work.complete_correct_move()
+    work.submit_opponent_san("d5")
+    work.begin_policy_turn()
+    before_file = work.author.path.read_text(encoding="utf-8")
+    assert work.policy_turn is not None
+    first = work.policy_turn.decision.trace
+    work.reload()
+    assert work.policy_turn and work.policy_turn.decision.trace == first
+    work.restart()
+    assert work.history == [] and not work.can_restart
+    assert work.author.path.read_text(encoding="utf-8") == before_file
+
+
+def test_edit_revalidates_replays_and_reassesses_pending_move(tmp_path: Path) -> None:
+    work = workspace(tmp_path)
+    attempt = work.submit_policy_san("e4")
+    assert attempt.result is AttemptResult.MISMATCH
+    rule = work.author.flow.rules[0]
+    work.update_rule(
+        replace(rule, move=MoveAction(OriginalPieceId.parse("white:e2"), "e4"))
     )
-    workspace = FlowWorkspace(path)
-    workspace.restart()
-    workspace.submit_white_uci("g6g7")
-    assert workspace.outcome is not None
+    assert work.attempt is None
+    assert work.history == ["e4"]
+    assert FlowStore().load(work.author.path).rules[0].move.to_square == "e4"
 
-    turn = workspace.go_back_to_previous_decision()
 
-    assert workspace.outcome is None
-    assert workspace.history == []
-    assert turn.recommendation is not None
-    assert turn.recommendation.move_san == "Qg7#"
+def test_failed_edit_preserves_file_and_live_attempt(tmp_path: Path) -> None:
+    work = workspace(tmp_path)
+    attempt = work.submit_policy_san("e4")
+    original = work.author.path.read_text(encoding="utf-8")
+    rule = work.author.flow.rules[0]
+    with pytest.raises(FlowValidationError):
+        work.update_rule(replace(rule, priority=work.author.flow.rules[1].priority))
+    assert work.author.path.read_text(encoding="utf-8") == original
+    assert work.attempt is attempt
+
+
+def test_beginning_of_line_back_fails(tmp_path: Path) -> None:
+    work = workspace(tmp_path)
+    with pytest.raises(FlowValidationError, match="no earlier"):
+        work.go_back_to_previous_decision()
+
+
+def test_black_controlled_flow_uses_generic_policy_and_opponent_turns(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "black.toml"
+    path.write_text(
+        """
+version=2
+name="Black policy"
+start_fen="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
+side="black"
+[[rules]]
+id="reply-e5"
+priority=10
+move={piece="black:e7",to="e5"}
+""",
+        encoding="utf-8",
+    )
+    work = FlowWorkspace(path)
+    assert work.restart().decision.move_san == "e5"
+    attempt = work.submit_policy_san("e5")
+    assert attempt.result is AttemptResult.CORRECT
+    work.complete_correct_move()
+    assert not work.is_policy_turn
+    work.submit_opponent_san("Nf3")
+    assert work.is_policy_turn

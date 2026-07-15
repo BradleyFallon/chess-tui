@@ -1,33 +1,46 @@
-version = 1
-name = "London System"
-start_fen = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
+version = 2
+name = "London Test"
+start_fen = "startpos"
+side = "white"
 
-[[defaults]]
-step = 1
-move = "d4"
+[[states]]
+id = "before-nf3"
+when = { all = [{ at = { piece = "white:d2", square = "d4" } }, { at = { piece = "white:c1", square = "f4" } }, { at = { piece = "white:e2", square = "e3" } }] }
+
+[[rules]]
+id = "develop-d-pawn"
+priority = 400
 note = "Control the center."
+move = { piece = "white:d2", to = "d4" }
+retire_when = { moved = "white:d2" }
 
-[[defaults]]
-step = 2
-move = "Bf4"
-note = "Develop the dark-squared bishop outside the pawn chain."
+[[rules]]
+id = "develop-dark-bishop"
+priority = 390
+note = "Develop outside the pawn chain."
+move = { piece = "white:c1", to = "f4" }
+activate_when = { moved = "white:d2" }
+retire_when = { moved = "white:c1" }
 
-[[defaults]]
-step = 3
-move = "e3"
-note = "Support d4 and prepare normal development."
+[[rules]]
+id = "develop-e-pawn"
+priority = 380
+move = { piece = "white:e2", to = "e3" }
+activate_when = { all = [{ moved = "white:d2" }, { moved = "white:c1" }] }
+retire_when = { moved = "white:e2" }
 
-[[defaults]]
-step = 4
-move = "Nf3"
-note = "Develop the king's knight and guard e5."
+[[rules]]
+id = "develop-knight"
+priority = 370
+move = { piece = "white:g1", to = "f3" }
+activate_when = { state = "before-nf3" }
+retire_when = { moved = "white:g1" }
 
-[[exceptions]]
+[[overrides]]
 id = "after-d4-e5"
-step = 2
 after = ["d4", "e5"]
-move = "dxe5"
 note = "Capture the offered pawn."
+move = { piece = "white:d2", to = "e5" }
 
 [[opponent_replies]]
 id = "after-d4-d5"
@@ -35,16 +48,6 @@ after = ["d4"]
 move = "d5"
 
 [[opponent_replies]]
-id = "after-d4-d5-bf4-nf6"
-after = ["d4", "d5", "Bf4"]
-move = "Nf6"
-
-[[opponent_replies]]
-id = "after-d4-d5-bf4-nf6-e3-e6"
-after = ["d4", "d5", "Bf4", "Nf6", "e3"]
-move = "e6"
-
-[[opponent_replies]]
-id = "after-d4-d5-bf4-nf6-e3-e6-nf3-c5"
-after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3"]
-move = "c5"
+id = "after-d4-e5"
+after = ["d4"]
+move = "e5"

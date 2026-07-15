@@ -164,11 +164,13 @@ Policy resolution order is:
 ```text
 1. Exact-position override
 2. Highest-priority active legal abstract rule
-3. Legacy numbered default
-4. Flow frontier
+3. Flow frontier
 ```
 
 Do not silently change this order.
+
+Version 1 numbered defaults and exceptions are intentionally unsupported. Do not
+add a fallback parser, mixed-schema model, or compatibility resolver.
 
 ### Original-piece identity
 

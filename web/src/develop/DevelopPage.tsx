@@ -16,17 +16,18 @@ export function DevelopPage() {
     initialize,
     submitMove,
     submitSanMove,
-    retryWhite,
-    keepWhite,
-    playNextBlack,
+    retryPolicy,
+    continuePolicy,
+    playNextOpponent,
     updateRule,
+    updateOverride,
     back,
     restart,
   } = useWorkspace();
   const [hintedFen, setHintedFen] = useState<string | null>(null);
 
   useEffect(() => {
-    if (workspace?.phase !== "black-ready" || pending) return;
+    if (workspace?.phase !== "opponent-ready" || pending) return;
 
     const playBlackOnEnter = (event: KeyboardEvent) => {
       if (event.key !== "Enter" || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -42,12 +43,12 @@ export function DevelopPage() {
         || (target instanceof HTMLElement && target.isContentEditable)
       ) return;
       event.preventDefault();
-      void playNextBlack();
+      void playNextOpponent();
     };
 
     window.addEventListener("keydown", playBlackOnEnter);
     return () => window.removeEventListener("keydown", playBlackOnEnter);
-  }, [pending, playNextBlack, workspace?.phase]);
+  }, [pending, playNextOpponent, workspace?.phase]);
 
   if (loading) return <LoadingScreen />;
   if (!workspace) {
@@ -83,7 +84,8 @@ export function DevelopPage() {
         <RuleStatusPanel
           workspace={workspace}
           pending={pending}
-          onUpdateRule={(ruleId, kind, moveSan, note) => void updateRule(ruleId, kind, moveSan, note)}
+          onUpdateRule={(ruleId, update) => void updateRule(ruleId, update)}
+          onUpdateOverride={(overrideId, update) => void updateOverride(overrideId, update)}
           onBack={() => void back()}
           onRestart={() => void restart()}
         />
@@ -105,9 +107,9 @@ export function DevelopPage() {
             pending={pending}
             hintVisible={hintVisible}
             onHint={() => setHintedFen(workspace.position.fen)}
-            onRetry={() => void retryWhite()}
-            onKeep={() => void keepWhite()}
-            onNextBlack={() => void playNextBlack()}
+            onRetry={() => void retryPolicy()}
+            onContinue={() => void continuePolicy()}
+            onNextOpponent={() => void playNextOpponent()}
             onSubmitSan={(san) => void submitSanMove(san)}
           />
         </div>

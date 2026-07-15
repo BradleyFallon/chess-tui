@@ -118,18 +118,23 @@ dd { margin: 0; font-weight: 700; text-transform: capitalize; }
 .status-composer input::placeholder { color: #7f8879; }
 .status-composer button { width: 2.25rem; height: 2.25rem; padding: 0.48rem; display: grid; place-items: center; border-radius: 50%; color: #17140c; border-color: var(--accent); background: var(--accent); }
 .status-composer button svg { width: 1rem; height: 1rem; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.rules-panel { height: calc(100dvh - 96px); min-height: 360px; overflow-y: auto; }
+.rules-panel { height: calc(100dvh - 96px); min-height: 360px; display: flex; flex-direction: column; overflow: hidden; }
 .rules-panel h2 { margin: 0; }
 .rules-tabs { margin-top: 0.75rem; display: grid; grid-template-columns: 1fr 1fr; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
 .rules-tabs button { padding: 0.42rem 0.5rem; border: 0; border-radius: 0; color: var(--muted); background: #131712; font-size: 0.7rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
 .rules-tabs button + button { border-left: 1px solid var(--line); }
 .rules-tabs button.active { color: #17140c; background: var(--accent); }
 .rules-tabs button:focus-visible { position: relative; z-index: 1; outline-offset: -3px; }
-.rules-intro { margin: 0.7rem 0; color: var(--muted); font-size: 0.78rem; line-height: 1.4; }
-.applicable-rules { display: grid; gap: 0.65rem; }
+.rule-status-scroll { min-height: 0; flex: 1 1 auto; margin-top: 0.7rem; overflow-y: auto; padding-right: 0.2rem; }
+.rule-group { margin-bottom: 0.5rem; border: 1px solid #30392e; border-radius: 6px; background: #131712; }
+.rule-group > summary { padding: 0.5rem 0.6rem; display: flex; justify-content: space-between; color: #d3cfb7; cursor: pointer; font-size: 0.7rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase; }
+.rule-count { min-width: 1.4rem; padding: 0.05rem 0.3rem; border-radius: 999px; text-align: center; color: var(--muted); background: #252d22; }
+.rule-group-body { padding: 0 0.5rem 0.5rem; display: grid; gap: 0.5rem; }
+.rule-group-body > .muted { margin: 0; padding: 0.3rem; font-size: 0.72rem; }
 .rule-card { padding: 0.7rem; border: 1px solid #394436; border-radius: 7px; background: #161b15; }
 .rule-card-selected { border-color: var(--accent); background: #242417; }
-.rule-card-fallback { border-style: dashed; }
+.rule-card-waiting { border-color: #8c6a3b; border-style: dashed; }
+.rule-card-dormant, .rule-card-retired { opacity: 0.76; }
 .rule-card-heading { display: flex; justify-content: space-between; align-items: center; gap: 0.5rem; }
 .rule-kind, .rule-state { font-size: 0.62rem; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; }
 .rule-kind { color: var(--muted); }
@@ -144,9 +149,13 @@ dd { margin: 0; font-weight: 700; text-transform: capitalize; }
 .rule-edit-disabled { display: block; margin-top: 0.65rem; color: var(--muted); font-size: 0.67rem; }
 .rule-edit-form { margin-top: 0.65rem; display: grid; gap: 0.65rem; }
 .rule-edit-form label { display: grid; gap: 0.3rem; color: var(--muted); font-size: 0.68rem; font-weight: 700; }
+.rule-edit-form .checkbox-label { display: flex; align-items: center; gap: 0.4rem; }
+.rule-edit-form .checkbox-label input { width: auto; }
 .rule-edit-form input, .rule-edit-form textarea { width: 100%; border: 1px solid #566152; border-radius: 5px; padding: 0.5rem; color: var(--text); background: #10140f; font: inherit; resize: vertical; }
 .rule-edit-form input:focus, .rule-edit-form textarea:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .rule-edit-form button { padding: 0.4rem 0.55rem; font-size: 0.7rem; }
+.rule-diagnostics { margin-top: 0.6rem; color: var(--muted); font-size: 0.68rem; }
+.rule-diagnostics summary { cursor: pointer; color: #d3cfb7; }
 .empty-rule-state { padding: 0.8rem; border: 1px dashed #4b5548; border-radius: 7px; }
 .empty-rule-state p { margin: 0.4rem 0 0; color: var(--muted); font-size: 0.75rem; }
 .rules-line-summary { margin-top: 1rem; padding-top: 0.75rem; border-top: 1px solid var(--line); }
