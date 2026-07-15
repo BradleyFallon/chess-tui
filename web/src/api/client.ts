@@ -4,6 +4,11 @@ interface ErrorEnvelope {
   error: ApiErrorItem;
 }
 
+export interface FlowSourceResponse {
+  path: string;
+  content: string;
+}
+
 export class ApiError extends Error {
   readonly code: ApiErrorItem["code"];
   readonly details: Record<string, unknown>;
@@ -67,8 +72,12 @@ export const workspaceApi = {
     post("/api/sessions", flowPath ? { flowPath } : {}),
   getSession: (sessionId: string) =>
     request<WorkspaceSnapshot>(`/api/sessions/${sessionId}`),
+  getFlowSource: (sessionId: string) =>
+    request<FlowSourceResponse>(`/api/sessions/${sessionId}/flow/source`),
   submitMove: (sessionId: string, uci: string) =>
     post(`/api/sessions/${sessionId}/moves`, { uci }),
+  submitSanMove: (sessionId: string, san: string) =>
+    post(`/api/sessions/${sessionId}/moves/san`, { san }),
   retryWhite: (sessionId: string) =>
     post(`/api/sessions/${sessionId}/white/retry`),
   keepWhite: (sessionId: string) =>
@@ -77,6 +86,13 @@ export const workspaceApi = {
     post(`/api/sessions/${sessionId}/white/continue`),
   playNextBlack: (sessionId: string) =>
     post(`/api/sessions/${sessionId}/black/next`),
+  updateRule: (
+    sessionId: string,
+    ruleId: string,
+    kind: "default" | "exception" | "opponent-reply",
+    moveSan: string,
+    note: string | null,
+  ) => post(`/api/sessions/${sessionId}/rules/update`, { ruleId, kind, moveSan, note }),
   back: (sessionId: string) => post(`/api/sessions/${sessionId}/back`),
   restart: (sessionId: string) => post(`/api/sessions/${sessionId}/restart`),
 };

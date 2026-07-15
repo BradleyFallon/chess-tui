@@ -18,8 +18,11 @@ from .api_models import (
     ApiErrorEnvelope,
     ApiErrorItem,
     CreateSessionRequest,
+    FlowSourceResponse,
     HealthResponse,
     MoveRequest,
+    SanMoveRequest,
+    UpdateRuleRequest,
     WorkspaceSnapshot,
 )
 from .errors import ApiErrorCode, WebApiError
@@ -149,6 +152,13 @@ def _register_api_routes(application: FastAPI) -> None:
     async def get_session(request: Request, session_id: str) -> WorkspaceSnapshot:
         return await _manager(request).get_snapshot(session_id)
 
+    @application.get(
+        "/api/sessions/{session_id}/flow/source",
+        response_model=FlowSourceResponse,
+    )
+    async def get_flow_source(request: Request, session_id: str) -> FlowSourceResponse:
+        return await _manager(request).get_flow_source(session_id)
+
     @application.post(
         "/api/sessions/{session_id}/moves", response_model=WorkspaceSnapshot
     )
@@ -158,6 +168,17 @@ def _register_api_routes(application: FastAPI) -> None:
         payload: MoveRequest,
     ) -> WorkspaceSnapshot:
         return await _manager(request).submit_move(session_id, payload.uci)
+
+    @application.post(
+        "/api/sessions/{session_id}/moves/san",
+        response_model=WorkspaceSnapshot,
+    )
+    async def submit_san_move(
+        request: Request,
+        session_id: str,
+        payload: SanMoveRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).submit_san_move(session_id, payload.san)
 
     @application.post(
         "/api/sessions/{session_id}/white/retry",
@@ -186,6 +207,23 @@ def _register_api_routes(application: FastAPI) -> None:
     )
     async def play_next_black(request: Request, session_id: str) -> WorkspaceSnapshot:
         return await _manager(request).play_next_black(session_id)
+
+    @application.post(
+        "/api/sessions/{session_id}/rules/update",
+        response_model=WorkspaceSnapshot,
+    )
+    async def update_rule(
+        request: Request,
+        session_id: str,
+        payload: UpdateRuleRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).update_rule(
+            session_id,
+            rule_id=payload.rule_id,
+            kind=payload.kind,
+            move_san=payload.move_san,
+            note=payload.note,
+        )
 
     @application.post(
         "/api/sessions/{session_id}/back", response_model=WorkspaceSnapshot

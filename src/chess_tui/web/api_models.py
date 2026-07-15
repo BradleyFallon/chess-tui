@@ -30,6 +30,17 @@ class MoveRequest(ApiModel):
     uci: str = Field(min_length=4, max_length=5)
 
 
+class SanMoveRequest(ApiModel):
+    san: str = Field(min_length=1, max_length=20)
+
+
+class UpdateRuleRequest(ApiModel):
+    rule_id: str = Field(min_length=1)
+    kind: Literal["default", "exception", "opponent-reply"]
+    move_san: str = Field(min_length=1)
+    note: str | None = None
+
+
 class ApiErrorItem(ApiModel):
     code: ApiErrorCode
     message: str
@@ -47,6 +58,11 @@ class EngineHealth(ApiModel):
 class HealthResponse(ApiModel):
     status: Literal["ok"] = "ok"
     engine: EngineHealth
+
+
+class FlowSourceResponse(ApiModel):
+    path: str
+    content: str
 
 
 class FlowSnapshot(ApiModel):
@@ -92,8 +108,20 @@ class RuleSummary(ApiModel):
     note: str | None
 
 
+class ApplicableRuleSnapshot(ApiModel):
+    id: str
+    kind: Literal["default", "exception", "opponent-reply"]
+    status: Literal["selected", "fallback", "applicable"]
+    step: int
+    move_san: str
+    note: str | None
+    after_san: list[str] = Field(default_factory=list)
+    editable: bool
+
+
 class RuleGroupsSnapshot(ApiModel):
     selected: RuleSummary | None
+    applicable: list[ApplicableRuleSnapshot] = Field(default_factory=list)
     active: list[RuleSummary] = Field(default_factory=list)
     dormant: list[RuleSummary] = Field(default_factory=list)
     retired: list[RuleSummary] = Field(default_factory=list)

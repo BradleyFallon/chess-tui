@@ -82,6 +82,22 @@ def test_web_health_and_initial_legacy_snapshot(tmp_path: Path) -> None:
         assert snapshot["evaluation"]["status"] == "engine-off"
         assert "lifecycle rules are not available" in snapshot["rules"]["modelMessage"]
         assert snapshot["activity"][-1]["title"] == "Development session ready"
+        assert snapshot["rules"]["applicable"] == [
+            {
+                "id": "default-step-1",
+                "kind": "default",
+                "status": "selected",
+                "step": 1,
+                "moveSan": "d4",
+                "note": "Control the center.",
+                "afterSan": [],
+                "editable": True,
+            }
+        ]
+        source = client.get(f"/api/sessions/{snapshot['sessionId']}/flow/source")
+        assert source.status_code == 200
+        assert source.json()["path"] == "flows/london.toml"
+        assert 'name = "London System"' in source.json()["content"]
 
 
 def test_web_rejects_flow_outside_allowed_directory(tmp_path: Path) -> None:
@@ -106,26 +122,22 @@ def test_web_rejects_missing_flow_inside_allowed_directory(tmp_path: Path) -> No
         assert response.json()["error"]["code"] == "FLOW_VALIDATION_ERROR"
 
 
-def test_web_correct_white_continue_and_black_move(tmp_path: Path) -> None:
+def test_web_correct_white_advances_directly_to_black_move(tmp_path: Path) -> None:
     with _web_client(tmp_path) as (client, _):
         snapshot = _create_session(client)
         session_id = snapshot["sessionId"]
 
         result = _move(client, session_id, "d2d4")
-        assert result["phase"] == "white-result"
-        assert result["attempt"]["result"] == "correct"
+        assert result["phase"] == "black-ready"
+        assert result["attempt"] is None
         assert result["position"]["historySan"] == ["d4"]
-        assert result["position"]["legalMovesUci"] == []
+        assert "d7d5" in result["position"]["legalMovesUci"]
         assert result["activity"][-1] == {
             "id": 2,
             "kind": "success",
             "title": "White played d4",
             "message": "Correct. Control the center.",
         }
-
-        continued = client.post(f"/api/sessions/{session_id}/white/continue").json()
-        assert continued["phase"] == "black-ready"
-        assert "d7d5" in continued["position"]["legalMovesUci"]
 
         next_turn = _move(client, session_id, "d7d5")
         assert next_turn["phase"] == "white-ready"
@@ -135,6 +147,45 @@ def test_web_correct_white_continue_and_black_move(tmp_path: Path) -> None:
         assert next_turn["activity"][-1]["title"] == "Black played d5"
         refreshed = client.get(f"/api/sessions/{session_id}").json()
         assert refreshed["activity"] == next_turn["activity"]
+
+
+def test_web_accepts_san_move_entry_for_white_and_black(tmp_path: Path) -> None:
+    with _web_client(tmp_path) as (client, _):
+        snapshot = _create_session(client)
+        session_id = snapshot["sessionId"]
+
+        white = client.post(
+            f"/api/sessions/{session_id}/moves/san",
+            json={"san": "d4"},
+        )
+        assert white.status_code == 200
+        assert white.json()["phase"] == "black-ready"
+        assert white.json()["attempt"] is None
+
+        black = client.post(
+            f"/api/sessions/{session_id}/moves/san",
+            json={"san": "d5"},
+        )
+        assert black.status_code == 200
+        assert black.json()["position"]["historySan"] == ["d4", "d5"]
+        assert "move composer" in black.json()["activity"][-1]["message"]
+
+
+def test_web_rejects_illegal_san_without_mutating_position(tmp_path: Path) -> None:
+    with _web_client(tmp_path) as (client, _):
+        snapshot = _create_session(client)
+        session_id = snapshot["sessionId"]
+
+        response = client.post(
+            f"/api/sessions/{session_id}/moves/san",
+            json={"san": "Qa9"},
+        )
+
+        assert response.status_code == 400
+        assert response.json()["error"]["code"] == "INVALID_MOVE"
+        current = client.get(f"/api/sessions/{session_id}").json()
+        assert current["position"]["fen"] == snapshot["position"]["fen"]
+        assert current["position"]["historySan"] == []
 
 
 def test_web_white_mismatch_retry_and_keep(tmp_path: Path) -> None:
@@ -165,8 +216,7 @@ def test_web_next_plays_an_engine_move_for_black(tmp_path: Path) -> None:
     with _web_client(tmp_path, engine=engine) as (client, _):
         snapshot = _create_session(client)
         session_id = snapshot["sessionId"]
-        _move(client, session_id, "d2d4")
-        ready = client.post(f"/api/sessions/{session_id}/white/continue").json()
+        ready = _move(client, session_id, "d2d4")
         assert ready["phase"] == "black-ready"
 
         response = client.post(f"/api/sessions/{session_id}/black/next")
@@ -184,7 +234,6 @@ def test_web_next_requires_an_engine_and_preserves_black_turn(tmp_path: Path) ->
         snapshot = _create_session(client)
         session_id = snapshot["sessionId"]
         _move(client, session_id, "d2d4")
-        client.post(f"/api/sessions/{session_id}/white/continue")
 
         response = client.post(f"/api/sessions/{session_id}/black/next")
 
@@ -193,6 +242,81 @@ def test_web_next_requires_an_engine_and_preserves_black_turn(tmp_path: Path) ->
         current = client.get(f"/api/sessions/{session_id}").json()
         assert current["phase"] == "black-ready"
         assert current["position"]["historySan"] == ["d4"]
+
+
+def test_web_rule_status_shows_exception_fallback_and_black_replies(
+    tmp_path: Path,
+) -> None:
+    with _web_client(tmp_path) as (client, flow_path):
+        snapshot = _create_session(client)
+        session_id = snapshot["sessionId"]
+        black_ready = _move(client, session_id, "d2d4")
+        assert black_ready["rules"]["applicable"][0]["kind"] == "opponent-reply"
+        assert black_ready["rules"]["applicable"][0]["moveSan"] == "d5"
+        edited_reply = client.post(
+            f"/api/sessions/{session_id}/rules/update",
+            json={
+                "ruleId": "after-d4-d5",
+                "kind": "opponent-reply",
+                "moveSan": "Nf6",
+                "note": "Develop the knight.",
+            },
+        ).json()
+        assert edited_reply["rules"]["applicable"][0]["moveSan"] == "Nf6"
+        saved_reply = next(
+            reply
+            for reply in FlowStore().load(flow_path).opponent_replies
+            if reply.id == "after-d4-d5"
+        )
+        assert saved_reply.note == "Develop the knight."
+
+        exception_position = _move(client, session_id, "e7e5")
+        rules = exception_position["rules"]["applicable"]
+        assert [(rule["kind"], rule["status"], rule["moveSan"]) for rule in rules] == [
+            ("exception", "selected", "dxe5"),
+            ("default", "fallback", "Bf4"),
+        ]
+
+
+def test_web_edits_applicable_rule_and_rejects_invalid_san(tmp_path: Path) -> None:
+    with _web_client(tmp_path) as (client, flow_path):
+        snapshot = _create_session(client)
+        session_id = snapshot["sessionId"]
+
+        updated = client.post(
+            f"/api/sessions/{session_id}/rules/update",
+            json={
+                "ruleId": "default-step-1",
+                "kind": "default",
+                "moveSan": "d3",
+                "note": "Claim the center.",
+            },
+        )
+
+        assert updated.status_code == 200
+        body = updated.json()
+        assert body["decision"]["moveSan"] == "d3"
+        assert body["rules"]["applicable"][0]["note"] == "Claim the center."
+        saved = FlowStore().load(flow_path)
+        assert saved.defaults[0].move_san == "d3"
+        assert saved.defaults[0].note == "Claim the center."
+        source = client.get(f"/api/sessions/{session_id}/flow/source").json()
+        assert 'move = "d3"' in source["content"]
+        assert 'note = "Claim the center."' in source["content"]
+
+        invalid = client.post(
+            f"/api/sessions/{session_id}/rules/update",
+            json={
+                "ruleId": "default-step-1",
+                "kind": "default",
+                "moveSan": "Qa9",
+                "note": "Invalid",
+            },
+        )
+        assert invalid.status_code == 422
+        assert invalid.json()["error"]["code"] == "FLOW_VALIDATION_ERROR"
+        current = client.get(f"/api/sessions/{session_id}").json()
+        assert current["decision"]["moveSan"] == "d3"
 
 
 def test_web_frontier_is_read_only_and_retryable(tmp_path: Path) -> None:
@@ -236,7 +360,6 @@ def test_web_back_and_restart_return_complete_snapshots(tmp_path: Path) -> None:
         snapshot = _create_session(client)
         session_id = snapshot["sessionId"]
         _move(client, session_id, "d2d4")
-        client.post(f"/api/sessions/{session_id}/white/continue")
         _move(client, session_id, "d7d5")
 
         backed = client.post(f"/api/sessions/{session_id}/back").json()

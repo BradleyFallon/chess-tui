@@ -20,6 +20,7 @@ from ..engine import (
 from ..flow import (
     AttemptResult,
     FlowError,
+    FlowStorageError,
     FlowStore,
     FlowWorkspace,
     WhiteMoveAttempt,
@@ -28,6 +29,7 @@ from ..flow import (
 from ..flow.position import replay_san
 from .api_models import (
     ActivitySnapshot,
+    ApplicableRuleSnapshot,
     ApiErrorItem,
     AttemptSnapshot,
     DecisionSnapshot,
@@ -35,6 +37,7 @@ from .api_models import (
     EngineReviewSnapshot,
     EvaluationSnapshot,
     FlowSnapshot,
+    FlowSourceResponse,
     GameOverSnapshot,
     NavigationSnapshot,
     PositionSnapshot,
@@ -145,6 +148,20 @@ class SessionManager:
         async with session.lock:
             return await self._snapshot(session)
 
+    async def get_flow_source(self, session_id: str) -> FlowSourceResponse:
+        session = self._session(session_id)
+        async with session.lock:
+            try:
+                content = session.flow_path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as error:
+                raise FlowStorageError(
+                    f"Could not read flow {session.flow_path}: {error}"
+                ) from error
+            return FlowSourceResponse(
+                path=self._display_path(session.flow_path),
+                content=content,
+            )
+
     async def submit_move(self, session_id: str, uci: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
@@ -158,6 +175,8 @@ class SessionManager:
             if workspace.board.turn is chess.WHITE:
                 attempt = workspace.submit_white_uci(move.uci())
                 self._record_white_attempt(session, attempt)
+                if attempt.result is AttemptResult.CORRECT:
+                    workspace.complete_correct_move()
             else:
                 move_san = workspace.board.san(move)
                 workspace.submit_black_uci(move.uci())
@@ -166,6 +185,41 @@ class SessionManager:
                     "move",
                     f"Black played {move_san}",
                     "This is the selected Black reply for the current flow line.",
+                )
+                if workspace.outcome is None:
+                    workspace.begin_white_turn()
+            return await self._snapshot(session)
+
+    async def submit_san_move(self, session_id: str, san: str) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            if workspace.attempt is not None:
+                raise WebApiError(
+                    ApiErrorCode.INVALID_REQUEST,
+                    "Resolve the current White result before playing another move.",
+                )
+            cleaned_san = san.strip()
+            try:
+                move = workspace.board.parse_san(cleaned_san)
+            except ValueError as error:
+                raise WebApiError(
+                    ApiErrorCode.INVALID_MOVE,
+                    f"{cleaned_san!r} is not a legal SAN move in the current position.",
+                ) from error
+            if workspace.board.turn is chess.WHITE:
+                attempt = workspace.submit_white_uci(move.uci())
+                self._record_white_attempt(session, attempt)
+                if attempt.result is AttemptResult.CORRECT:
+                    workspace.complete_correct_move()
+            else:
+                move_san = workspace.board.san(move)
+                workspace.submit_black_uci(move.uci())
+                self._append_activity(
+                    session,
+                    "move",
+                    f"Black played {move_san}",
+                    "This Black reply was entered in the move composer.",
                 )
                 if workspace.outcome is None:
                     workspace.begin_white_turn()
@@ -280,6 +334,67 @@ class SessionManager:
                 "info",
                 "White move accepted",
                 "Choose Black’s reply to continue the flow line.",
+            )
+            return await self._snapshot(session)
+
+    async def update_rule(
+        self,
+        session_id: str,
+        *,
+        rule_id: str,
+        kind: Literal["default", "exception", "opponent-reply"],
+        move_san: str,
+        note: str | None,
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            phase = _phase(workspace)
+            decision = _decision(workspace, phase)
+            applicable = _applicable_rules(workspace, phase, decision)
+            target = next(
+                (
+                    rule
+                    for rule in applicable
+                    if rule.id == rule_id and rule.kind == kind
+                ),
+                None,
+            )
+            if target is None or not target.editable:
+                raise WebApiError(
+                    ApiErrorCode.INVALID_REQUEST,
+                    "That rule is not editable in the current position.",
+                )
+            cleaned_move = move_san.strip()
+            cleaned_note = note.strip() if note and note.strip() else None
+            if kind == "default":
+                workspace.author.replace_default(
+                    workspace.board,
+                    target.step,
+                    cleaned_move,
+                    cleaned_note,
+                )
+                workspace.begin_white_turn()
+            elif kind == "exception":
+                workspace.author.replace_exception(
+                    workspace.board,
+                    rule_id,
+                    cleaned_move,
+                    cleaned_note,
+                )
+                workspace.begin_white_turn()
+            else:
+                workspace.author.replace_opponent_reply(
+                    workspace.board,
+                    rule_id,
+                    cleaned_move,
+                    cleaned_note,
+                )
+            self._append_activity(
+                session,
+                "info",
+                f"Edited {kind.replace('-', ' ')} rule",
+                f"The rule now plays {cleaned_move}.",
             )
             return await self._snapshot(session)
 
@@ -488,7 +603,7 @@ class SessionManager:
             ),
             decision=decision,
             attempt=attempt,
-            rules=_rules(decision),
+            rules=_rules(workspace, phase, decision),
             evaluation=evaluation,
             navigation=NavigationSnapshot(
                 can_back=workspace.can_go_back,
@@ -666,7 +781,11 @@ def _decision(workspace: FlowWorkspace, phase: str) -> DecisionSnapshot | None:
     )
 
 
-def _rules(decision: DecisionSnapshot | None) -> RuleGroupsSnapshot:
+def _rules(
+    workspace: FlowWorkspace,
+    phase: str,
+    decision: DecisionSnapshot | None,
+) -> RuleGroupsSnapshot:
     selected = None
     if decision is not None and decision.source != "frontier" and decision.move_san:
         selected = RuleSummary(
@@ -678,12 +797,92 @@ def _rules(decision: DecisionSnapshot | None) -> RuleGroupsSnapshot:
         )
     return RuleGroupsSnapshot(
         selected=selected,
+        applicable=_applicable_rules(workspace, phase, decision),
         model_message=(
             "Legacy version 1 flows use numbered defaults and exact-position "
             "exceptions. Active, dormant, and retired lifecycle rules are not "
             "available yet."
         ),
     )
+
+
+def _applicable_rules(
+    workspace: FlowWorkspace,
+    phase: str,
+    decision: DecisionSnapshot | None,
+) -> list[ApplicableRuleSnapshot]:
+    flow = workspace.author.flow
+    if phase in {"white-ready", "white-result"}:
+        if workspace.attempt is not None:
+            board = workspace.attempt.board_before
+            step = workspace.attempt.white_step
+        else:
+            board = workspace.board
+            step = workspace.white_turn.white_step if workspace.white_turn else 1
+        position_key = normalized_position_key(board)
+        editable = phase == "white-ready"
+        rules: list[ApplicableRuleSnapshot] = []
+        for exception in flow.exceptions:
+            exception_board = replay_san(flow.start_fen, exception.after_san)
+            if normalized_position_key(exception_board) != position_key:
+                continue
+            rules.append(
+                ApplicableRuleSnapshot(
+                    id=exception.id,
+                    kind="exception",
+                    status=(
+                        "selected"
+                        if decision is not None
+                        and decision.source == "exception"
+                        and decision.source_id == exception.id
+                        else "applicable"
+                    ),
+                    step=exception.step,
+                    move_san=exception.move_san,
+                    note=exception.note,
+                    after_san=list(exception.after_san),
+                    editable=editable,
+                )
+            )
+        default = next((rule for rule in flow.defaults if rule.step == step), None)
+        if default is not None:
+            rules.append(
+                ApplicableRuleSnapshot(
+                    id=f"default-step-{step}",
+                    kind="default",
+                    status=(
+                        "selected"
+                        if decision is not None and decision.source == "default"
+                        else "fallback"
+                    ),
+                    step=default.step,
+                    move_san=default.move_san,
+                    note=default.note,
+                    editable=editable,
+                )
+            )
+        return rules
+    if phase == "black-ready":
+        position_key = normalized_position_key(workspace.board)
+        rules = []
+        for reply in flow.opponent_replies:
+            reply_board = replay_san(flow.start_fen, reply.after_san)
+            if normalized_position_key(reply_board) != position_key:
+                continue
+            rules.append(
+                ApplicableRuleSnapshot(
+                    id=reply.id,
+                    kind="opponent-reply",
+                    status="applicable",
+                    step=(len(reply.after_san) + 1) // 2,
+                    move_san=reply.move_san,
+                    note=reply.note,
+                    after_san=list(reply.after_san),
+                    editable=True,
+                )
+            )
+        return rules
+    return []
 
 
 def _game_over(outcome: chess.Outcome | None) -> GameOverSnapshot | None:

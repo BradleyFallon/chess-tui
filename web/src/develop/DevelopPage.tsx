@@ -1,9 +1,9 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { BoardPanel } from "../components/BoardPanel";
 import { EvaluationBar } from "../components/EvaluationBar";
-import { HistoryPanel } from "../components/HistoryPanel";
+import { RuleStatusPanel } from "../components/RuleStatusPanel";
 import { StatusFeed } from "../components/StatusFeed";
 import { useWorkspace } from "./WorkspaceContext";
 
@@ -15,14 +15,39 @@ export function DevelopPage() {
     error,
     initialize,
     submitMove,
+    submitSanMove,
     retryWhite,
     keepWhite,
-    continueWhite,
     playNextBlack,
+    updateRule,
     back,
     restart,
   } = useWorkspace();
   const [hintedFen, setHintedFen] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (workspace?.phase !== "black-ready" || pending) return;
+
+    const playBlackOnEnter = (event: KeyboardEvent) => {
+      if (event.key !== "Enter" || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target;
+      const emptyMoveComposer =
+        target instanceof HTMLInputElement
+        && target.dataset.moveComposer === "true"
+        && !target.value.trim();
+      if (
+        (target instanceof HTMLInputElement && !target.disabled && !emptyMoveComposer)
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLButtonElement
+        || (target instanceof HTMLElement && target.isContentEditable)
+      ) return;
+      event.preventDefault();
+      void playNextBlack();
+    };
+
+    window.addEventListener("keydown", playBlackOnEnter);
+    return () => window.removeEventListener("keydown", playBlackOnEnter);
+  }, [pending, playNextBlack, workspace?.phase]);
 
   if (loading) return <LoadingScreen />;
   if (!workspace) {
@@ -55,9 +80,10 @@ export function DevelopPage() {
         </div>
       )}
       <div className="workspace-grid">
-        <HistoryPanel
+        <RuleStatusPanel
           workspace={workspace}
           pending={pending}
+          onUpdateRule={(ruleId, kind, moveSan, note) => void updateRule(ruleId, kind, moveSan, note)}
           onBack={() => void back()}
           onRestart={() => void restart()}
         />
@@ -81,8 +107,8 @@ export function DevelopPage() {
             onHint={() => setHintedFen(workspace.position.fen)}
             onRetry={() => void retryWhite()}
             onKeep={() => void keepWhite()}
-            onContinue={() => void continueWhite()}
             onNextBlack={() => void playNextBlack()}
+            onSubmitSan={(san) => void submitSanMove(san)}
           />
         </div>
       </div>

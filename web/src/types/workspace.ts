@@ -56,8 +56,20 @@ export interface RuleSummary {
   note: string | null;
 }
 
+export interface ApplicableRuleSnapshot {
+  id: string;
+  kind: "default" | "exception" | "opponent-reply";
+  status: "selected" | "fallback" | "applicable";
+  step: number;
+  moveSan: string;
+  note: string | null;
+  afterSan: string[];
+  editable: boolean;
+}
+
 export interface RuleGroupsSnapshot {
   selected: RuleSummary | null;
+  applicable: ApplicableRuleSnapshot[];
   active: RuleSummary[];
   dormant: RuleSummary[];
   retired: RuleSummary[];

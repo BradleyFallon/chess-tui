@@ -79,6 +79,69 @@ class WhiteFlowAuthor:
         self.policy = WhitePolicy(updated)
         return updated
 
+    def replace_exception(
+        self,
+        board: chess.Board,
+        exception_id: str,
+        move_san: str,
+        note: str | None,
+    ) -> WhiteFlow:
+        existing = next(
+            (rule for rule in self.flow.exceptions if rule.id == exception_id),
+            None,
+        )
+        if existing is None:
+            raise FlowValidationError(f"Unknown exception id: {exception_id!r}.")
+        target = replay_san(self.flow.start_fen, existing.after_san)
+        if normalized_position_key(target) != normalized_position_key(board):
+            raise FlowValidationError(
+                "The exception does not apply to the current position."
+            )
+        parse_legal_san(board, move_san, context=f"Exception {exception_id!r}")
+        replacement = ExceptionRule(
+            existing.id,
+            existing.step,
+            existing.after_san,
+            move_san,
+            note,
+        )
+        updated = self.store.add_exception(self.path, replacement)
+        self.flow = updated
+        self.policy = WhitePolicy(updated)
+        return updated
+
+    def replace_opponent_reply(
+        self,
+        board: chess.Board,
+        reply_id: str,
+        move_san: str,
+        note: str | None,
+    ) -> WhiteFlow:
+        existing = next(
+            (rule for rule in self.flow.opponent_replies if rule.id == reply_id),
+            None,
+        )
+        if existing is None:
+            raise FlowValidationError(f"Unknown opponent reply id: {reply_id!r}.")
+        target = replay_san(self.flow.start_fen, existing.after_san)
+        if normalized_position_key(target) != normalized_position_key(board):
+            raise FlowValidationError(
+                "The opponent reply does not apply to the current position."
+            )
+        if board.turn is not chess.BLACK:
+            raise FlowValidationError("Opponent replies must target Black to move.")
+        parse_legal_san(board, move_san, context=f"Opponent reply {reply_id!r}")
+        replacement = OpponentReply(
+            existing.id,
+            existing.after_san,
+            move_san,
+            note,
+        )
+        updated = self.store.add_opponent_reply(self.path, replacement)
+        self.flow = updated
+        self.policy = WhitePolicy(updated)
+        return updated
+
     def record_opponent_reply(
         self,
         board: chess.Board,

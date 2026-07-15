@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
 
@@ -43,7 +43,7 @@ test("main menu shows selected flow and both modes", async () => {
   expect(screen.getByRole("link", { name: /Develop/ })).toBeInTheDocument();
 });
 
-test("development workspace renders board, history, status feed, and policy context", async () => {
+test("development workspace renders board, rule status, status feed, and policy context", async () => {
   const snapshot = workspaceFixture({
     position: {
       ...workspaceFixture().position,
@@ -63,18 +63,22 @@ test("development workspace renders board, history, status feed, and policy cont
   const advantageMeter = screen.getByRole("meter", { name: /White-perspective evaluation/ });
   const boardHeading = screen.getByRole("heading", { name: "Board" });
   expect(advantageMeter.compareDocumentPosition(boardHeading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-  expect(screen.getByLabelText("SAN move history")).toHaveTextContent("d4");
-  expect(screen.getByLabelText("SAN move history")).toHaveTextContent("d5");
+  const rulesPanel = screen.getByRole("heading", { name: "Rule status" }).closest("aside");
+  expect(rulesPanel).not.toBeNull();
+  expect(within(rulesPanel!).getByText("selected")).toBeInTheDocument();
+  expect(within(rulesPanel!).getByText("d4")).toBeInTheDocument();
+  expect(within(rulesPanel!).getByText("d4 d5")).toBeInTheDocument();
   expect(screen.getByRole("log")).toHaveTextContent("White played d4");
   expect(screen.getByRole("log")).toHaveTextContent("Black played d5");
   expect(screen.getByText(/Reason: Control the center/)).toBeInTheDocument();
   expect(screen.getByText(/lifecycle rules are not available yet/i)).toBeInTheDocument();
 });
 
-test("board submission updates to correct-result controls", async () => {
+test("a correct board move advances directly to Black", async () => {
   const initial = workspaceFixture();
-  const correct = workspaceFixture({
-    phase: "white-result",
+  const blackReady = workspaceFixture({
+    phase: "black-ready",
+    decision: null,
     position: {
       ...initial.position,
       fen: "rnbqkbnr/pppppppp/8/8/3P4/8/PPP1PPPP/RNBQKBNR b KQkq - 0 1",
@@ -82,16 +86,7 @@ test("board submission updates to correct-result controls", async () => {
       turn: "black",
       ply: 1,
       lastMoveUci: "d2d4",
-      legalMovesUci: [],
-    },
-    attempt: {
-      result: "correct",
-      playedUci: "d2d4",
-      playedSan: "d4",
-      expectedUci: "d2d4",
-      expectedSan: "d4",
-      source: "default",
-      engineReview: null,
+      legalMovesUci: ["d7d5", "g8f6"],
     },
     activity: [
       { id: 1, kind: "success", title: "White played d4", message: "Correct. Control the center." },
@@ -99,18 +94,80 @@ test("board submission updates to correct-result controls", async () => {
   });
   const fetchMock = vi.fn()
     .mockResolvedValueOnce(jsonResponse(initial))
-    .mockResolvedValueOnce(jsonResponse(correct));
+    .mockResolvedValueOnce(jsonResponse(blackReady));
   vi.stubGlobal("fetch", fetchMock);
   renderRoute("/develop");
 
   await userEvent.click(await screen.findByRole("button", { name: "Play d4" }));
 
-  expect(await screen.findByRole("button", { name: "Continue" })).toBeInTheDocument();
-  expect(screen.getByText("Correct — continue the line").closest(".side-region")).not.toBeNull();
+  expect(await screen.findByRole("button", { name: "Next" })).toBeInTheDocument();
+  expect(screen.getByRole("log")).toHaveTextContent("Correct. Control the center.");
+  expect(screen.queryByRole("button", { name: "Continue" })).not.toBeInTheDocument();
   expect(fetchMock).toHaveBeenLastCalledWith(
     "/api/sessions/session-1/moves",
     expect.objectContaining({ method: "POST", body: JSON.stringify({ uci: "d2d4" }) }),
   );
+});
+
+test("chat composer submits a SAN move when Enter is pressed", async () => {
+  const initial = workspaceFixture();
+  const blackReady = workspaceFixture({
+    phase: "black-ready",
+    decision: null,
+    position: {
+      ...initial.position,
+      historySan: ["d4"],
+      turn: "black",
+      ply: 1,
+      legalMovesUci: ["d7d5"],
+    },
+  });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(initial))
+    .mockResolvedValueOnce(jsonResponse(blackReady));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+
+  const composer = await screen.findByRole("textbox", { name: "Enter move in SAN" });
+  await userEvent.type(composer, "d4{Enter}");
+
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/moves/san",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ san: "d4" }) }),
+  ));
+  expect(await screen.findByRole("button", { name: "Next" })).toBeInTheDocument();
+});
+
+test("Enter on Black’s turn asks the engine to play Next", async () => {
+  const initial = workspaceFixture({
+    phase: "black-ready",
+    decision: null,
+    position: {
+      ...workspaceFixture().position,
+      turn: "black",
+      historySan: ["d4"],
+      ply: 1,
+      legalMovesUci: ["d7d5"],
+    },
+  });
+  const advanced = workspaceFixture({
+    position: { ...workspaceFixture().position, historySan: ["d4", "d5"], ply: 2 },
+  });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(initial))
+    .mockResolvedValueOnce(jsonResponse(advanced));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+
+  expect(await screen.findByRole("button", { name: "Next" })).toHaveAttribute("aria-keyshortcuts", "Enter");
+  const emptyComposer = screen.getByRole("textbox", { name: "Enter move in SAN" });
+  emptyComposer.focus();
+  fireEvent.keyDown(emptyComposer, { key: "Enter" });
+
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/black/next",
+    expect.objectContaining({ method: "POST" }),
+  ));
 });
 
 test("mismatch displays retry, expected continuation, and engine review", async () => {
@@ -195,6 +252,68 @@ test("Next asks the engine to play Black while the board remains selectable", as
     "/api/sessions/session-1/black/next",
     expect.objectContaining({ method: "POST" }),
   ));
+});
+
+test("applicable rules can be edited from the left panel", async () => {
+  const initial = workspaceFixture();
+  const edited = workspaceFixture({
+    decision: { ...initial.decision!, moveUci: "e2e4", moveSan: "e4", note: "Claim the center." },
+    rules: {
+      ...initial.rules,
+      selected: { ...initial.rules.selected!, moveSan: "e4", note: "Claim the center." },
+      applicable: [
+        { ...initial.rules.applicable[0], moveSan: "e4", note: "Claim the center." },
+      ],
+    },
+  });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(initial))
+    .mockResolvedValueOnce(jsonResponse(edited));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+  const user = userEvent.setup();
+
+  await user.click(await screen.findByRole("button", { name: "Edit rule" }));
+  await user.clear(screen.getByRole("textbox", { name: "Move in SAN" }));
+  await user.type(screen.getByRole("textbox", { name: "Move in SAN" }), "e4");
+  await user.clear(screen.getByRole("textbox", { name: "Reason / note" }));
+  await user.type(screen.getByRole("textbox", { name: "Reason / note" }), "Claim the center.");
+  await user.click(screen.getByRole("button", { name: "Save rule" }));
+
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/rules/update",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({
+        ruleId: "default-step-1",
+        kind: "default",
+        moveSan: "e4",
+        note: "Claim the center.",
+      }),
+    }),
+  ));
+});
+
+test("left panel can switch to the active flow TOML", async () => {
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(workspaceFixture()))
+    .mockResolvedValueOnce(jsonResponse({
+      path: "flows/london.toml",
+      content: 'version = 1\nname = "London System"\n\n[[defaults]]\nstep = 1\nmove = "d4"\n',
+    }));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+
+  const tomlTab = await screen.findByRole("tab", { name: "TOML" });
+  expect(screen.getByRole("tab", { name: "Rules" })).toHaveAttribute("aria-selected", "true");
+  await userEvent.click(tomlTab);
+
+  expect(await screen.findByLabelText("Flow TOML source")).toHaveTextContent('name = "London System"');
+  expect(tomlTab).toHaveAttribute("aria-selected", "true");
+  expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/flow/source",
+    expect.objectContaining({ headers: expect.objectContaining({ "Content-Type": "application/json" }) }),
+  );
 });
 
 test("development workspace tolerates an older snapshot without activity", async () => {

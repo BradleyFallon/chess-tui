@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 
 import type { AttemptSnapshot, WorkspaceSnapshot } from "../types/workspace";
 
@@ -9,8 +9,8 @@ interface StatusFeedProps {
   onHint: () => void;
   onRetry: () => void;
   onKeep: () => void;
-  onContinue: () => void;
   onNextBlack: () => void;
+  onSubmitSan: (san: string) => void;
 }
 
 export function StatusFeed({
@@ -20,12 +20,22 @@ export function StatusFeed({
   onHint,
   onRetry,
   onKeep,
-  onContinue,
   onNextBlack,
+  onSubmitSan,
 }: StatusFeedProps) {
   const feedRef = useRef<HTMLDivElement>(null);
   const [showEditHelp, setShowEditHelp] = useState(false);
+  const [moveText, setMoveText] = useState("");
   const activity = workspace.activity ?? [];
+  const moveEntryDisabled = pending || workspace.phase === "white-result" || workspace.phase === "game-over";
+
+  const submitMove = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const san = moveText.trim();
+    if (!san || moveEntryDisabled) return;
+    setMoveText("");
+    onSubmitSan(san);
+  };
 
   useEffect(() => {
     const feed = feedRef.current;
@@ -56,17 +66,35 @@ export function StatusFeed({
           onHint={onHint}
           onRetry={onRetry}
           onKeep={onKeep}
-          onContinue={onContinue}
           onNextBlack={onNextBlack}
           onToggleEditHelp={() => setShowEditHelp((visible) => !visible)}
         />
       </div>
       <p className="status-model-note">{workspace.rules.modelMessage}</p>
+      <form className="status-composer" onSubmit={submitMove}>
+        <input
+          aria-label="Enter move in SAN"
+          value={moveText}
+          onChange={(event) => setMoveText(event.target.value)}
+          placeholder={moveEntryDisabled ? "Resolve the current result first" : "Type a move in SAN…"}
+          disabled={moveEntryDisabled}
+          autoComplete="off"
+          spellCheck={false}
+          enterKeyHint="send"
+          data-move-composer="true"
+        />
+        <button type="submit" aria-label="Submit move" disabled={moveEntryDisabled || !moveText.trim()}>
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="m5 12 14-7-4 14-3-6-7-1Z" />
+            <path d="m12 13 7-8" />
+          </svg>
+        </button>
+      </form>
     </aside>
   );
 }
 
-interface CurrentStatusProps extends StatusFeedProps {
+interface CurrentStatusProps extends Omit<StatusFeedProps, "onSubmitSan"> {
   showEditHelp: boolean;
   onToggleEditHelp: () => void;
 }
@@ -79,7 +107,6 @@ function CurrentStatus({
   onHint,
   onRetry,
   onKeep,
-  onContinue,
   onNextBlack,
   onToggleEditHelp,
 }: CurrentStatusProps) {
@@ -118,8 +145,8 @@ function CurrentStatus({
         <span className="status-note-marker" aria-hidden="true" />
         <div>
           <strong>Black to move</strong>
-          <p>Pick Black’s reply on the board, or choose Next and let the engine play it.</p>
-          <button className="primary status-next-button" onClick={onNextBlack} disabled={pending}>Next</button>
+          <p>Pick Black’s reply on the board, or press Enter / choose Next and let the engine play it.</p>
+          <button className="primary status-next-button" onClick={onNextBlack} disabled={pending} aria-keyshortcuts="Enter">Next</button>
         </div>
       </article>
     );
@@ -134,7 +161,6 @@ function CurrentStatus({
         showEditHelp={showEditHelp}
         onRetry={onRetry}
         onKeep={onKeep}
-        onContinue={onContinue}
         onToggleEditHelp={onToggleEditHelp}
       />
     );
@@ -158,7 +184,6 @@ function ResultActions({
   showEditHelp,
   onRetry,
   onKeep,
-  onContinue,
   onToggleEditHelp,
 }: {
   attempt: AttemptSnapshot;
@@ -167,7 +192,6 @@ function ResultActions({
   showEditHelp: boolean;
   onRetry: () => void;
   onKeep: () => void;
-  onContinue: () => void;
   onToggleEditHelp: () => void;
 }) {
   const correct = attempt.result === "correct";
@@ -179,7 +203,7 @@ function ResultActions({
         <strong>{correct ? "Correct — continue the line" : "Choose what to do next"}</strong>
         <EngineReview attempt={attempt} />
         <div className="button-row status-actions">
-          {correct && <button className="primary" onClick={onContinue} disabled={pending}>Continue</button>}
+          {correct && <p>Correct. Advancing to Black’s move…</p>}
           {mismatch && <>
             <button onClick={onRetry} disabled={pending}>Retry</button>
             <button className="primary" onClick={onKeep} disabled={pending}>Use saved move</button>

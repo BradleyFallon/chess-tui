@@ -42,6 +42,18 @@ export function workspaceFixture(
         moveSan: "d4",
         note: "Control the center.",
       },
+      applicable: [
+        {
+          id: "default-step-1",
+          kind: "default",
+          status: "selected",
+          step: 1,
+          moveSan: "d4",
+          note: "Control the center.",
+          afterSan: [],
+          editable: true,
+        },
+      ],
       active: [],
       dormant: [],
       retired: [],

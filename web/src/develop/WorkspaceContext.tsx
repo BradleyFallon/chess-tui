@@ -21,10 +21,17 @@ interface WorkspaceContextValue {
   error: ApiError | null;
   initialize: () => Promise<void>;
   submitMove: (uci: string) => Promise<void>;
+  submitSanMove: (san: string) => Promise<void>;
   retryWhite: () => Promise<void>;
   keepWhite: () => Promise<void>;
   continueWhite: () => Promise<void>;
   playNextBlack: () => Promise<void>;
+  updateRule: (
+    ruleId: string,
+    kind: "default" | "exception" | "opponent-reply",
+    moveSan: string,
+    note: string | null,
+  ) => Promise<void>;
   back: () => Promise<void>;
   restart: () => Promise<void>;
 }
@@ -101,10 +108,13 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       error,
       initialize,
       submitMove: (uci) => operate((id) => workspaceApi.submitMove(id, uci)),
+      submitSanMove: (san) => operate((id) => workspaceApi.submitSanMove(id, san)),
       retryWhite: () => operate(workspaceApi.retryWhite),
       keepWhite: () => operate(workspaceApi.keepWhite),
       continueWhite: () => operate(workspaceApi.continueWhite),
       playNextBlack: () => operate(workspaceApi.playNextBlack),
+      updateRule: (ruleId, kind, moveSan, note) =>
+        operate((id) => workspaceApi.updateRule(id, ruleId, kind, moveSan, note)),
       back: () => operate(workspaceApi.back),
       restart: () => operate(workspaceApi.restart),
     }),
