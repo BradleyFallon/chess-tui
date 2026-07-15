@@ -391,6 +391,8 @@ class ChessTui(App[None]):
         engine_path: Path | None = None,
         analysis_engine: ChessEngineService | None = None,
         quality_thresholds: QualityThresholds | None = None,
+        auto_play_black: bool = False,
+        focus_san_on_white_turn: bool = False,
         opponent_planner: OpponentMovePlanner | None = None,
         opening_source: OpeningMoveSource | None = None,
     ) -> None:
@@ -463,6 +465,8 @@ class ChessTui(App[None]):
                 analysis_engine=analysis_engine,
                 analysis_engine_owned_by_planner=analysis_engine_owned_by_planner,
                 quality_thresholds=quality_thresholds,
+                auto_play_black=auto_play_black,
+                focus_san_on_white_turn=focus_san_on_white_turn,
             )
 
     def on_mount(self) -> None:
@@ -516,6 +520,8 @@ def run_chess_app(
     engine_path: Path | None = None,
     analysis_engine: ChessEngineService | None = None,
     quality_thresholds: QualityThresholds | None = None,
+    auto_play_black: bool = False,
+    focus_san_on_white_turn: bool = False,
     opponent_planner: OpponentMovePlanner | None = None,
     opening_source: OpeningMoveSource | None = None,
 ) -> None:
@@ -529,6 +535,8 @@ def run_chess_app(
         engine_path=engine_path,
         analysis_engine=analysis_engine,
         quality_thresholds=quality_thresholds,
+        auto_play_black=auto_play_black,
+        focus_san_on_white_turn=focus_san_on_white_turn,
         opponent_planner=opponent_planner,
         opening_source=opening_source,
     )

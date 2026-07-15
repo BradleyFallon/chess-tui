@@ -172,6 +172,12 @@ def test_cli_parser_accepts_explicit_engine_path() -> None:
     assert str(args.engine) == "/opt/stockfish"
 
 
+def test_cli_parser_accepts_black_selection_opt_out() -> None:
+    args = build_parser().parse_args(["--select-black"])
+
+    assert args.select_black
+
+
 def test_cli_flow_mode_fails_when_stockfish_is_unavailable(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
@@ -192,6 +198,16 @@ def test_cli_rejects_engine_outside_flow_mode(
 
     assert exc_info.value.code == 2
     assert "--engine is only supported with --mode flow" in capsys.readouterr().err
+
+
+def test_cli_rejects_black_selection_outside_flow_mode(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    with pytest.raises(SystemExit) as exc_info:
+        main(["--mode", "local-game", "--select-black"])
+
+    assert exc_info.value.code == 2
+    assert "--select-black is only supported" in capsys.readouterr().err
 
 
 def test_cli_rejects_missing_engine_executable(
@@ -293,7 +309,7 @@ def test_cli_default_uses_most_recent_flow_and_stockfish_from_path(
     os.utime(older, ns=(1, 1))
     os.utime(london, ns=(2, 2))
     engine = _executable(tmp_path)
-    captured: list[tuple[AppMode, str, str]] = []
+    captured: list[tuple[AppMode, str, str, bool, bool]] = []
     monkeypatch.setattr("chess_tui.cli.DEFAULT_FLOW_DIRECTORY", flow_directory)
     monkeypatch.setattr("chess_tui.cli.shutil.which", lambda name: str(engine))
     monkeypatch.setattr(
@@ -308,13 +324,23 @@ def test_cli_default_uses_most_recent_flow_and_stockfish_from_path(
         mode=AppMode.LOCAL_GAME,
         flow_path=None,
         engine_path=None,
+        auto_play_black=False,
+        focus_san_on_white_turn=False,
     ) -> None:
-        captured.append((mode, str(flow_path), str(engine_path)))
+        captured.append(
+            (
+                mode,
+                str(flow_path),
+                str(engine_path),
+                auto_play_black,
+                focus_san_on_white_turn,
+            )
+        )
 
     monkeypatch.setattr("chess_tui.cli.run_chess_app", fake_run)
 
     assert main([]) == 0
-    assert captured == [(AppMode.FLOW, str(london), str(engine.resolve()))]
+    assert captured == [(AppMode.FLOW, str(london), str(engine.resolve()), True, True)]
 
 
 def test_cli_passes_explicit_engine_to_flow_app(
@@ -322,7 +348,7 @@ def test_cli_passes_explicit_engine_to_flow_app(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     engine = _executable(tmp_path)
-    captured: list[tuple[AppMode, str, str]] = []
+    captured: list[tuple[AppMode, str, str, bool, bool]] = []
     monkeypatch.setattr(
         "chess_tui.cli.validate_textual_runtime",
         lambda stream, *, renderer_mode=None: object(),
@@ -335,8 +361,18 @@ def test_cli_passes_explicit_engine_to_flow_app(
         mode=AppMode.LOCAL_GAME,
         flow_path=None,
         engine_path=None,
+        auto_play_black=False,
+        focus_san_on_white_turn=False,
     ) -> None:
-        captured.append((mode, str(flow_path), str(engine_path)))
+        captured.append(
+            (
+                mode,
+                str(flow_path),
+                str(engine_path),
+                auto_play_black,
+                focus_san_on_white_turn,
+            )
+        )
 
     monkeypatch.setattr("chess_tui.cli.run_chess_app", fake_run)
 
@@ -349,11 +385,14 @@ def test_cli_passes_explicit_engine_to_flow_app(
                 "flows/london.toml",
                 "--engine",
                 str(engine),
+                "--select-black",
             ]
         )
         == 0
     )
-    assert captured == [(AppMode.FLOW, "flows/london.toml", str(engine.resolve()))]
+    assert captured == [
+        (AppMode.FLOW, "flows/london.toml", str(engine.resolve()), False, True)
+    ]
 
 
 def test_package_smoke() -> None:

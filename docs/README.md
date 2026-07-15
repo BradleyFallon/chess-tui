@@ -41,6 +41,9 @@ Plain `chess-tui` uses one test-first workflow in flow mode. It selects the most
 recently saved `flows/*.toml` file and discovers `stockfish` from `PATH`, failing
 startup rather than degrading to the deterministic bot when Stockfish is
 unavailable. `--flow` and `--engine` explicitly override those selections.
+The first ranked Black response is committed automatically in normal flow mode;
+`--select-black` restores the interactive suggestion panel when branch choice
+or manual entry is desired.
 The TOML file contains numbered White defaults and readable SAN histories for
 exact-position exceptions. `WhitePolicy` derives normalized position keys and
 resolves exceptions before defaults; `FlowStore` validates and atomically saves
@@ -75,11 +78,18 @@ mate scores remain separate from centipawn values. The screen reports a
 configurable quality band and the best alternative while leaving every retry,
 keep, and repertoire-edit choice under user control.
 
+Flow mode also renders a compact Black/White advantage bar. It requests one
+analysis only when the committed FEN changes, ignores stale results, preserves
+mate scores as mate distances, and reports analysis failures without changing
+the active flow phase.
+
 `MoveSuggestionPanel` labels book and bot rows and marks explored branches.
 Manual board and typed-SAN entry remain available.
 Completed boards enter a dedicated `GAME_OVER` phase that reports checkmate,
 stalemate, automatic draw terminations, or other python-chess outcomes.
-Explicit `[NAV]`, `[TEXT: MOVE]`, and `[TEXT: NOTE]` modes determine whether
-printable keys invoke application shortcuts or enter literal text.
+Default CLI flow sessions focus SAN entry in `[TEXT: MOVE]`. `Escape` returns to
+`[NAV]` for board shortcuts and `I` focuses SAN entry again. Explicit
+`[NAV]`, `[TEXT: MOVE]`, and `[TEXT: NOTE]` modes determine whether printable
+keys invoke application shortcuts or enter literal text.
 Flow files persist explored SAN branches but not opening statistics, source
 labels, bot profiles, or evaluations.

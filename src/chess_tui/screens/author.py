@@ -25,6 +25,7 @@ from ..engine import (
     DEFAULT_QUALITY_THRESHOLDS,
     ChessEngineService,
     EngineError,
+    EngineResultError,
     MoveAssessment,
     QualityThresholds,
     assess_white_move,
@@ -37,7 +38,7 @@ from ..renderers.colors import LABEL_COLOR, SCREEN_BACKGROUND, STATUS_BACKGROUND
 from ..runtime import TerminalCapabilityError
 from ..tui import ChessBoard
 from ..view import BoardInputMode, BoardViewState, MoveView
-from ..widgets import MoveSuggestionPanel
+from ..widgets import AdvantageBar, MoveSuggestionPanel
 from .base import RendererController
 
 
@@ -77,6 +78,7 @@ class AuthorScreen(Screen[None]):
     AuthorScreen > #author-layout {{ width: 100%; height: 1fr; }}
     AuthorScreen #board-stage {{ align: center middle; }}
     AuthorScreen #author-side {{ padding: 1 2; }}
+    AuthorScreen #advantage-bar {{ height: 1; margin-bottom: 1; }}
     AuthorScreen #author-panel {{ height: auto; }}
     AuthorScreen #move-suggestions {{ display: none; height: auto; margin-top: 1; }}
     AuthorScreen #move-entry {{ display: none; height: 3; margin-top: 1; }}
@@ -107,6 +109,7 @@ class AuthorScreen(Screen[None]):
         width: 100%; height: 3; padding: 0;
     }}
     AuthorScreen.layout-compact #author-panel {{ height: 1; }}
+    AuthorScreen.layout-compact #advantage-bar {{ height: 1; margin: 0; }}
     AuthorScreen.layout-compact #move-suggestions {{ height: 1; margin: 0; }}
     AuthorScreen.layout-compact #move-entry {{ height: 1; margin: 0; border: none; }}
     AuthorScreen.layout-compact #note {{ height: 1; margin: 0; border: none; }}
@@ -134,6 +137,8 @@ class AuthorScreen(Screen[None]):
         analysis_engine: ChessEngineService | None = None,
         analysis_engine_owned_by_planner: bool = False,
         quality_thresholds: QualityThresholds | None = None,
+        auto_play_black: bool = False,
+        focus_san_on_white_turn: bool = False,
     ) -> None:
         super().__init__()
         self.flow_path = flow_path
@@ -146,6 +151,8 @@ class AuthorScreen(Screen[None]):
         self.analysis_engine = analysis_engine
         self.analysis_engine_owned_by_planner = analysis_engine_owned_by_planner
         self.quality_thresholds = quality_thresholds or DEFAULT_QUALITY_THRESHOLDS
+        self.auto_play_black = auto_play_black
+        self.focus_san_on_white_turn = focus_san_on_white_turn
         self.board = ChessBoard(
             self.controller.position,
             renderer=renderer,
@@ -153,6 +160,8 @@ class AuthorScreen(Screen[None]):
         )
         self.header = Static("", id="author-header")
         self.panel = Static("", id="author-panel", markup=False)
+        self.advantage_bar = AdvantageBar()
+        self.advantage_bar.display = analysis_engine is not None
         self.move_suggestions = MoveSuggestionPanel()
         self.move_input = Input(
             placeholder="Type a move in SAN, then press Enter", id="move-entry"
@@ -178,6 +187,8 @@ class AuthorScreen(Screen[None]):
         self._assessment_error: EngineError | None = None
         self._assessment_loading = False
         self._assessment_request_id = 0
+        self._advantage_position_key: str | None = None
+        self._advantage_request_id = 0
 
     @property
     def renderer(self) -> PieceRenderer:
@@ -197,6 +208,7 @@ class AuthorScreen(Screen[None]):
             with Container(id="board-stage"):
                 yield self.board
             with Vertical(id="author-side"):
+                yield self.advantage_bar
                 yield self.panel
                 yield self.move_suggestions
                 yield self.move_input
@@ -714,6 +726,8 @@ class AuthorScreen(Screen[None]):
         self.move_input.disabled = False
         self._refresh_panel()
         self._sync_board()
+        if self.focus_san_on_white_turn:
+            self._enter_text_mode(self.move_input)
 
     def _enter_black_turn(self) -> None:
         if self.workspace.outcome is not None:
@@ -758,6 +772,10 @@ class AuthorScreen(Screen[None]):
             self._enter_manual_black_turn()
             return
         self._clear_failure()
+        if self.auto_play_black:
+            self.phase = FlowPhase.BLACK_SELECT
+            self._confirm_suggestion(suggestions[0])
+            return
         self.phase = FlowPhase.BLACK_SELECT
         explored = frozenset(
             reply.move_san
@@ -790,6 +808,8 @@ class AuthorScreen(Screen[None]):
 
     def _retry_engine(self) -> None:
         if self.phase is FlowPhase.BLACK_ENGINE_ERROR:
+            self._advantage_position_key = None
+            self._track_advantage()
             self._enter_black_turn()
 
     def _enter_game_over(self) -> None:
@@ -1116,6 +1136,65 @@ class AuthorScreen(Screen[None]):
         )
         self._refresh_header()
         self._update_status()
+        self._track_advantage()
+
+    def _track_advantage(self) -> None:
+        engine = self.analysis_engine
+        if engine is None:
+            return
+        board = self.controller.board.copy(stack=False)
+        position_key = board.fen(en_passant="fen")
+        if position_key == self._advantage_position_key:
+            return
+        self._advantage_position_key = position_key
+        self._advantage_request_id += 1
+        request_id = self._advantage_request_id
+        outcome = board.outcome(claim_draw=False)
+        if outcome is not None:
+            self.advantage_bar.set_outcome(outcome)
+            return
+        self.advantage_bar.mark_loading()
+        self.run_worker(
+            self._load_advantage(request_id, position_key, board),
+            name="track-engine-advantage",
+            group="engine-advantage",
+            exclusive=True,
+        )
+
+    async def _load_advantage(
+        self,
+        request_id: int,
+        position_key: str,
+        board: chess.Board,
+    ) -> None:
+        engine = self.analysis_engine
+        assert engine is not None
+        try:
+            lines = await engine.analyse(board, count=1)
+            if not lines:
+                raise EngineResultError("Engine returned no advantage analysis.")
+            line = lines[0]
+        except EngineError as error:
+            if not self._advantage_request_is_current(request_id, position_key):
+                return
+            self.advantage_bar.set_error(str(error))
+            return
+        if not self._advantage_request_is_current(request_id, position_key):
+            return
+        self.advantage_bar.set_evaluation(
+            evaluation_cp=line.evaluation_cp,
+            mate_in=line.mate_in,
+        )
+
+    def _advantage_request_is_current(
+        self,
+        request_id: int,
+        position_key: str,
+    ) -> bool:
+        return (
+            request_id == self._advantage_request_id
+            and self.controller.board.fen(en_passant="fen") == position_key
+        )
 
     def _refresh_header(self) -> None:
         line = " ".join(self.history) if self.history else "Starting position"

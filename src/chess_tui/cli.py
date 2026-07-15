@@ -52,6 +52,11 @@ def build_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--select-black",
+        action="store_true",
+        help="Show Black suggestions instead of automatically playing the first.",
+    )
+    parser.add_argument(
         "--renderer",
         choices=[mode.value for mode in RendererMode],
         default=None,
@@ -135,6 +140,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("--flow is only supported with --mode flow")
     if mode is not AppMode.FLOW and args.engine is not None:
         parser.error("--engine is only supported with --mode flow")
+    if mode is not AppMode.FLOW and args.select_black:
+        parser.error("--select-black is only supported with --mode flow")
     if mode is AppMode.FLOW:
         args.flow = args.flow or _most_recent_flow(parser)
         args.engine = _flow_engine_path(args.engine, parser)
@@ -158,6 +165,8 @@ def main(argv: list[str] | None = None) -> int:
                 mode=mode,
                 flow_path=args.flow,
                 engine_path=args.engine,
+                auto_play_black=not args.select_black,
+                focus_san_on_white_turn=True,
             )
         else:
             run_chess_app(position, renderer=renderer, mode=mode)

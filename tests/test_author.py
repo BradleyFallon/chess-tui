@@ -627,3 +627,186 @@ def test_mismatching_white_move_shows_structured_engine_review(
         assert engine.closed
 
     asyncio.run(run_test())
+
+
+def test_advantage_bar_tracks_only_committed_flow_positions(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        class TrackingEngine:
+            def __init__(self) -> None:
+                self.positions: list[str] = []
+                self.closed = False
+
+            async def choose_move(
+                self, board: chess.Board, profile: EngineProfile
+            ) -> chess.Move:
+                return next(iter(board.legal_moves))
+
+            async def analyse(
+                self, board: chess.Board, *, count: int = 4
+            ) -> tuple[AnalysedMove, ...]:
+                self.positions.append(board.fen(en_passant="fen"))
+                move = next(iter(board.legal_moves))
+                evaluation = 35 if board.turn is chess.WHITE else -80
+                return (
+                    AnalysedMove(
+                        move.uci(),
+                        board.san(move),
+                        evaluation,
+                        (move.uci(),),
+                    ),
+                )
+
+            async def close(self) -> None:
+                self.closed = True
+
+        path = tmp_path / "advantage.toml"
+        _write_flow(path, DEFAULT_STARTING_FEN)
+        engine = TrackingEngine()
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+            analysis_engine=engine,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            assert screen.advantage_bar.display
+            assert "WHITE +0.35" in screen.advantage_bar.render().plain
+            assert len(engine.positions) == 1
+
+            _click_move(screen, "e2e4")
+            await pilot.pause()
+            assert len(engine.positions) == 1
+
+            await pilot.press("enter")
+            await pilot.pause()
+            assert len(engine.positions) == 2
+            assert "BLACK +0.80" in screen.advantage_bar.render().plain
+
+        assert engine.closed
+
+    asyncio.run(run_test())
+
+
+def test_advantage_analysis_failure_does_not_interrupt_flow(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        class FailingAnalysisEngine:
+            async def choose_move(
+                self, board: chess.Board, profile: EngineProfile
+            ) -> chess.Move:
+                return next(iter(board.legal_moves))
+
+            async def analyse(
+                self, board: chess.Board, *, count: int = 4
+            ) -> tuple[AnalysedMove, ...]:
+                raise EngineProcessError("analysis unavailable")
+
+            async def close(self) -> None:
+                return None
+
+        path = tmp_path / "advantage-error.toml"
+        _write_flow(path, DEFAULT_STARTING_FEN)
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+            analysis_engine=FailingAnalysisEngine(),
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            assert screen.phase is FlowPhase.FRONTIER_MOVE
+            assert "ENGINE —" in screen.advantage_bar.render().plain
+            assert screen.advantage_bar.error == "analysis unavailable"
+
+    asyncio.run(run_test())
+
+
+def test_auto_play_black_commits_first_ranked_suggestion(tmp_path: Path) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "auto-black.toml"
+        _write_flow(
+            path,
+            DEFAULT_STARTING_FEN,
+            (DefaultRule(1, "d4"),),
+        )
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+            auto_play_black=True,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await _submit_board_move(screen, pilot, "d2d4")
+            if screen.phase is FlowPhase.WHITE_RESULT_CORRECT:
+                await pilot.press("enter")
+                await pilot.pause()
+
+            assert screen.history == ["d4", "d5"]
+            assert screen.phase is FlowPhase.FRONTIER_MOVE
+            assert not screen.move_suggestions.display
+            saved = FlowStore().load(path)
+            assert saved.opponent_replies[-1].move_san == "d5"
+
+    asyncio.run(run_test())
+
+
+def test_default_flow_focuses_san_and_restores_focus_each_white_turn(
+    tmp_path: Path,
+) -> None:
+    async def run_test() -> None:
+        path = tmp_path / "focused-san.toml"
+        _write_flow(
+            path,
+            DEFAULT_STARTING_FEN,
+            (DefaultRule(1, "d4"),),
+        )
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+            auto_play_black=True,
+            focus_san_on_white_turn=True,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            assert screen.input.mode is InputMode.TEXT
+            assert screen.input.active_field is screen.move_input
+            assert screen.move_input.has_focus
+
+            await pilot.press("escape")
+            await pilot.pause()
+            assert screen.input.mode is InputMode.NAVIGATION
+            assert screen.input.active_field is None
+
+            await pilot.press("i")
+            await pilot.pause()
+            assert screen.input.mode is InputMode.TEXT
+            assert screen.input.active_field is screen.move_input
+            assert screen.move_input.has_focus
+
+            await pilot.press("d", "4", "enter")
+            await pilot.pause()
+            if screen.phase is FlowPhase.WHITE_RESULT_CORRECT:
+                await pilot.press("enter")
+                await pilot.pause()
+
+            assert screen.history == ["d4", "d5"]
+            assert screen.phase is FlowPhase.FRONTIER_MOVE
+            assert screen.input.mode is InputMode.TEXT
+            assert screen.input.active_field is screen.move_input
+            assert screen.move_input.has_focus
+
+    asyncio.run(run_test())

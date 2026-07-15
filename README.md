@@ -36,7 +36,9 @@ With no arguments, `chess-tui` starts flow mode with the most recently saved
 `flows/*.toml` file and the `stockfish` executable found in `PATH`. London is
 currently the most recently saved flow. Startup fails clearly if no saved flow
 or Stockfish executable is available; the deterministic prototype is not used
-for this default path. `--flow` and `--engine` remain explicit overrides.
+for this default path. Black's first ranked book or engine response is played
+automatically. `--flow` and `--engine` remain explicit overrides, and
+`--select-black` restores the suggestion selector.
 
 ## Local-game controls
 
@@ -87,20 +89,23 @@ White step.
   legal move is saved as an exact-position exception instead.
 - Play on the board and press `Enter` after highlighting the destination; board
   selection autofills the SAN field. You can also type SAN and press `Enter`.
-- On Black's turn, book-backed responses appear with game counts and
-  frequencies. When no book row exists, a deterministic prototype bot supplies
-  up to four legal suggestions at any depth. Pass an explicit executable with
-  `--engine /path/to/stockfish` to use one persistent Stockfish suggestion
-  instead when book data ends. Engine failures remain visible and support
-  retry or manual entry; they never fall back silently. Rows identify their
-  `BOOK` or `BOT` source, and previously explored responses are marked. Use
-  `Up`/`Down` or `A`/`S`/`D`/`F` and press `Enter`; press `M` for manual board
-  entry or `I` to type SAN.
+- On Black's turn, the first ranked book response is played automatically; when
+  book data ends, Stockfish supplies and plays one response. Engine failures
+  remain visible and support retry or manual entry; they never fall back
+  silently. Launch with `--select-black` to show source-labelled suggestion
+  rows and explored state instead. In selector mode use `Up`/`Down` or
+  `A`/`S`/`D`/`F` and press `Enter`; press `M` for manual board entry or `I` to
+  type SAN.
 - Completed positions enter `GAME OVER` with the termination and result instead
   of requesting another move. Press `R` to restart the flow or `Q` to quit.
-- Flow interaction starts in `[NAV]`, where board controls and shortcuts are
-  active. Press `I` or click the SAN field to enter `[TEXT: MOVE]`; printable
-  keys are literal until `Enter` submits or `Escape` cancels the edit.
+- A live Black/White advantage bar tracks each committed flow position using
+  the configured Stockfish service. Scores are normalized to White and display
+  pawn advantage, forced mate, draw, or final result without analysing hover,
+  selection, or other uncommitted board interactions.
+- Default flow interaction starts in `[TEXT: MOVE]` with the SAN field focused;
+  printable keys are literal until `Enter` submits. Press `Escape` to return to
+  `[NAV]` for board controls and shortcuts, and press `I` to focus SAN entry
+  again.
 - Rule notes open in `[TEXT: NOTE]`. `Enter` finishes text entry, then `S` saves
   the selected rule action.
 - `R` restarts the line from the flow's starting FEN; `Ctrl+N` remains an alias.
