@@ -9,6 +9,7 @@ moves, and renders chess pieces on a responsive checkerboard.
 source ./activate
 update-deps
 chess-tui --help
+chess-tui
 chess-tui --mode local-game
 chess-tui --mode quiz-demo
 chess-tui --mode flow --flow flows/london.toml
@@ -30,6 +31,12 @@ After activation, `chess-tui` resolves to the installed console script at
 
 Application mode and renderer mode are independent, so combinations such as
 `chess-tui --mode quiz-demo --renderer unicode` are supported.
+
+With no arguments, `chess-tui` starts flow mode with the most recently saved
+`flows/*.toml` file and the `stockfish` executable found in `PATH`. London is
+currently the most recently saved flow. Startup fails clearly if no saved flow
+or Stockfish executable is available; the deterministic prototype is not used
+for this default path. `--flow` and `--engine` remain explicit overrides.
 
 ## Local-game controls
 
@@ -123,6 +130,8 @@ unless all of these requirements are met:
 - `pixel-mask` requires at least 67 columns by 35 rows, including the status line.
 - The selected renderer is one of `pixel-mask`, `unicode`, or `legacy-sprite`.
 - The selected application mode is `local-game`, `quiz-demo`, or `flow`.
+- The default application mode is `flow`; it requires Stockfish from `PATH` or
+  an explicit `--engine` executable.
 - The CLI flag `--renderer` overrides `CHESS_TUI_RENDERER`; the default mode is
   `pixel-mask`.
 
@@ -269,6 +278,6 @@ Copy this block when providing the project structure to an LLM:
 
 - Use `chess_tui.parse_fen()` to validate and normalize FEN strings.
 - The CLI accepts `--mode`, `--renderer`, and `--fen`; flow mode also accepts
-  `--flow` and an optional explicit `--engine` path. Local-game opens the
-  standard starting position by default.
+  explicit `--flow` and `--engine` overrides. Local-game opens the standard
+  starting position when selected explicitly.
 - Add dependencies under `[project.dependencies]` in `pyproject.toml`.

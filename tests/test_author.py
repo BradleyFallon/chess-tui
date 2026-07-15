@@ -29,7 +29,7 @@ from chess_tui.screens.author import AuthorScreen, FlowPhase
 from chess_tui.tui import ChessBoard, ChessTui
 
 PROJECT_ROOT = Path(__file__).parents[1]
-LONDON_FLOW = PROJECT_ROOT / "flows" / "london.toml"
+LONDON_FLOW = PROJECT_ROOT / "tests" / "fixtures" / "london-flow.toml"
 
 
 def _write_flow(

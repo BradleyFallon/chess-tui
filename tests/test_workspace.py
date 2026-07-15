@@ -16,7 +16,7 @@ from chess_tui.flow import (
 )
 
 PROJECT_ROOT = Path(__file__).parents[1]
-LONDON_FLOW = PROJECT_ROOT / "flows" / "london.toml"
+LONDON_FLOW = PROJECT_ROOT / "tests" / "fixtures" / "london-flow.toml"
 
 
 def test_workspace_retries_and_keeps_saved_rule_from_original_position(

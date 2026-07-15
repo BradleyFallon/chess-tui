@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
+import shutil
 import sys
 
 from . import DEFAULT_STARTING_FEN, __version__
@@ -15,6 +16,8 @@ from .modes import AppMode
 from .renderers.mode import RendererMode
 from .runtime import RuntimeRequirementError, validate_textual_runtime
 from .tui import run_chess_app
+
+DEFAULT_FLOW_DIRECTORY = Path("flows")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -30,20 +33,23 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mode",
         choices=[mode.value for mode in AppMode],
-        default=AppMode.LOCAL_GAME.value,
-        help="Application mode (defaults to local-game).",
+        default=AppMode.FLOW.value,
+        help="Application mode (defaults to flow).",
     )
     parser.add_argument(
         "--flow",
         type=Path,
         default=None,
-        help="White-flow TOML file (required for flow mode).",
+        help="White-flow TOML file (defaults to the most recently saved flow).",
     )
     parser.add_argument(
         "--engine",
         type=Path,
         default=None,
-        help="Explicit Stockfish executable path (flow mode only).",
+        help=(
+            "Explicit Stockfish executable path (flow mode only; defaults to "
+            "stockfish from PATH)."
+        ),
     )
     parser.add_argument(
         "--renderer",
@@ -78,6 +84,44 @@ def _resolve_renderer_mode(
         )
 
 
+def _most_recent_flow(parser: argparse.ArgumentParser) -> Path:
+    candidates: list[tuple[int, Path]] = []
+    try:
+        flow_paths = DEFAULT_FLOW_DIRECTORY.glob("*.toml")
+        for path in flow_paths:
+            try:
+                candidates.append((path.stat().st_mtime_ns, path))
+            except OSError:
+                continue
+    except OSError:
+        candidates = []
+    if not candidates:
+        parser.error(
+            f"no saved flow files were found in {DEFAULT_FLOW_DIRECTORY}; "
+            "pass --flow PATH"
+        )
+    return max(candidates, key=lambda item: (item[0], item[1].name))[1]
+
+
+def _flow_engine_path(
+    value: Path | None,
+    parser: argparse.ArgumentParser,
+) -> Path:
+    candidate = value
+    if candidate is None:
+        discovered = shutil.which("stockfish")
+        if discovered is None:
+            parser.error(
+                "Stockfish is required for flow mode but was not found in PATH; "
+                "install Stockfish or pass --engine PATH"
+            )
+        candidate = Path(discovered)
+    try:
+        return validate_engine_path(candidate)
+    except EngineError as exc:
+        parser.error(str(exc))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -87,17 +131,13 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     mode = AppMode(args.mode)
-    if mode is AppMode.FLOW and args.flow is None:
-        parser.error("--flow is required when --mode flow is selected")
     if mode is not AppMode.FLOW and args.flow is not None:
         parser.error("--flow is only supported with --mode flow")
     if mode is not AppMode.FLOW and args.engine is not None:
         parser.error("--engine is only supported with --mode flow")
-    if args.engine is not None:
-        try:
-            args.engine = validate_engine_path(args.engine)
-        except EngineError as exc:
-            parser.error(str(exc))
+    if mode is AppMode.FLOW:
+        args.flow = args.flow or _most_recent_flow(parser)
+        args.engine = _flow_engine_path(args.engine, parser)
 
     try:
         position = parse_fen(args.fen)
@@ -112,21 +152,13 @@ def main(argv: list[str] | None = None) -> int:
             renderer_mode=renderer_mode,
         )
         if mode is AppMode.FLOW:
-            if args.engine is None:
-                run_chess_app(
-                    position,
-                    renderer=renderer,
-                    mode=mode,
-                    flow_path=args.flow,
-                )
-            else:
-                run_chess_app(
-                    position,
-                    renderer=renderer,
-                    mode=mode,
-                    flow_path=args.flow,
-                    engine_path=args.engine,
-                )
+            run_chess_app(
+                position,
+                renderer=renderer,
+                mode=mode,
+                flow_path=args.flow,
+                engine_path=args.engine,
+            )
         else:
             run_chess_app(position, renderer=renderer, mode=mode)
     except (RuntimeRequirementError, FlowError, EngineError) as exc:

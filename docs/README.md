@@ -37,7 +37,10 @@ when enlarged.
 
 ## Unified White-flow mode
 
-`chess-tui --mode flow --flow flows/london.toml` uses one test-first workflow.
+Plain `chess-tui` uses one test-first workflow in flow mode. It selects the most
+recently saved `flows/*.toml` file and discovers `stockfish` from `PATH`, failing
+startup rather than degrading to the deterministic bot when Stockfish is
+unavailable. `--flow` and `--engine` explicitly override those selections.
 The TOML file contains numbered White defaults and readable SAN histories for
 exact-position exceptions. `WhitePolicy` derives normalized position keys and
 resolves exceptions before defaults; `FlowStore` validates and atomically saves

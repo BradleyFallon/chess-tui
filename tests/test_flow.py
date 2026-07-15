@@ -22,7 +22,7 @@ from chess_tui.flow import (
 )
 
 PROJECT_ROOT = Path(__file__).parents[1]
-LONDON_FLOW = PROJECT_ROOT / "flows" / "london.toml"
+LONDON_FLOW = PROJECT_ROOT / "tests" / "fixtures" / "london-flow.toml"
 
 
 def test_store_loads_human_readable_london_flow() -> None:

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import sys
 from typing import TextIO, cast
 
 import pytest
@@ -26,6 +28,13 @@ class FakeTty:
 
     def isatty(self) -> bool:
         return True
+
+
+def _executable(tmp_path: Path) -> Path:
+    engine = tmp_path / "stockfish"
+    engine.write_text("fixture", encoding="utf-8")
+    engine.chmod(0o755)
+    return engine
 
 
 def test_required_textual_runtime_is_available() -> None:
@@ -113,7 +122,9 @@ def test_runtime_rejects_wrong_sprite_cell_width(
 
 def test_cli_rejects_non_interactive_output(
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("chess_tui.cli.shutil.which", lambda name: sys.executable)
     with pytest.raises(SystemExit) as exc_info:
         main([])
 
@@ -125,6 +136,12 @@ def test_cli_parser_accepts_explicit_renderer_mode() -> None:
     args = build_parser().parse_args(["--renderer", "legacy-sprite"])
 
     assert args.renderer == "legacy-sprite"
+
+
+def test_cli_parser_defaults_to_flow_mode() -> None:
+    args = build_parser().parse_args([])
+
+    assert args.mode == "flow"
 
 
 def test_cli_parser_accepts_quiz_demo_mode() -> None:
@@ -155,21 +172,23 @@ def test_cli_parser_accepts_explicit_engine_path() -> None:
     assert str(args.engine) == "/opt/stockfish"
 
 
-def test_cli_requires_flow_for_flow_mode(
+def test_cli_flow_mode_fails_when_stockfish_is_unavailable(
     capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setattr("chess_tui.cli.shutil.which", lambda name: None)
     with pytest.raises(SystemExit) as exc_info:
         main(["--mode", "flow"])
 
     assert exc_info.value.code == 2
-    assert "--flow is required" in capsys.readouterr().err
+    assert "Stockfish is required for flow mode" in capsys.readouterr().err
 
 
 def test_cli_rejects_engine_outside_flow_mode(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     with pytest.raises(SystemExit) as exc_info:
-        main(["--engine", "/missing/stockfish"])
+        main(["--mode", "local-game", "--engine", "/missing/stockfish"])
 
     assert exc_info.value.code == 2
     assert "--engine is only supported with --mode flow" in capsys.readouterr().err
@@ -214,7 +233,7 @@ def test_cli_renderer_flag_overrides_environment(
     monkeypatch.setattr("chess_tui.cli.validate_textual_runtime", fake_validate)
     monkeypatch.setattr("chess_tui.cli.run_chess_app", fake_run)
 
-    assert main(["--renderer", "legacy-sprite"]) == 0
+    assert main(["--mode", "local-game", "--renderer", "legacy-sprite"]) == 0
     assert captured == [RendererMode.LEGACY_SPRITE]
 
 
@@ -237,7 +256,7 @@ def test_cli_environment_renderer_is_used_when_flag_missing(
         lambda position, *, renderer=None, mode=AppMode.LOCAL_GAME: None,
     )
 
-    assert main([]) == 0
+    assert main(["--mode", "local-game"]) == 0
     assert captured == [RendererMode.UNICODE]
 
 
@@ -261,8 +280,22 @@ def test_cli_passes_quiz_demo_mode_to_app(
     assert captured == [AppMode.QUIZ_DEMO]
 
 
-def test_cli_passes_flow_to_app(monkeypatch: pytest.MonkeyPatch) -> None:
-    captured: list[tuple[AppMode, str]] = []
+def test_cli_default_uses_most_recent_flow_and_stockfish_from_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow_directory = tmp_path / "flows"
+    flow_directory.mkdir()
+    older = flow_directory / "other.toml"
+    london = flow_directory / "london.toml"
+    older.write_text("older", encoding="utf-8")
+    london.write_text("recent", encoding="utf-8")
+    os.utime(older, ns=(1, 1))
+    os.utime(london, ns=(2, 2))
+    engine = _executable(tmp_path)
+    captured: list[tuple[AppMode, str, str]] = []
+    monkeypatch.setattr("chess_tui.cli.DEFAULT_FLOW_DIRECTORY", flow_directory)
+    monkeypatch.setattr("chess_tui.cli.shutil.which", lambda name: str(engine))
     monkeypatch.setattr(
         "chess_tui.cli.validate_textual_runtime",
         lambda stream, *, renderer_mode=None: object(),
@@ -274,22 +307,21 @@ def test_cli_passes_flow_to_app(monkeypatch: pytest.MonkeyPatch) -> None:
         renderer=None,
         mode=AppMode.LOCAL_GAME,
         flow_path=None,
+        engine_path=None,
     ) -> None:
-        captured.append((mode, str(flow_path)))
+        captured.append((mode, str(flow_path), str(engine_path)))
 
     monkeypatch.setattr("chess_tui.cli.run_chess_app", fake_run)
 
-    assert main(["--mode", "flow", "--flow", "flows/london.toml"]) == 0
-    assert captured == [(AppMode.FLOW, "flows/london.toml")]
+    assert main([]) == 0
+    assert captured == [(AppMode.FLOW, str(london), str(engine.resolve()))]
 
 
 def test_cli_passes_explicit_engine_to_flow_app(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    engine = tmp_path / "stockfish"
-    engine.write_text("fixture", encoding="utf-8")
-    engine.chmod(0o755)
+    engine = _executable(tmp_path)
     captured: list[tuple[AppMode, str, str]] = []
     monkeypatch.setattr(
         "chess_tui.cli.validate_textual_runtime",
