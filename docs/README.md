@@ -52,9 +52,19 @@ as an exact-position exception.
 
 `FlowWorkspace` owns the current board, SAN history, attempted White move,
 rollback, and turn transitions. The Textual screen renders that state while
-`WhiteFlowAuthor` owns policy and file writes. Black responses first come from
-an asynchronous `OpeningMoveSource`; the deterministic fixture covers several
-London plies, with manual board and typed-SAN fallbacks.
+`WhiteFlowAuthor` owns policy and file writes.
+
+Black responses come from `OpponentMovePlanner`. It converts statistical rows
+from `OpeningMoveSource` into generic `MoveSuggestion` values when book data is
+available. Otherwise it asks `BotMoveSource`; the current
+`FixtureBotMoveSource` deterministically ranks legal moves from the normalized
+position, profile id, and session seed. It works beyond the authored fixture
+depth but is not intended to model realistic chess strength. A later engine
+source can replace it without changing `FlowWorkspace` or the screen.
+
+`MoveSuggestionPanel` labels book and bot rows and marks explored branches.
+Manual board and typed-SAN entry remain available.
 Explicit `[NAV]`, `[TEXT: MOVE]`, and `[TEXT: NOTE]` modes determine whether
 printable keys invoke application shortcuts or enter literal text.
-Flow files persist explored branches but not changing opening statistics.
+Flow files persist explored SAN branches but not opening statistics, source
+labels, bot profiles, or evaluations.

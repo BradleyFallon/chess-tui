@@ -40,7 +40,7 @@ from .runtime import TerminalCapabilityError
 from .view import BoardInputMode, BoardViewState
 
 if TYPE_CHECKING:
-    from .opening import OpeningMoveSource
+    from .opening import OpeningMoveSource, OpponentMovePlanner
 
 BOARD_LEFT_MARGIN = 3
 SQUARE_PRESETS = ((7, 3), (5, 2), (3, 1))
@@ -387,6 +387,7 @@ class ChessTui(App[None]):
         renderer: PieceRenderer | None = None,
         fen: str | None = None,
         flow_path: Path | None = None,
+        opponent_planner: OpponentMovePlanner | None = None,
         opening_source: OpeningMoveSource | None = None,
     ) -> None:
         super().__init__()
@@ -420,10 +421,23 @@ class ChessTui(App[None]):
         else:
             if flow_path is None:
                 raise ValueError("flow mode requires a flow_path")
+            if opponent_planner is not None and opening_source is not None:
+                raise ValueError("Pass opponent_planner or opening_source, not both.")
+            if opponent_planner is None:
+                from .opening import (
+                    FixtureBotMoveSource,
+                    FixtureOpeningMoveSource,
+                    OpponentMovePlanner,
+                )
+
+                opponent_planner = OpponentMovePlanner(
+                    opening_source or FixtureOpeningMoveSource(),
+                    FixtureBotMoveSource(),
+                )
             self.initial_screen = AuthorScreen(
                 flow_path,
                 selected_renderer,
-                opening_source,
+                opponent_planner,
             )
 
     def on_mount(self) -> None:
@@ -474,6 +488,7 @@ def run_chess_app(
     renderer: PieceRenderer | None = None,
     mode: AppMode = AppMode.LOCAL_GAME,
     flow_path: Path | None = None,
+    opponent_planner: OpponentMovePlanner | None = None,
     opening_source: OpeningMoveSource | None = None,
 ) -> None:
     """Run the selected application mode."""
@@ -483,6 +498,7 @@ def run_chess_app(
         mode=mode,
         renderer=renderer,
         flow_path=flow_path,
+        opponent_planner=opponent_planner,
         opening_source=opening_source,
     )
     app.run()

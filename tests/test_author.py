@@ -90,8 +90,8 @@ def test_flow_hides_known_answer_until_white_submits(tmp_path: Path) -> None:
             await pilot.press("enter")
             await pilot.pause()
             assert screen.phase is FlowPhase.BLACK_SELECT
-            assert screen.opening_moves.highlighted_move is not None
-            assert screen.opening_moves.highlighted_move.san == "d5"
+            assert screen.move_suggestions.highlighted_suggestion is not None
+            assert screen.move_suggestions.highlighted_suggestion.san == "d5"
 
     asyncio.run(run_test())
 
@@ -224,7 +224,10 @@ def test_flow_exception_is_hidden_then_keep_applies_it(tmp_path: Path) -> None:
             await pilot.pause()
             assert screen.history == ["d4", "e5", "dxe5"]
             assert screen.controller.board.piece_at(square_from_name("e5")) is not None
-            assert screen.phase is FlowPhase.BLACK_MANUAL
+            assert screen.phase is FlowPhase.BLACK_SELECT
+            suggestion = screen.move_suggestions.highlighted_suggestion
+            assert suggestion is not None
+            assert suggestion.kind.value == "bot"
 
     asyncio.run(run_test())
 
@@ -263,6 +266,10 @@ def test_flow_frontier_saves_rule_then_tests_it_after_restart(tmp_path: Path) ->
             await pilot.press("s")
             await pilot.pause()
             assert FlowStore().load(path).defaults[4].move_san == "Bd3"
+            suggestion = screen.move_suggestions.highlighted_suggestion
+            assert screen.phase is FlowPhase.BLACK_SELECT
+            assert suggestion is not None
+            assert suggestion.kind.value == "bot"
 
             screen.action_restart_line()
             await pilot.pause()
@@ -270,6 +277,45 @@ def test_flow_frontier_saves_rule_then_tests_it_after_restart(tmp_path: Path) ->
             assert screen.phase is FlowPhase.WHITE_TEST
             assert "Bd3" not in _panel_text(screen)
             assert "rule=hidden" in screen.debug_status.render_line(0).text
+
+    asyncio.run(run_test())
+
+
+def test_flow_suggestions_keep_manual_and_typed_black_entry(tmp_path: Path) -> None:
+    async def enter_black_selector(screen: AuthorScreen, pilot) -> None:
+        await _submit_board_move(screen, pilot, "d2d4")
+        if screen.phase is FlowPhase.WHITE_RESULT_CORRECT:
+            await pilot.press("enter")
+            await pilot.pause()
+        assert screen.phase is FlowPhase.BLACK_SELECT
+
+    async def run_test() -> None:
+        path = tmp_path / "london.toml"
+        shutil.copy2(LONDON_FLOW, path)
+        app = ChessTui(
+            mode=AppMode.FLOW,
+            renderer=create_piece_renderer(RendererMode.UNICODE),
+            flow_path=path,
+        )
+        screen = app.initial_screen
+        assert isinstance(screen, AuthorScreen)
+
+        async with app.run_test(size=(120, 42)) as pilot:
+            await pilot.pause()
+            await enter_black_selector(screen, pilot)
+            await pilot.press("m")
+            await pilot.pause()
+            assert screen.phase is FlowPhase.BLACK_MANUAL
+            assert screen.input.mode is InputMode.NAVIGATION
+
+            screen.action_restart_line()
+            await pilot.pause()
+            await enter_black_selector(screen, pilot)
+            await pilot.press("i")
+            await pilot.pause()
+            assert screen.phase is FlowPhase.BLACK_MANUAL
+            assert screen.input.mode is InputMode.TEXT
+            assert screen.input.active_field is screen.move_input
 
     asyncio.run(run_test())
 

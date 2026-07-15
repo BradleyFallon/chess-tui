@@ -76,8 +76,10 @@ White step.
   legal move is saved as an exact-position exception instead.
 - Play on the board and press `Enter` after highlighting the destination; board
   selection autofills the SAN field. You can also type SAN and press `Enter`.
-- On Black's turn, fixture-backed common responses appear with game counts and
-  frequencies, and previously explored responses are marked. Use `Up`/`Down`
+- On Black's turn, book-backed responses appear with game counts and
+  frequencies. When no book row exists, a deterministic prototype bot supplies
+  up to four legal suggestions at any depth. Rows identify their `BOOK` or
+  `BOT` source, and previously explored responses are marked. Use `Up`/`Down`
   or `A`/`S`/`D`/`F` and press `Enter`; press `M` for manual board entry or `I`
   to type SAN.
 - Flow interaction starts in `[NAV]`, where board controls and shortcuts are
@@ -94,10 +96,12 @@ White step.
   active rule source, and error state.
 
 Flow files store readable SAN histories and explored Black replies. Opening
-counts and frequencies remain source data and are not persisted. Position
-matching derives piece placement, side to move, castling rights, and en-passant
-state while ignoring move clocks. Saves are atomic and preserve the previous
-file as `<flow>.bak`.
+counts, frequencies, bot profiles, and suggestion labels remain source data and
+are not persisted. The prototype bot is deterministic infrastructure, not a
+realistic strength or Elo model. Position matching derives piece placement,
+side to move, castling rights, and en-passant state while ignoring move clocks.
+Saves are atomic and preserve the previous file as `<flow>.bak`; generated
+backup files are ignored by Git.
 
 ## Runtime contract
 
@@ -182,6 +186,7 @@ Copy this block when providing the project structure to an LLM:
 |   |-- test_game.py                  # Move controller coverage
 |   |-- test_flow.py                  # Persistent flow policy and storage coverage
 |   |-- test_author.py                # Flow-screen workflow coverage
+|   |-- test_opponent.py              # Deep book-to-bot route coverage
 |   |-- test_quiz.py                  # Quiz screen and widget behavior
 |   |-- test_sessions.py              # Fixture provider and model validation
 |   `-- test_smoke.py                 # Minimal package behavior tests
@@ -227,6 +232,8 @@ Copy this block when providing the project structure to an LLM:
   by local-game and quiz providers.
 - `src/chess_tui/sessions/` - defines the narrow quiz provider protocol,
   presentation models, strict errors, and packaged fixture implementation.
+- `src/chess_tui/opening/` - defines book and bot source protocols, generic move
+  suggestions, the book-first opponent planner, and deterministic local data.
 - `src/chess_tui/screens/` - contains independent local-game and quiz UI state
   machines selected by the application shell.
 - `src/chess_tui/runtime.py` - validates the pinned UI dependencies, UTF-8 TTY,

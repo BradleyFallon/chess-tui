@@ -157,7 +157,7 @@ class AuthorBoardController:
         return self._commit_move(self.board.parse_san(san))
 
     def confirm_uci(self, uci: str) -> ConfirmedAuthorMove:
-        """Parse and commit a legal UCI move supplied by an opening source."""
+        """Parse and commit a legal UCI move supplied by a suggestion source."""
 
         move = chess.Move.from_uci(uci)
         if move not in self.board.legal_moves:

@@ -23,18 +23,13 @@ from ..flow import (
 )
 from ..input_mode import InputMode, InputModeController
 from ..layout import QuizLayoutMode, choose_quiz_layout
-from ..opening import (
-    FixtureOpeningMoveSource,
-    OpeningMove,
-    OpeningMoveSource,
-    OpeningSourceError,
-)
+from ..opening import MoveSuggestion, OpeningSourceError, OpponentMovePlanner
 from ..renderers.base import PieceRenderer
 from ..renderers.colors import LABEL_COLOR, SCREEN_BACKGROUND, STATUS_BACKGROUND
 from ..runtime import TerminalCapabilityError
 from ..tui import ChessBoard
 from ..view import BoardInputMode, BoardViewState, MoveView
-from ..widgets import OpeningMovePanel
+from ..widgets import MoveSuggestionPanel
 from .base import RendererController
 
 
@@ -73,7 +68,7 @@ class AuthorScreen(Screen[None]):
     AuthorScreen #board-stage {{ align: center middle; }}
     AuthorScreen #author-side {{ padding: 1 2; }}
     AuthorScreen #author-panel {{ height: auto; }}
-    AuthorScreen #opening-moves {{ display: none; height: auto; margin-top: 1; }}
+    AuthorScreen #move-suggestions {{ display: none; height: auto; margin-top: 1; }}
     AuthorScreen #move-entry {{ display: none; height: 3; margin-top: 1; }}
     AuthorScreen #note {{ display: none; height: 3; margin-top: 1; }}
     AuthorScreen #decision-actions {{ display: none; height: auto; margin-top: 1; }}
@@ -102,7 +97,7 @@ class AuthorScreen(Screen[None]):
         width: 100%; height: 3; padding: 0;
     }}
     AuthorScreen.layout-compact #author-panel {{ height: 1; }}
-    AuthorScreen.layout-compact #opening-moves {{ height: 1; margin: 0; }}
+    AuthorScreen.layout-compact #move-suggestions {{ height: 1; margin: 0; }}
     AuthorScreen.layout-compact #move-entry {{ height: 1; margin: 0; border: none; }}
     AuthorScreen.layout-compact #note {{ height: 1; margin: 0; border: none; }}
     AuthorScreen.layout-compact #decision-actions {{ height: 1; margin: 0; }}
@@ -124,7 +119,7 @@ class AuthorScreen(Screen[None]):
         self,
         flow_path: Path,
         renderer: PieceRenderer,
-        opening_source: OpeningMoveSource | None = None,
+        opponent_planner: OpponentMovePlanner,
     ) -> None:
         super().__init__()
         self.flow_path = flow_path
@@ -133,7 +128,7 @@ class AuthorScreen(Screen[None]):
         self.controller = self.workspace.controller
         self.history = self.workspace.history
         self.renderer_controller = RendererController(renderer)
-        self.opening_source = opening_source or FixtureOpeningMoveSource()
+        self.opponent_planner = opponent_planner
         self.board = ChessBoard(
             self.controller.position,
             renderer=renderer,
@@ -141,7 +136,7 @@ class AuthorScreen(Screen[None]):
         )
         self.header = Static("", id="author-header")
         self.panel = Static("", id="author-panel", markup=False)
-        self.opening_moves = OpeningMovePanel()
+        self.move_suggestions = MoveSuggestionPanel()
         self.move_input = Input(
             placeholder="Type a move in SAN, then press Enter", id="move-entry"
         )
@@ -159,7 +154,7 @@ class AuthorScreen(Screen[None]):
         self._move_error: str | None = None
         self._text_value_before: str | None = None
         self._quit_confirmation = False
-        self._opening_request_id = 0
+        self._suggestion_request_id = 0
         self._note_action: RuleNoteAction | None = None
         self._note_return_phase: FlowPhase | None = None
 
@@ -182,7 +177,7 @@ class AuthorScreen(Screen[None]):
                 yield self.board
             with Vertical(id="author-side"):
                 yield self.panel
-                yield self.opening_moves
+                yield self.move_suggestions
                 yield self.move_input
                 yield self.note_input
                 with self.actions:
@@ -201,6 +196,9 @@ class AuthorScreen(Screen[None]):
 
     def on_mount(self) -> None:
         self._restart()
+
+    async def on_unmount(self) -> None:
+        await self.opponent_planner.close()
 
     def on_resize(self, event: Resize) -> None:
         try:
@@ -334,20 +332,20 @@ class AuthorScreen(Screen[None]):
         elif action == "cancel":
             self.action_cancel()
 
-    def on_opening_move_panel_move_submitted(
-        self, message: OpeningMovePanel.MoveSubmitted
+    def on_move_suggestion_panel_suggestion_submitted(
+        self, message: MoveSuggestionPanel.SuggestionSubmitted
     ) -> None:
         if self.phase is FlowPhase.BLACK_SELECT:
-            self._confirm_opening_move(message.move)
+            self._confirm_suggestion(message.suggestion)
 
-    def on_opening_move_panel_manual_requested(
-        self, message: OpeningMovePanel.ManualRequested
+    def on_move_suggestion_panel_manual_requested(
+        self, message: MoveSuggestionPanel.ManualRequested
     ) -> None:
         if self.phase is FlowPhase.BLACK_SELECT:
             self._enter_manual_black_turn()
 
-    def on_opening_move_panel_text_requested(
-        self, message: OpeningMovePanel.TextRequested
+    def on_move_suggestion_panel_text_requested(
+        self, message: MoveSuggestionPanel.TextRequested
     ) -> None:
         if self.phase is FlowPhase.BLACK_SELECT:
             self._enter_manual_black_turn(text_entry=True)
@@ -394,7 +392,7 @@ class AuthorScreen(Screen[None]):
             self._save_rule_note()
             return
         if self.phase is FlowPhase.BLACK_SELECT:
-            self.opening_moves.submit_highlighted()
+            self.move_suggestions.submit_highlighted()
             return
         if self.phase in {FlowPhase.WHITE_TEST, FlowPhase.FRONTIER_MOVE}:
             attempt = self.workspace.submit_pending_white_move()
@@ -512,7 +510,7 @@ class AuthorScreen(Screen[None]):
             self.note_input.value = attempt.recommendation.note or ""
         else:
             self.note_input.value = ""
-        self._hide_opening_moves()
+        self._hide_move_suggestions()
         self._hide_interaction_controls()
         self.note_input.display = True
         self.note_input.disabled = False
@@ -559,14 +557,16 @@ class AuthorScreen(Screen[None]):
             self._note_action = None
             self._enter_black_turn()
 
-    def _confirm_opening_move(self, move: OpeningMove) -> None:
+    def _confirm_suggestion(self, suggestion: MoveSuggestion) -> None:
         try:
-            self.workspace.submit_black_uci(move.uci)
+            self.workspace.submit_black_uci(suggestion.uci)
         except ValueError:
-            self.failure = ValueError(f"Opening move {move.san} is no longer legal.")
+            self.failure = ValueError(
+                f"Suggested move {suggestion.san} is no longer legal."
+            )
             self._enter_manual_black_turn()
             self.panel.update(
-                f"OPENING MOVE UNAVAILABLE\n\n{move.san} is no longer legal. "
+                f"SUGGESTED MOVE UNAVAILABLE\n\n{suggestion.san} is no longer legal. "
                 "Enter Black's move manually."
             )
             return
@@ -636,7 +636,7 @@ class AuthorScreen(Screen[None]):
             self._enter_black_turn()
 
     def _restart(self) -> None:
-        self._opening_request_id += 1
+        self._suggestion_request_id += 1
         self._leave_text_mode()
         turn = self.workspace.restart()
         self.move_input.value = ""
@@ -654,7 +654,7 @@ class AuthorScreen(Screen[None]):
             if turn.recommendation is None or turn.unavailable_reason is not None
             else FlowPhase.WHITE_TEST
         )
-        self._hide_opening_moves()
+        self._hide_move_suggestions()
         self._hide_interaction_controls()
         self.move_input.display = True
         self.move_input.disabled = False
@@ -664,22 +664,22 @@ class AuthorScreen(Screen[None]):
     def _enter_black_turn(self) -> None:
         self.phase = FlowPhase.BLACK_LOADING
         self._hide_interaction_controls()
-        self._hide_opening_moves()
-        self._opening_request_id += 1
-        request_id = self._opening_request_id
+        self._hide_move_suggestions()
+        self._suggestion_request_id += 1
+        request_id = self._suggestion_request_id
         self._refresh_panel()
         self._sync_board()
         board = self.controller.board.copy(stack=False)
         self.run_worker(
             self._load_black_moves(request_id, board),
-            name="load-black-opening-moves",
-            group="opening-moves",
+            name="load-opponent-suggestions",
+            group="opponent-suggestions",
             exclusive=True,
         )
 
     async def _load_black_moves(self, request_id: int, board: chess.Board) -> None:
         try:
-            moves = await self.opening_source.moves_for(board)
+            suggestions = await self.opponent_planner.suggestions_for(board)
         except OpeningSourceError as error:
             if not self._black_move_request_is_current(request_id, board):
                 return
@@ -692,7 +692,7 @@ class AuthorScreen(Screen[None]):
             return
         if not self._black_move_request_is_current(request_id, board):
             return
-        if not moves:
+        if not suggestions:
             self._enter_manual_black_turn()
             return
         self._clear_failure()
@@ -702,30 +702,30 @@ class AuthorScreen(Screen[None]):
             for reply in self.author.flow.opponent_replies
             if reply.after_san == tuple(self.history)
         )
-        self.opening_moves.set_moves(
-            moves[:4],
+        self.move_suggestions.set_suggestions(
+            suggestions,
             context=f"After {_format_history(tuple(self.history))}:",
             explored_sans=explored,
         )
-        self.opening_moves.display = True
+        self.move_suggestions.display = True
         self.panel.update("")
-        self.opening_moves.focus()
+        self.move_suggestions.focus()
         self._update_status()
 
     def _black_move_request_is_current(
         self, request_id: int, board: chess.Board
     ) -> bool:
         return (
-            request_id == self._opening_request_id
+            request_id == self._suggestion_request_id
             and self.phase is FlowPhase.BLACK_LOADING
             and self.controller.board.fen(en_passant="fen")
             == board.fen(en_passant="fen")
         )
 
     def _enter_manual_black_turn(self, *, text_entry: bool = False) -> None:
-        self._opening_request_id += 1
+        self._suggestion_request_id += 1
         self.phase = FlowPhase.BLACK_MANUAL
-        self._hide_opening_moves()
+        self._hide_move_suggestions()
         self._hide_interaction_controls()
         self.move_input.display = True
         self.move_input.disabled = False
@@ -737,7 +737,7 @@ class AuthorScreen(Screen[None]):
     def _show_mismatch_controls(self) -> None:
         attempt = self.workspace.attempt
         assert attempt is not None
-        self._hide_opening_moves()
+        self._hide_move_suggestions()
         self._hide_interaction_controls()
         self.actions.display = True
         self._set_button_available("retry", True)
@@ -760,11 +760,11 @@ class AuthorScreen(Screen[None]):
             button.display = False
             button.disabled = True
 
-    def _hide_opening_moves(self) -> None:
-        if self.opening_moves.has_focus:
+    def _hide_move_suggestions(self) -> None:
+        if self.move_suggestions.has_focus:
             self.set_focus(None)
-        self.opening_moves.display = False
-        self.opening_moves.clear()
+        self.move_suggestions.display = False
+        self.move_suggestions.clear()
 
     def _enter_text_mode(self, field: Input) -> None:
         if self.input.active_field is not field:
@@ -851,7 +851,7 @@ class AuthorScreen(Screen[None]):
         elif self.phase is FlowPhase.RULE_NOTE:
             self.panel.update(self._rule_note_text())
         elif self.phase is FlowPhase.BLACK_LOADING:
-            self.panel.update("BLACK RESPONSE\n\nLoading common opening moves...")
+            self.panel.update("BLACK RESPONSE\n\nPlanning opponent moves...")
         elif self.phase is FlowPhase.BLACK_SELECT:
             self.panel.update("")
         elif self.phase is FlowPhase.BLACK_MANUAL:
