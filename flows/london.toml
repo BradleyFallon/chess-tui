@@ -85,3 +85,13 @@ move = "e6"
 id = "after-d4-d5-bf4-nf6-e3-e6-nf3-c5"
 after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3"]
 move = "c5"
+
+[[opponent_replies]]
+id = "after-d4-e5"
+after = ["d4"]
+move = "e5"
+
+[[opponent_replies]]
+id = "after-d4-e5-dxe5-d6"
+after = ["d4", "e5", "dxe5"]
+move = "d6"

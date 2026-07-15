@@ -57,6 +57,18 @@ class FlowWorkspace:
     def outcome(self) -> chess.Outcome | None:
         return self.board.outcome(claim_draw=False)
 
+    @property
+    def can_go_back(self) -> bool:
+        if self.attempt is not None:
+            return True
+        if self.board.turn is chess.BLACK:
+            return bool(self.history)
+        return len(self.history) >= 2
+
+    @property
+    def can_restart(self) -> bool:
+        return bool(self.history) or self.attempt is not None
+
     def restart(self) -> WhiteTurn:
         self.restart_position()
         return self.begin_white_turn()
@@ -66,6 +78,20 @@ class FlowWorkspace:
         self.history.clear()
         self.attempt = None
         self.white_turn = None
+
+    def go_back_to_previous_decision(self) -> WhiteTurn:
+        """Restore the preceding White decision without changing persisted policy."""
+
+        if not self.can_go_back:
+            raise FlowValidationError("There is no earlier White decision.")
+        if self.attempt is not None:
+            retained = self.attempt.history_before
+        elif self.board.turn is chess.BLACK:
+            retained = tuple(self.history[:-1])
+        else:
+            retained = tuple(self.history[:-2])
+        self._restore_history(retained)
+        return self.begin_white_turn()
 
     def reload(self) -> WhiteTurn | None:
         self.author.reload()
@@ -273,6 +299,16 @@ class FlowWorkspace:
     def _restore(self, attempt: WhiteMoveAttempt) -> None:
         self.controller.reset(attempt.board_before)
         self.history[:] = attempt.history_before
+        self.attempt = None
+        self.white_turn = None
+
+    def _restore_history(self, history: tuple[str, ...]) -> None:
+        self.controller.reset(chess.Board(self.author.flow.start_fen))
+        replayed: list[str] = []
+        for san in history:
+            confirmed = self.controller.confirm_san(san)
+            replayed.append(confirmed.san)
+        self.history[:] = replayed
         self.attempt = None
         self.white_turn = None
 

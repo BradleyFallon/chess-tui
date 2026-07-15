@@ -11,7 +11,7 @@ import textual
 from chess_tui import AppMode, DEFAULT_STARTING_FEN, RendererMode, parse_fen
 from chess_tui import runtime
 from chess_tui.board import PIECE_GLYPHS, PIECE_SPRITES
-from chess_tui.cli import build_parser, main
+from chess_tui.cli import build_parser, build_web_parser, main
 from chess_tui.runtime import (
     REQUIRED_PYTHON_CHESS_VERSION,
     REQUIRED_RICH_VERSION,
@@ -176,6 +176,20 @@ def test_cli_parser_accepts_black_selection_opt_out() -> None:
     args = build_parser().parse_args(["--select-black"])
 
     assert args.select_black
+
+
+def test_web_cli_parser_defaults_are_local_and_engine_optional() -> None:
+    args = build_web_parser().parse_args([])
+
+    assert args.host == "127.0.0.1"
+    assert args.port == 8765
+    assert args.engine is None
+    assert not args.no_browser
+
+
+def test_web_cli_rejects_invalid_port() -> None:
+    with pytest.raises(SystemExit):
+        build_web_parser().parse_args(["--port", "70000"])
 
 
 def test_cli_flow_mode_fails_when_stockfish_is_unavailable(
@@ -393,6 +407,55 @@ def test_cli_passes_explicit_engine_to_flow_app(
     assert captured == [
         (AppMode.FLOW, "flows/london.toml", str(engine.resolve()), False, True)
     ]
+
+
+def test_cli_web_dispatch_bypasses_textual_and_passes_server_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    flow = tmp_path / "london.toml"
+    flow.write_text(
+        "\n".join(
+            (
+                "version = 1",
+                'name = "Web"',
+                f'start_fen = "{DEFAULT_STARTING_FEN}"',
+            )
+        ),
+        encoding="utf-8",
+    )
+    captured = []
+    monkeypatch.setattr(
+        "chess_tui.cli.validate_textual_runtime",
+        lambda *args, **kwargs: pytest.fail("Textual validation should not run"),
+    )
+
+    def fake_server(settings, *, host, port, open_browser) -> None:
+        captured.append((settings, host, port, open_browser))
+
+    monkeypatch.setattr("chess_tui.web.server.run_web_server", fake_server)
+
+    assert (
+        main(
+            [
+                "web",
+                "--flow",
+                str(flow),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "9000",
+                "--no-browser",
+            ]
+        )
+        == 0
+    )
+    settings, host, port, open_browser = captured[0]
+    assert settings.startup_flow_path == flow.resolve()
+    assert settings.engine_path is None
+    assert host == "127.0.0.1"
+    assert port == 9000
+    assert open_browser is False
 
 
 def test_package_smoke() -> None:

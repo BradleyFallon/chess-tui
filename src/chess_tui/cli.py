@@ -73,6 +73,43 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_web_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="chess-tui web",
+        description="Run local browser-based Flow Development Mode.",
+    )
+    parser.add_argument(
+        "--flow",
+        type=Path,
+        default=None,
+        help="White-flow TOML file (defaults to the most recently saved flow).",
+    )
+    parser.add_argument(
+        "--engine",
+        type=Path,
+        default=None,
+        help="Optional Stockfish executable path; omit for engine-off mode.",
+    )
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=_web_port, default=8765)
+    parser.add_argument(
+        "--no-browser",
+        action="store_true",
+        help="Do not open the local application in a browser.",
+    )
+    return parser
+
+
+def _web_port(value: str) -> int:
+    try:
+        port = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("port must be an integer") from error
+    if not 1 <= port <= 65535:
+        raise argparse.ArgumentTypeError("port must be between 1 and 65535")
+    return port
+
+
 def _resolve_renderer_mode(
     value: str | None, parser: argparse.ArgumentParser
 ) -> RendererMode:
@@ -128,8 +165,11 @@ def _flow_engine_path(
 
 
 def main(argv: list[str] | None = None) -> int:
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments[:1] == ["web"]:
+        return _main_web(arguments[1:])
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(arguments)
 
     if args.version:
         print(__version__)
@@ -172,4 +212,37 @@ def main(argv: list[str] | None = None) -> int:
             run_chess_app(position, renderer=renderer, mode=mode)
     except (RuntimeRequirementError, FlowError, EngineError) as exc:
         parser.exit(2, f"{parser.prog}: error: {exc}\n")
+    return 0
+
+
+def _main_web(argv: list[str]) -> int:
+    from .web.app import WebAppSettings
+    from .web.server import run_web_server
+
+    parser = build_web_parser()
+    args = parser.parse_args(argv)
+    flow_path = args.flow or _most_recent_flow(parser)
+    try:
+        flow_path = flow_path.expanduser().resolve()
+        from .flow import FlowStore
+
+        FlowStore().load(flow_path)
+        engine_path = (
+            validate_engine_path(args.engine) if args.engine is not None else None
+        )
+    except (FlowError, EngineError) as error:
+        parser.error(str(error))
+    project_root = Path.cwd().resolve()
+    settings = WebAppSettings(
+        project_root=project_root,
+        allowed_flow_directory=(project_root / DEFAULT_FLOW_DIRECTORY).resolve(),
+        startup_flow_path=flow_path,
+        engine_path=engine_path,
+    )
+    run_web_server(
+        settings,
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_browser,
+    )
     return 0

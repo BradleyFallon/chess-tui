@@ -36,6 +36,32 @@ async def assess_white_move(
     after_board.push(played_move)
     after = await _analyse_after(engine, after_board)
 
+    return build_white_move_assessment(
+        board,
+        played_move,
+        before,
+        after,
+        thresholds=thresholds,
+    )
+
+
+def build_white_move_assessment(
+    board: chess.Board,
+    played_move: chess.Move,
+    before: AnalysedMove,
+    after: AnalysedMove,
+    *,
+    thresholds: QualityThresholds = DEFAULT_QUALITY_THRESHOLDS,
+) -> MoveAssessment:
+    """Build a White assessment from already-computed engine analysis."""
+
+    if board.turn is not chess.WHITE:
+        raise EngineResultError("White move assessment requires White to move.")
+    if played_move not in board.legal_moves:
+        raise EngineResultError(
+            f"Cannot assess illegal White move {played_move.uci()!r}."
+        )
+
     loss_cp: int | None = None
     if before.evaluation_cp is not None and after.evaluation_cp is not None:
         loss_cp = max(0, before.evaluation_cp - after.evaluation_cp)

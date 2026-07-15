@@ -8,3 +8,6 @@ dist/
 build/
 *.egg-info/
 *.toml.bak
+web/node_modules/
+web/dist/
+web/coverage/

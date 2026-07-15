@@ -40,6 +40,44 @@ for this default path. Black's first ranked book or engine response is played
 automatically. `--flow` and `--engine` remain explicit overrides, and
 `--select-black` restores the suggestion selector.
 
+## Local web Development Mode
+
+Build the browser application and start the local FastAPI server with:
+
+```bash
+cd web
+npm install
+npm run build
+cd ..
+
+chess-tui web \
+  --flow flows/london.toml \
+  --engine "$(command -v stockfish)"
+```
+
+The server binds to `127.0.0.1:8765` and opens a browser by default. Use
+`--no-browser`, `--host`, or `--port` to change those server options. Unlike the
+default Textual flow, the web workspace may omit `--engine`; evaluation then
+shows `engine-off` and never substitutes fixture analysis.
+
+Development Mode displays the Python-owned board, SAN history, current
+legacy-v1 recommendation, White result, Back/Restart navigation, and optional
+Stockfish evaluation. White and Black moves travel as UCI over HTTP, but Python
+remains authoritative for legality, SAN, policy, persistence, replay, and
+analysis. Web Quiz is a placeholder, while web rule editing and version 2
+abstract rules remain deferred. The Textual application remains supported.
+
+For two-process frontend development:
+
+```bash
+fastapi dev src/chess_tui/web/app.py --port 8000
+
+cd web
+npm run dev
+```
+
+Vite proxies `/api` to `http://127.0.0.1:8000`.
+
 ## Local-game controls
 
 - Click a piece to select it and show its legal destinations.
@@ -177,7 +215,8 @@ Copy this block when providing the project structure to an LLM:
 |-- devtools/
 |   `-- aliases.sh                     # Shell aliases loaded by activate
 |-- docs/
-|   `-- README.md                      # Starting point for detailed docs
+|   |-- README.md                      # Starting point for detailed docs
+|   `-- design/                        # Policy and web design specifications
 |-- pyproject.toml                     # Package, build, and tool configuration
 |-- requirements.txt                  # Development dependency install list
 |-- scripts/
@@ -193,6 +232,7 @@ Copy this block when providing the project structure to an LLM:
 |       |-- game.py                    # Legal moves and interaction state
 |       |-- modes.py                   # Top-level application modes
 |       |-- flow/                      # Persistent White-flow policy and storage
+|       |-- web/                       # FastAPI app, sessions, models, and server
 |       |-- screens/                   # Local-game and quiz screens
 |       |-- sessions/                  # Quiz presentation models and providers
 |       |-- widgets/                   # Reusable quiz interaction widgets
@@ -213,6 +253,9 @@ Copy this block when providing the project structure to an LLM:
 |   |-- test_quiz.py                  # Quiz screen and widget behavior
 |   |-- test_sessions.py              # Fixture provider and model validation
 |   `-- test_smoke.py                 # Minimal package behavior tests
+|-- web/                               # React, TypeScript, and Vite application
+|   |-- src/                           # UI, API client, models, and browser tests
+|   `-- package.json                   # Frontend scripts and dependencies
 |-- tox.ini                            # Multi-version test environments
 `-- venv/                              # Generated local Python environment
 ```
@@ -264,6 +307,10 @@ Copy this block when providing the project structure to an LLM:
 - `src/chess_tui/tui.py` - implements the Textual line-rendered chess board,
   responsive geometry, pointer mapping, keyboard actions, and layered square
   styling.
+- `src/chess_tui/web/` - owns FastAPI lifecycle, typed snapshots and errors,
+  in-memory sessions, evaluation caching, static serving, and Uvicorn startup.
+- `web/` - contains the React/TypeScript client and its Vite, ESLint,
+  TypeScript, Vitest, and production-build scripts.
 - `src/chess_tui/output_schema.json` - a packaged placeholder for
   project-specific structured-output metadata; replace or remove it if the
   project does not need a schema.
@@ -285,4 +332,6 @@ Copy this block when providing the project structure to an LLM:
 - The CLI accepts `--mode`, `--renderer`, and `--fen`; flow mode also accepts
   explicit `--flow` and `--engine` overrides. Local-game opens the standard
   starting position when selected explicitly.
+- `chess-tui web` has a compatible command parser and does not require an
+  interactive terminal or Textual renderer validation.
 - Add dependencies under `[project.dependencies]` in `pyproject.toml`.

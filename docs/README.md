@@ -93,3 +93,45 @@ Default CLI flow sessions focus SAN entry in `[TEXT: MOVE]`. `Escape` returns to
 keys invoke application shortcuts or enter literal text.
 Flow files persist explored SAN branches but not opening statistics, source
 labels, bot profiles, or evaluations.
+
+## Local web Development Mode
+
+The first browser slice lives in `web/` and communicates with
+`src/chess_tui/web/` through ordinary JSON HTTP. FastAPI routes adapt the same
+`FlowWorkspace`, `FlowStore`, `WhitePolicy`, and engine service used elsewhere;
+complete snapshots keep React from reconstructing chess or policy state.
+
+```bash
+cd web
+npm install
+npm run build
+cd ..
+
+chess-tui web \
+  --flow flows/london.toml \
+  --engine "$(command -v stockfish)"
+```
+
+The default bind is `127.0.0.1:8765`. Omitting `--engine` is supported and
+reported as `engine-off`. Development Mode supports controlled board input,
+White-result retry/continuation, manual Black moves, Back, Restart, legacy-v1
+rule/source inspection, structured errors, and White-normalized evaluation.
+Back replays the retained SAN prefix and never deletes persisted policy or
+branches.
+
+For frontend development, run these in separate terminals:
+
+```bash
+fastapi dev src/chess_tui/web/app.py --port 8000
+```
+
+```bash
+cd web
+npm run dev
+```
+
+Web Quiz, visual rule editing, version 2 rule parsing/lifecycle, forward
+navigation, WebSockets, accounts, databases, and hosted deployment are
+deferred. The authoritative specifications are
+`docs/design/rule-policy-v2.md` and
+`docs/design/web-development-mode.md`.

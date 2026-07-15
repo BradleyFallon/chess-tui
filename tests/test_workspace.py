@@ -8,6 +8,7 @@ import pytest
 from chess_tui import DEFAULT_STARTING_FEN
 from chess_tui.flow import (
     AttemptResult,
+    DefaultRule,
     FlowStore,
     FlowValidationError,
     FlowWorkspace,
@@ -109,3 +110,95 @@ def test_workspace_does_not_remove_exception_without_a_legal_default(
         workspace.remove_exception_and_keep_default()
 
     assert FlowStore().load(path).exceptions[0].move_san == "d4"
+
+
+def test_workspace_back_restores_active_attempt(tmp_path: Path) -> None:
+    path = tmp_path / "london.toml"
+    shutil.copy2(LONDON_FLOW, path)
+    workspace = FlowWorkspace(path)
+    workspace.restart()
+
+    workspace.submit_white_uci("e2e4")
+    turn = workspace.go_back_to_previous_decision()
+
+    assert workspace.history == []
+    assert workspace.board.fen() == replay_san(DEFAULT_STARTING_FEN, ()).fen()
+    assert turn.recommendation is not None
+    assert turn.recommendation.move_san == "d4"
+
+
+def test_workspace_back_from_black_and_later_white_turn(tmp_path: Path) -> None:
+    path = tmp_path / "london.toml"
+    shutil.copy2(LONDON_FLOW, path)
+    workspace = FlowWorkspace(path)
+    workspace.restart()
+    workspace.submit_white_uci("d2d4")
+    workspace.complete_correct_move()
+
+    workspace.go_back_to_previous_decision()
+    assert workspace.history == []
+
+    workspace.submit_white_uci("d2d4")
+    workspace.complete_correct_move()
+    workspace.submit_black_uci("d7d5")
+    workspace.begin_white_turn()
+    turn = workspace.go_back_to_previous_decision()
+
+    assert workspace.history == []
+    assert turn.recommendation is not None
+    assert turn.recommendation.move_san == "d4"
+
+
+def test_workspace_back_preserves_persisted_opponent_replies(tmp_path: Path) -> None:
+    path = tmp_path / "london.toml"
+    shutil.copy2(LONDON_FLOW, path)
+    workspace = FlowWorkspace(path)
+    workspace.restart()
+    workspace.submit_white_uci("d2d4")
+    workspace.complete_correct_move()
+    workspace.submit_black_uci("g8f6")
+    saved_before = FlowStore().load(path).opponent_replies
+
+    workspace.begin_white_turn()
+    workspace.go_back_to_previous_decision()
+
+    assert FlowStore().load(path).opponent_replies == saved_before
+
+
+def test_workspace_back_at_beginning_is_explicit(tmp_path: Path) -> None:
+    path = tmp_path / "london.toml"
+    shutil.copy2(LONDON_FLOW, path)
+    workspace = FlowWorkspace(path)
+    workspace.restart()
+
+    assert not workspace.can_go_back
+    assert not workspace.can_restart
+    with pytest.raises(FlowValidationError, match="no earlier White decision"):
+        workspace.go_back_to_previous_decision()
+
+
+def test_workspace_back_from_game_over_replays_to_white_decision(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "mate.toml"
+    FlowStore().save(
+        path,
+        WhiteFlow(
+            1,
+            "Mate",
+            "7k/8/5KQ1/8/8/8/8/8 w - - 0 1",
+            (DefaultRule(1, "Qg7#"),),
+            (),
+        ),
+    )
+    workspace = FlowWorkspace(path)
+    workspace.restart()
+    workspace.submit_white_uci("g6g7")
+    assert workspace.outcome is not None
+
+    turn = workspace.go_back_to_previous_decision()
+
+    assert workspace.outcome is None
+    assert workspace.history == []
+    assert turn.recommendation is not None
+    assert turn.recommendation.move_san == "Qg7#"

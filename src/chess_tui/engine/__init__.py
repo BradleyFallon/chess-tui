@@ -8,7 +8,11 @@ from .errors import (
     EngineStartupError,
     EngineTimeoutError,
 )
-from .assessment import assess_white_move, quality_for_loss
+from .assessment import (
+    assess_white_move,
+    build_white_move_assessment,
+    quality_for_loss,
+)
 from .fixture import FixtureEngineService
 from .models import (
     DEFAULT_QUALITY_THRESHOLDS,
@@ -41,5 +45,6 @@ __all__ = [
     "StockfishEngineService",
     "validate_engine_path",
     "assess_white_move",
+    "build_white_move_assessment",
     "quality_for_loss",
 ]
