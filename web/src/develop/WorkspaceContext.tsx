@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { ApiError, workspaceApi } from "../api/client";
-import type { OverrideUpdate, RuleUpdate, WorkspaceSnapshot } from "../types/workspace";
+import type { ClientEffect, OverrideUpdate, RuleUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
 
 const SESSION_KEY = "chess-flow-development-session";
 
@@ -19,18 +19,12 @@ interface WorkspaceContextValue {
   loading: boolean;
   pending: boolean;
   error: ApiError | null;
+  effects: ClientEffect[];
   initialize: () => Promise<void>;
-  submitMove: (uci: string) => Promise<void>;
-  submitSanMove: (san: string) => Promise<void>;
-  retryPolicy: () => Promise<void>;
-  continuePolicy: () => Promise<void>;
-  addRuleForMismatch: () => Promise<void>;
-  playNextOpponent: () => Promise<void>;
-  analysePosition: () => Promise<void>;
+  sendChat: (text: string) => Promise<void>;
+  executeCommand: (command: TypedCommand) => Promise<void>;
   updateRule: (ruleId: string, update: RuleUpdate) => Promise<void>;
   updateOverride: (overrideId: string, update: OverrideUpdate) => Promise<void>;
-  back: () => Promise<void>;
-  restart: () => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -40,6 +34,7 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const [loading, setLoading] = useState(true);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
+  const [effects, setEffects] = useState<ClientEffect[]>([]);
   const bootstrapStarted = useRef(false);
 
   const create = useCallback(async () => {
@@ -86,8 +81,28 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       if (!workspace) return;
       setPending(true);
       setError(null);
+      setEffects([]);
       try {
         setWorkspace(await operation(workspace.sessionId));
+      } catch (requestError) {
+        setError(asApiError(requestError));
+      } finally {
+        setPending(false);
+      }
+    },
+    [workspace],
+  );
+
+  const operateCommand = useCallback(
+    async (operation: (sessionId: string) => ReturnType<typeof workspaceApi.sendChat>) => {
+      if (!workspace) return;
+      setPending(true);
+      setError(null);
+      setEffects([]);
+      try {
+        const response = await operation(workspace.sessionId);
+        setWorkspace(response.workspace);
+        setEffects(response.effects);
       } catch (requestError) {
         setError(asApiError(requestError));
       } finally {
@@ -103,20 +118,14 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       loading,
       pending,
       error,
+      effects,
       initialize,
-      submitMove: (uci) => operate((id) => workspaceApi.submitMove(id, uci)),
-      submitSanMove: (san) => operate((id) => workspaceApi.submitSanMove(id, san)),
-      retryPolicy: () => operate(workspaceApi.retryPolicy),
-      continuePolicy: () => operate(workspaceApi.continuePolicy),
-      addRuleForMismatch: () => operate(workspaceApi.addRuleForMismatch),
-      playNextOpponent: () => operate(workspaceApi.playNextOpponent),
-      analysePosition: () => operate(workspaceApi.analysePosition),
+      sendChat: (text) => operateCommand((id) => workspaceApi.sendChat(id, text)),
+      executeCommand: (command) => operateCommand((id) => workspaceApi.executeCommand(id, command)),
       updateRule: (ruleId, update) => operate((id) => workspaceApi.updateRule(id, ruleId, update)),
       updateOverride: (overrideId, update) => operate((id) => workspaceApi.updateOverride(id, overrideId, update)),
-      back: () => operate(workspaceApi.back),
-      restart: () => operate(workspaceApi.restart),
     }),
-    [error, initialize, loading, operate, pending, workspace],
+    [effects, error, initialize, loading, operate, operateCommand, pending, workspace],
   );
 
   return <WorkspaceContext.Provider value={value}>{children}</WorkspaceContext.Provider>;

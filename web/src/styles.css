@@ -120,6 +120,15 @@ dd { margin: 0; font-weight: 700; text-transform: capitalize; }
 .position-analysis li span { overflow: hidden; color: var(--muted); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .status-note .position-analysis section > p { margin-top: 0; font-size: 0.72rem; }
 .status-note .status-edit-help { padding: 0.55rem; border-left: 2px solid var(--accent); background: #121611; }
+.chat-message { max-width: 94%; padding: 0.65rem 0.75rem; border: 1px solid #394436; border-radius: 8px; background: #171c16; }
+.chat-message-user { margin-left: auto; border-color: #75643e; background: #292719; }
+.chat-message-assistant, .chat-message-tool { margin-right: auto; }
+.chat-role { margin-bottom: 0.25rem; color: var(--accent); font-size: 0.58rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
+.chat-message > p { margin: 0; color: var(--text); font-size: 0.8rem; line-height: 1.4; }
+.attachment-details { margin-top: 0.55rem; padding: 0.55rem; display: grid; gap: 0.3rem; border: 1px solid #394436; border-radius: 6px; background: #10140f; font-size: 0.72rem; }
+.attachment-details code { overflow-wrap: anywhere; color: #d3cfb7; }
+.attachment-details small { color: var(--muted); }
+.attachment-list { margin: 0.55rem 0 0; padding-left: 1.2rem; color: var(--muted); font-size: 0.72rem; line-height: 1.45; }
 .status-edit-help code { overflow-wrap: anywhere; }
 .status-model-note { flex: 0 0 auto; margin: 0; padding: 0.55rem 0.8rem; border-top: 1px solid var(--line); color: var(--muted); font-size: 0.67rem; line-height: 1.35; }
 .status-composer-shell { position: relative; flex: 0 0 auto; }

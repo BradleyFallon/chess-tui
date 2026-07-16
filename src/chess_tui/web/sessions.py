@@ -6,10 +6,20 @@ import asyncio
 from dataclasses import dataclass, field
 from pathlib import Path
 import secrets
-from typing import Literal
+from typing import Literal, cast
 
 import chess
 
+from ..commands import (
+    AssistantReply,
+    ClientEffect,
+    CommandAvailability,
+    CommandFailure,
+    CommandId,
+    CommandInvocation,
+    CommandOutcome,
+    CommandRegistry,
+)
 from ..engine import (
     ENGINE_PROTOTYPE_PROFILE,
     AnalysedMove,
@@ -42,10 +52,17 @@ from ..policy.runtime import (
 )
 from .api_models import (
     ActivitySnapshot,
+    AvailableCommandSnapshot,
     AttemptSnapshot,
     BookMoveSnapshot,
+    ChatAttachment,
+    ChatMessageSnapshot,
+    CommandListAttachment,
+    CommandResponse,
     ConditionSnapshot,
     DecisionSnapshot,
+    DecisionExplanationAttachment,
+    DecisionTraceAttachment,
     EngineHealth,
     EngineMoveSnapshot,
     EngineReviewSnapshot,
@@ -53,14 +70,22 @@ from .api_models import (
     FlowSnapshot,
     FlowSourceResponse,
     GameOverSnapshot,
+    HighlightMoveEffect,
+    LegalMoveSnapshot,
     NavigationSnapshot,
     OverrideRuntimeSnapshot,
+    PolicyReferenceSnapshot,
+    PositionAnalysisAttachment,
+    PositionDetailsAttachment,
     PositionSnapshot,
     PositionAnalysisSnapshot,
+    RuleDetailsAttachment,
     RuleGroupsSnapshot,
+    RuleListAttachment,
     RuleRuntimeSnapshot,
     UpdateOverrideRequest,
     UpdateRuleRequest,
+    ValidationErrorAttachment,
     WorkspaceSnapshot,
 )
 from .errors import ApiErrorCode, WebApiError
@@ -73,7 +98,10 @@ class DevelopmentSession:
     workspace: FlowWorkspace
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     activity: list[ActivitySnapshot] = field(default_factory=list)
+    chat: list[ChatMessageSnapshot] = field(default_factory=list)
     next_activity_id: int = 1
+    next_message_id: int = 1
+    next_sequence: int = 1
 
 
 class EvaluationCache:
@@ -144,6 +172,7 @@ class SessionManager:
         )
         self.evaluations = EvaluationCache(engine, engine_identity=engine_identity)
         self.opening_source = FixtureOpeningMoveSource()
+        self.commands = CommandRegistry()
         self.sessions: dict[str, DevelopmentSession] = {}
 
     async def create_session(
@@ -182,184 +211,442 @@ class SessionManager:
                 path=self._display_path(session.flow_path), content=content
             )
 
-    async def submit_move(self, session_id: str, uci: str) -> WorkspaceSnapshot:
+    async def submit_chat(self, session_id: str, text: str) -> CommandResponse:
         session = self._session(session_id)
         async with session.lock:
-            move = self._legal_move(session.workspace.board, uci)
-            await self._submit_legal_move(session, move, typed=False)
-            return await self._snapshot(session)
-
-    async def submit_san_move(self, session_id: str, san: str) -> WorkspaceSnapshot:
-        session = self._session(session_id)
-        async with session.lock:
+            self._append_chat(session, "user", text.strip())
             try:
-                move = session.workspace.board.parse_san(san.strip())
-            except ValueError as error:
-                raise WebApiError(
-                    ApiErrorCode.INVALID_MOVE,
-                    f"{san.strip()!r} is not legal SAN in the current position.",
-                ) from error
-            await self._submit_legal_move(session, move, typed=True)
-            return await self._snapshot(session)
+                invocation = self.commands.parse_chat(text)
+                outcome = await self._execute_locked(session, invocation)
+            except FlowStorageError:
+                raise
+            except (CommandFailure, WebApiError, FlowError, ValueError) as error:
+                code = (
+                    error.code.value
+                    if isinstance(error, WebApiError)
+                    else (
+                        error.code
+                        if isinstance(error, CommandFailure)
+                        else ApiErrorCode.INVALID_REQUEST.value
+                    )
+                )
+                details = (
+                    error.details
+                    if isinstance(error, (WebApiError, CommandFailure))
+                    else {}
+                )
+                self._append_chat(
+                    session,
+                    "assistant",
+                    str(error),
+                    ValidationErrorAttachment(code=code, details=details),
+                )
+                return CommandResponse(workspace=await self._snapshot(session))
+            self._record_outcome(session, outcome, role="assistant")
+            return CommandResponse(
+                workspace=await self._snapshot(session),
+                effects=_effect_snapshots(outcome.effects),
+            )
 
-    async def retry_policy(self, session_id: str) -> WorkspaceSnapshot:
+    async def execute_command(
+        self, session_id: str, invocation: CommandInvocation
+    ) -> CommandResponse:
         session = self._session(session_id)
         async with session.lock:
-            if session.workspace.attempt is None:
-                raise WebApiError(
-                    ApiErrorCode.INVALID_REQUEST,
-                    "No policy result is available to retry.",
+            outcome = await self._execute_locked(session, invocation)
+            self._record_outcome(
+                session,
+                outcome,
+                role="tool" if invocation.source == "tool" else "assistant",
+            )
+            return CommandResponse(
+                workspace=await self._snapshot(session),
+                effects=_effect_snapshots(outcome.effects),
+            )
+
+    async def _execute_locked(
+        self, session: DevelopmentSession, invocation: CommandInvocation
+    ) -> CommandOutcome:
+        workspace = session.workspace
+        availability = self._command_availability(workspace)
+        if not self.commands.is_available(invocation.command, availability):
+            definition = self.commands.definition(invocation.command)
+            raise CommandFailure(
+                "COMMAND_UNAVAILABLE",
+                f"{definition.slash} is not available in the current position.",
+            )
+
+        command = invocation.command
+        if command is CommandId.PLAY_MOVE:
+            if not invocation.move or invocation.notation not in {"san", "uci"}:
+                raise CommandFailure(
+                    "INVALID_COMMAND", "play_move requires a SAN or UCI move."
                 )
-            side = session.workspace.author.flow.side.capitalize()
-            session.workspace.retry_policy_move()
+            if invocation.notation == "uci":
+                move = self._legal_move(workspace.board, invocation.move)
+            else:
+                try:
+                    move = workspace.board.parse_san(invocation.move.strip())
+                except ValueError as error:
+                    raise CommandFailure(
+                        "INVALID_MOVE",
+                        f"{invocation.move.strip()!r} is not legal SAN in the current position.",
+                    ) from error
+            await self._submit_legal_move(
+                session, move, typed=invocation.source == "chat"
+            )
+            return CommandOutcome()
+
+        if command is CommandId.RETRY_POLICY:
+            side = workspace.author.flow.side.capitalize()
+            workspace.retry_policy_move()
             self._append_activity(
                 session,
                 "info",
                 f"Retry {side}'s move",
                 "The position was restored. Try again or ask for a hint.",
             )
-            return await self._snapshot(session)
+            return CommandOutcome()
 
-    async def continue_policy(self, session_id: str) -> WorkspaceSnapshot:
-        session = self._session(session_id)
-        async with session.lock:
-            attempt = session.workspace.attempt
+        if command is CommandId.CONTINUE_POLICY:
+            attempt = workspace.attempt
             if attempt is None or attempt.result is not AttemptResult.MISMATCH:
-                raise WebApiError(
-                    ApiErrorCode.INVALID_REQUEST,
+                raise CommandFailure(
+                    "COMMAND_UNAVAILABLE",
                     "Only a mismatching policy move can continue with the selected rule.",
                 )
             expected = attempt.decision.move_san or "the selected move"
-            session.workspace.continue_with_policy_move()
+            workspace.continue_with_policy_move()
             self._append_activity(
                 session,
                 "success",
                 f"Continued with {expected}",
                 attempt.decision.note or "The selected policy rule was kept unchanged.",
             )
-            return await self._snapshot(session)
+            return CommandOutcome()
 
-    async def add_rule_for_mismatch(self, session_id: str) -> WorkspaceSnapshot:
-        session = self._session(session_id)
-        async with session.lock:
-            attempt = session.workspace.attempt
+        if command is CommandId.ADD_RULE_FOR_MISMATCH:
+            attempt = workspace.attempt
             if attempt is None or attempt.result is not AttemptResult.MISMATCH:
-                raise WebApiError(
-                    ApiErrorCode.INVALID_REQUEST,
+                raise CommandFailure(
+                    "COMMAND_UNAVAILABLE",
                     "A rule can only be added for a pending mismatching move.",
                 )
             played_san = attempt.selected_move.san
-            override = session.workspace.allow_mismatch_as_override()
+            override = workspace.allow_mismatch_as_override()
             self._append_activity(
                 session,
                 "success",
                 f"Added rule {override.id}",
                 f"{played_san} is now the exact-position policy move here and was accepted.",
             )
-            return await self._snapshot(session)
+            return CommandOutcome()
 
-    async def play_next_opponent(self, session_id: str) -> WorkspaceSnapshot:
-        session = self._session(session_id)
-        async with session.lock:
-            workspace = session.workspace
-            if (
-                workspace.attempt is not None
-                or workspace.outcome is not None
-                or workspace.is_policy_turn
-            ):
-                raise WebApiError(
-                    ApiErrorCode.INVALID_REQUEST,
-                    "Next is only available while the opponent is ready to move.",
-                )
-            engine = self.evaluations.engine
-            if engine is None:
-                raise WebApiError(
-                    ApiErrorCode.ENGINE_ERROR,
-                    "The opponent's next move requires a configured chess engine.",
-                    status_code=503,
-                )
-            try:
-                move = await engine.choose_move(
-                    workspace.board.copy(stack=False), ENGINE_PROTOTYPE_PROFILE
-                )
-            except EngineError as error:
-                raise WebApiError(
-                    ApiErrorCode.ENGINE_ERROR,
-                    f"The chess engine could not choose the opponent move: {error}",
-                    status_code=502,
-                ) from error
-            if move not in workspace.board.legal_moves:
-                raise WebApiError(
-                    ApiErrorCode.ENGINE_ERROR,
-                    "The chess engine returned an illegal opponent move.",
-                    status_code=502,
-                )
-            san = workspace.board.san(move)
-            color = "White" if workspace.board.turn == chess.WHITE else "Black"
-            workspace.submit_opponent_uci(move.uci())
-            self._append_activity(
-                session,
-                "move",
-                f"{color} played {san}",
-                "The engine selected this reply after you chose Next.",
-            )
-            if workspace.outcome is None:
-                workspace.begin_policy_turn()
-            return await self._snapshot(session)
+        if command is CommandId.NEXT_OPPONENT:
+            await self._play_next_opponent_locked(session)
+            return CommandOutcome()
 
-    async def analyse_position(self, session_id: str) -> WorkspaceSnapshot:
-        session = self._session(session_id)
-        async with session.lock:
-            workspace = session.workspace
-            if workspace.outcome is not None:
-                raise WebApiError(
-                    ApiErrorCode.INVALID_REQUEST,
-                    "The finished position has no candidate moves to analyse.",
-                )
-            if self.evaluations.engine is None:
-                raise WebApiError(
-                    ApiErrorCode.ENGINE_ERROR,
-                    "Position analysis requires a configured chess engine.",
-                    status_code=503,
-                )
-            board = workspace.board.copy(stack=False)
-            try:
-                book_moves = await self._book_moves(workspace, board)
-                engine_lines = await self.evaluations.analyse_lines(board, count=4)
-            except OpeningSourceError as error:
-                raise WebApiError(
-                    ApiErrorCode.INVALID_REQUEST,
-                    f"The local opening book could not analyse this position: {error}",
-                    status_code=500,
-                ) from error
-            except (EngineError, RuntimeError) as error:
-                raise WebApiError(
-                    ApiErrorCode.ENGINE_ERROR,
-                    f"The chess engine could not analyse this position: {error}",
-                    status_code=502,
-                ) from error
-            analysis = PositionAnalysisSnapshot(
-                book_moves=book_moves,
-                engine_moves=[
-                    EngineMoveSnapshot(
-                        uci=line.uci,
-                        san=line.san,
-                        evaluation_cp=line.evaluation_cp,
-                        mate_in=line.mate_in,
-                        principal_variation=list(line.principal_variation),
-                    )
-                    for line in engine_lines
-                ],
-            )
-            side = "White" if board.turn == chess.WHITE else "Black"
+        if command is CommandId.GO_BACK:
+            workspace.go_back_to_previous_decision()
             self._append_activity(
                 session,
                 "info",
-                "Position analysis",
-                f"Candidate moves for {side} from the local book and Stockfish.",
-                analysis=analysis,
+                "Moved back",
+                "Replayed the retained line and restored policy lifecycle state.",
             )
-            return await self._snapshot(session)
+            return CommandOutcome()
+
+        if command is CommandId.RESTART:
+            self._restart_locked(session)
+            return CommandOutcome()
+
+        if command is CommandId.HINT_POLICY_MOVE:
+            decision = _current_decision(workspace, _phase(workspace))
+            if decision is None or decision.move is None:
+                raise CommandFailure(
+                    "COMMAND_UNAVAILABLE", "No policy move is available to highlight."
+                )
+            return CommandOutcome(
+                effects=(ClientEffect("highlight-move", decision.move.uci()),)
+            )
+
+        if command is CommandId.ANALYSE_POSITION:
+            analysis = await self._analyse_position_locked(workspace)
+            self._append_activity(
+                session,
+                "info",
+                "Position analysis completed",
+                "Local book and Stockfish candidates are ready.",
+            )
+            return CommandOutcome(
+                reply=AssistantReply(
+                    "Here are the current book and engine candidates.",
+                    "position-analysis",
+                    PositionAnalysisAttachment(analysis=analysis),
+                )
+            )
+
+        decision = _current_decision(workspace, _phase(workspace))
+        groups = _rule_groups(workspace, decision)
+        if command is CommandId.EXPLAIN_DECISION:
+            attachment = _decision_explanation(decision)
+            return CommandOutcome(
+                reply=AssistantReply(
+                    _decision_explanation_text(attachment),
+                    "decision-explanation",
+                    attachment,
+                )
+            )
+        if command is CommandId.INSPECT_RULE:
+            if not invocation.rule_id:
+                raise CommandFailure("INVALID_COMMAND", "Usage: /rule <rule-id>.")
+            item = _find_policy_item(groups, invocation.rule_id)
+            if item is None:
+                raise CommandFailure(
+                    "UNKNOWN_RULE", f"Unknown rule or override {invocation.rule_id!r}."
+                )
+            return CommandOutcome(
+                reply=AssistantReply(
+                    f"Current details for {invocation.rule_id}.",
+                    "rule-details",
+                    RuleDetailsAttachment(
+                        rule=item,
+                        provenance=["policy-runtime", "user-authored-note"],
+                    ),
+                )
+            )
+        if command is CommandId.LIST_RULES:
+            return CommandOutcome(
+                reply=AssistantReply(
+                    "Rules grouped by their current policy status.",
+                    "rule-list",
+                    RuleListAttachment(groups=groups),
+                )
+            )
+        if command is CommandId.TRACE_DECISION:
+            if decision is None:
+                raise CommandFailure(
+                    "COMMAND_UNAVAILABLE", "No policy decision trace is available."
+                )
+            return CommandOutcome(
+                reply=AssistantReply(
+                    "Deterministic policy trace.",
+                    "decision-trace",
+                    DecisionTraceAttachment(entries=list(decision.trace)),
+                )
+            )
+        if command is CommandId.INSPECT_POSITION:
+            return CommandOutcome(
+                reply=AssistantReply(
+                    "Current position details.",
+                    "position-details",
+                    _position_details(workspace),
+                )
+            )
+        if command is CommandId.LIST_COMMANDS:
+            return CommandOutcome(
+                reply=AssistantReply(
+                    "Commands available in the current position.",
+                    "command-list",
+                    CommandListAttachment(
+                        commands=self._available_command_snapshots(workspace)
+                    ),
+                )
+            )
+        raise CommandFailure("UNKNOWN_COMMAND", f"Unsupported command {command.value}.")
+
+    async def _play_next_opponent_locked(self, session: DevelopmentSession) -> None:
+        workspace = session.workspace
+        engine = self.evaluations.engine
+        if engine is None:
+            raise WebApiError(
+                ApiErrorCode.ENGINE_ERROR,
+                "The opponent's next move requires a configured chess engine.",
+                status_code=503,
+            )
+        try:
+            move = await engine.choose_move(
+                workspace.board.copy(stack=False), ENGINE_PROTOTYPE_PROFILE
+            )
+        except EngineError as error:
+            raise WebApiError(
+                ApiErrorCode.ENGINE_ERROR,
+                f"The chess engine could not choose the opponent move: {error}",
+                status_code=502,
+            ) from error
+        if move not in workspace.board.legal_moves:
+            raise WebApiError(
+                ApiErrorCode.ENGINE_ERROR,
+                "The chess engine returned an illegal opponent move.",
+                status_code=502,
+            )
+        san = workspace.board.san(move)
+        color = "White" if workspace.board.turn == chess.WHITE else "Black"
+        workspace.submit_opponent_uci(move.uci())
+        self._append_activity(
+            session,
+            "move",
+            f"{color} played {san}",
+            "The engine selected this reply after you chose Next.",
+        )
+        if workspace.outcome is None:
+            workspace.begin_policy_turn()
+
+    async def _analyse_position_locked(
+        self, workspace: FlowWorkspace
+    ) -> PositionAnalysisSnapshot:
+        board = workspace.board.copy(stack=False)
+        try:
+            book_moves = await self._book_moves(workspace, board)
+            engine_lines = await self.evaluations.analyse_lines(board, count=4)
+        except OpeningSourceError as error:
+            raise WebApiError(
+                ApiErrorCode.INVALID_REQUEST,
+                f"The local opening book could not analyse this position: {error}",
+                status_code=500,
+            ) from error
+        except (EngineError, RuntimeError) as error:
+            raise WebApiError(
+                ApiErrorCode.ENGINE_ERROR,
+                f"The chess engine could not analyse this position: {error}",
+                status_code=502,
+            ) from error
+        return PositionAnalysisSnapshot(
+            book_moves=book_moves,
+            engine_moves=[
+                EngineMoveSnapshot(
+                    uci=line.uci,
+                    san=line.san,
+                    evaluation_cp=line.evaluation_cp,
+                    mate_in=line.mate_in,
+                    principal_variation=list(line.principal_variation),
+                )
+                for line in engine_lines
+            ],
+        )
+
+    def _command_availability(self, workspace: FlowWorkspace) -> CommandAvailability:
+        phase = _phase(workspace)
+        decision = _current_decision(workspace, phase)
+        return CommandAvailability(
+            phase=phase,  # type: ignore[arg-type]
+            engine_available=self.evaluations.engine is not None,
+            has_decision=decision is not None,
+            has_decision_move=decision is not None and decision.move is not None,
+            mismatch=(
+                workspace.attempt is not None
+                and workspace.attempt.result is AttemptResult.MISMATCH
+            ),
+            can_back=workspace.can_go_back,
+            can_restart=workspace.can_restart,
+            has_rules=bool(
+                workspace.author.flow.rules or workspace.author.flow.overrides
+            ),
+        )
+
+    def _available_command_snapshots(
+        self, workspace: FlowWorkspace
+    ) -> list[AvailableCommandSnapshot]:
+        return [
+            AvailableCommandSnapshot(
+                id=item.id.value,
+                slash=item.slash,
+                usage=item.usage,
+                description=item.description,
+                arguments=[
+                    {
+                        "name": argument.name,
+                        "description": argument.description,
+                        "required": argument.required,
+                    }
+                    for argument in item.arguments
+                ],
+            )
+            for item in self.commands.available(self._command_availability(workspace))
+        ]
+
+    def _record_outcome(
+        self,
+        session: DevelopmentSession,
+        outcome: CommandOutcome,
+        *,
+        role: Literal["assistant", "tool"],
+    ) -> None:
+        for activity in outcome.activity:
+            self._append_activity(
+                session,
+                activity.kind,
+                activity.title,
+                activity.message,
+            )
+        if outcome.reply is not None:
+            self._append_chat(
+                session,
+                role,
+                outcome.reply.text,
+                cast(ChatAttachment | None, outcome.reply.attachment),
+            )
+
+    def _restart_locked(self, session: DevelopmentSession) -> None:
+        session.workspace.restart()
+        session.activity.clear()
+        session.next_activity_id = 1
+        self._append_activity(
+            session,
+            "info",
+            "Line restarted",
+            "Returned to the beginning without changing saved rules or branches.",
+        )
+
+    async def submit_move(self, session_id: str, uci: str) -> WorkspaceSnapshot:
+        return await self._compat_command(
+            session_id,
+            CommandInvocation(CommandId.PLAY_MOVE, "ui", notation="uci", move=uci),
+        )
+
+    async def submit_san_move(self, session_id: str, san: str) -> WorkspaceSnapshot:
+        return await self._compat_command(
+            session_id,
+            CommandInvocation(CommandId.PLAY_MOVE, "ui", notation="san", move=san),
+        )
+
+    async def retry_policy(self, session_id: str) -> WorkspaceSnapshot:
+        return await self._compat_command(
+            session_id, CommandInvocation(CommandId.RETRY_POLICY, "ui")
+        )
+
+    async def continue_policy(self, session_id: str) -> WorkspaceSnapshot:
+        return await self._compat_command(
+            session_id, CommandInvocation(CommandId.CONTINUE_POLICY, "ui")
+        )
+
+    async def add_rule_for_mismatch(self, session_id: str) -> WorkspaceSnapshot:
+        return await self._compat_command(
+            session_id,
+            CommandInvocation(CommandId.ADD_RULE_FOR_MISMATCH, "ui"),
+        )
+
+    async def play_next_opponent(self, session_id: str) -> WorkspaceSnapshot:
+        if self.evaluations.engine is None:
+            raise WebApiError(
+                ApiErrorCode.ENGINE_ERROR,
+                "The opponent's next move requires a configured chess engine.",
+                status_code=503,
+            )
+        return await self._compat_command(
+            session_id, CommandInvocation(CommandId.NEXT_OPPONENT, "ui")
+        )
+
+    async def analyse_position(self, session_id: str) -> WorkspaceSnapshot:
+        if self.evaluations.engine is None:
+            raise WebApiError(
+                ApiErrorCode.ENGINE_ERROR,
+                "Position analysis requires a configured chess engine.",
+                status_code=503,
+            )
+        return await self._compat_command(
+            session_id, CommandInvocation(CommandId.ANALYSE_POSITION, "ui")
+        )
 
     async def _book_moves(
         self, workspace: FlowWorkspace, board: chess.Board
@@ -496,35 +783,27 @@ class SessionManager:
             return await self._snapshot(session)
 
     async def go_back(self, session_id: str) -> WorkspaceSnapshot:
-        session = self._session(session_id)
-        async with session.lock:
-            if not session.workspace.can_go_back:
-                raise WebApiError(
-                    ApiErrorCode.INVALID_NAVIGATION,
-                    "There is no earlier policy decision.",
-                )
-            session.workspace.go_back_to_previous_decision()
-            self._append_activity(
-                session,
-                "info",
-                "Moved back",
-                "Replayed the retained line and restored policy lifecycle state.",
-            )
-            return await self._snapshot(session)
+        return await self._compat_command(
+            session_id, CommandInvocation(CommandId.GO_BACK, "ui")
+        )
 
     async def restart(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
-            session.workspace.restart()
-            session.activity.clear()
-            session.next_activity_id = 1
-            self._append_activity(
-                session,
-                "info",
-                "Line restarted",
-                "Returned to the beginning without changing saved rules or branches.",
-            )
+            self._restart_locked(session)
             return await self._snapshot(session)
+
+    async def _compat_command(
+        self, session_id: str, invocation: CommandInvocation
+    ) -> WorkspaceSnapshot:
+        try:
+            return (await self.execute_command(session_id, invocation)).workspace
+        except CommandFailure as error:
+            raise WebApiError(
+                ApiErrorCode.INVALID_REQUEST,
+                str(error),
+                details=error.details,
+            ) from error
 
     async def _submit_legal_move(
         self, session: DevelopmentSession, move: chess.Move, *, typed: bool
@@ -624,6 +903,8 @@ class SessionManager:
                 can_back=workspace.can_go_back, can_restart=workspace.can_restart
             ),
             activity=list(session.activity),
+            chat=list(session.chat),
+            available_commands=self._available_command_snapshots(workspace),
             errors=errors,
         )
 
@@ -745,21 +1026,41 @@ class SessionManager:
         kind: Literal["info", "move", "success", "warning"],
         title: str,
         message: str,
-        *,
-        analysis: PositionAnalysisSnapshot | None = None,
     ) -> None:
         session.activity.append(
             ActivitySnapshot(
                 id=session.next_activity_id,
+                sequence=session.next_sequence,
                 kind=kind,
                 title=title,
                 message=message,
-                analysis=analysis,
             )
         )
         session.next_activity_id += 1
+        session.next_sequence += 1
         if len(session.activity) > 100:
             del session.activity[:-100]
+
+    @staticmethod
+    def _append_chat(
+        session: DevelopmentSession,
+        role: Literal["user", "assistant", "system", "tool"],
+        text: str,
+        attachment: ChatAttachment | None = None,
+    ) -> None:
+        session.chat.append(
+            ChatMessageSnapshot(
+                id=f"message-{session.next_message_id}",
+                sequence=session.next_sequence,
+                role=role,
+                text=text,
+                attachment=attachment,
+            )
+        )
+        session.next_message_id += 1
+        session.next_sequence += 1
+        if len(session.chat) > 100:
+            del session.chat[:-100]
 
     def _session(self, session_id: str) -> DevelopmentSession:
         try:
@@ -860,6 +1161,138 @@ def _decision_snapshot(decision: PolicyDecision | None) -> DecisionSnapshot | No
         note=decision.note,
         trace=list(decision.trace),
     )
+
+
+def _policy_reference(
+    item: RuleResolution | OverrideResolution,
+) -> PolicyReferenceSnapshot:
+    if isinstance(item, RuleResolution):
+        return PolicyReferenceSnapshot(
+            kind="rule",
+            id=item.rule.id,
+            priority=item.rule.priority,
+            move_san=item.move_san,
+            note=item.rule.note,
+            reason=item.reason,
+        )
+    return PolicyReferenceSnapshot(
+        kind="exact-override",
+        id=item.override.id,
+        move_san=item.move_san,
+        note=item.override.note,
+        reason=item.reason,
+    )
+
+
+def _decision_explanation(
+    decision: PolicyDecision | None,
+) -> DecisionExplanationAttachment:
+    if decision is None:
+        return DecisionExplanationAttachment(
+            selected=None,
+            condition_reasons=["No controlled-side policy decision is active."],
+            provenance=["policy-runtime"],
+        )
+    selected_rule = next(
+        (item for item in decision.rule_resolutions if item.selected), None
+    )
+    selected_override = next(
+        (item for item in decision.override_resolutions if item.selected), None
+    )
+    selected_item = selected_override or selected_rule
+    selected_priority = selected_rule.rule.priority if selected_rule else None
+    reasons: list[str] = []
+    if selected_rule is not None:
+        if selected_rule.activation is not None:
+            reasons.append(selected_rule.activation.explanation)
+        if selected_rule.retirement is not None:
+            reasons.append(selected_rule.retirement.explanation)
+        if selected_rule.rule.note:
+            reasons.append(selected_rule.rule.note)
+    elif selected_override is not None:
+        reasons.append(selected_override.reason)
+        if selected_override.override.note:
+            reasons.append(selected_override.override.note)
+    else:
+        reasons.append("No active legal policy action resolved in this position.")
+    return DecisionExplanationAttachment(
+        selected=_policy_reference(selected_item) if selected_item else None,
+        higher_priority_waiting=[
+            _policy_reference(item)
+            for item in decision.rule_resolutions
+            if item.status is EffectiveRuleStatus.WAITING
+            and (selected_priority is None or item.rule.priority > selected_priority)
+        ],
+        shadowed_active=[
+            _policy_reference(item)
+            for item in decision.rule_resolutions
+            if item.status is EffectiveRuleStatus.ACTIVE and item.shadowed
+        ],
+        dormant=[
+            _policy_reference(item)
+            for item in decision.rule_resolutions
+            if item.status is EffectiveRuleStatus.DORMANT
+        ],
+        condition_reasons=reasons,
+        provenance=["policy-trace", "condition-evaluator", "user-authored-note"],
+    )
+
+
+def _decision_explanation_text(
+    attachment: DecisionExplanationAttachment,
+) -> str:
+    if attachment.selected is None:
+        return "No policy rule or exact override is selected in this position."
+    selected = attachment.selected
+    priority = (
+        f" at priority {selected.priority}" if selected.priority is not None else ""
+    )
+    return f"Selected {selected.kind} {selected.id}{priority}."
+
+
+def _find_policy_item(
+    groups: RuleGroupsSnapshot, item_id: str
+) -> RuleRuntimeSnapshot | OverrideRuntimeSnapshot | None:
+    items: list[RuleRuntimeSnapshot | OverrideRuntimeSnapshot] = [
+        *groups.applies_now,
+        *groups.waiting,
+        *groups.dormant,
+        *groups.retired,
+        *groups.disabled,
+        *groups.overrides,
+    ]
+    if groups.selected is not None:
+        items.insert(0, groups.selected)
+    return next((item for item in items if item.id == item_id), None)
+
+
+def _position_details(workspace: FlowWorkspace) -> PositionDetailsAttachment:
+    history = list(workspace.history)
+    if workspace.attempt is not None:
+        history.append(workspace.attempt.selected_move.san)
+    return PositionDetailsAttachment(
+        fen=workspace.board.fen(en_passant="fen"),
+        history_san=history,
+        turn="white" if workspace.board.turn == chess.WHITE else "black",
+        ply=len(history),
+        in_check=workspace.board.is_check(),
+        last_move_uci=(
+            workspace.controller.interaction.last_move.uci
+            if workspace.controller.interaction.last_move
+            else None
+        ),
+        legal_moves=[
+            LegalMoveSnapshot(uci=move.uci(), san=workspace.board.san(move))
+            for move in workspace.board.legal_moves
+        ],
+        game_over=_game_over(workspace.outcome),
+    )
+
+
+def _effect_snapshots(
+    effects: tuple[ClientEffect, ...],
+) -> list[HighlightMoveEffect]:
+    return [HighlightMoveEffect(uci=effect.uci) for effect in effects]
 
 
 def _rule_groups(

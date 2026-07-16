@@ -1,4 +1,4 @@
-import type { RuleRuntimeSnapshot, WorkspaceSnapshot } from "../types/workspace";
+import type { CommandResponse, ClientEffect, RuleRuntimeSnapshot, WorkspaceSnapshot } from "../types/workspace";
 
 export function ruleFixture(overrides: Partial<RuleRuntimeSnapshot> = {}): RuleRuntimeSnapshot {
   return {
@@ -38,11 +38,40 @@ export function workspaceFixture(overrides: Partial<WorkspaceSnapshot> = {}): Wo
       previousCentipawns: null, previousMateIn: null, changeCentipawns: null, errorMessage: null,
     },
     navigation: { canBack: false, canRestart: false },
-    activity: [{ id: 1, kind: "info", title: "Development session ready", message: "Loaded London System. White follows the deterministic policy." }],
+    activity: [{ id: 1, sequence: 1, kind: "info", title: "Development session ready", message: "Loaded London System. White follows the deterministic policy." }],
+    chat: [],
+    availableCommands: [
+      command("analyse_position", "/analyse", "/analyse", "Show local book moves and Stockfish's best candidates."),
+      command("explain_decision", "/why", "/why", "Explain why the current policy decision was selected."),
+      command("inspect_rule", "/rule", "/rule <rule-id>", "Inspect one policy rule or exact override.", [{ name: "rule_id", description: "Rule or override identifier.", required: true }]),
+      command("list_rules", "/rules", "/rules", "List rules grouped by their current effective status."),
+      command("trace_decision", "/trace", "/trace", "Show the deterministic trace for the current decision."),
+      command("inspect_position", "/position", "/position", "Show the current position, history, and legal moves."),
+      command("play_move", "/play", "/play <SAN>", "Play a legal move using SAN notation.", [{ name: "move", description: "Move in SAN notation.", required: true }]),
+      command("hint_policy_move", "/hint", "/hint", "Highlight the piece selected by the current policy."),
+      command("list_commands", "/help", "/help", "Show the commands available in the current position."),
+    ],
     errors: [], ...overrides,
   };
 }
 
+function command(
+  id: WorkspaceSnapshot["availableCommands"][number]["id"],
+  slash: string,
+  usage: string,
+  description: string,
+  arguments_: WorkspaceSnapshot["availableCommands"][number]["arguments"] = [],
+): WorkspaceSnapshot["availableCommands"][number] {
+  return { id, slash, usage, description, arguments: arguments_ };
+}
+
 export function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+}
+
+export function commandResponse(
+  workspace: WorkspaceSnapshot,
+  effects: ClientEffect[] = [],
+): CommandResponse {
+  return { workspace, effects };
 }

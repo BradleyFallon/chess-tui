@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Annotated, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -30,6 +30,48 @@ class MoveRequest(ApiModel):
 
 class SanMoveRequest(ApiModel):
     san: str = Field(min_length=1, max_length=20)
+
+
+class ChatRequest(ApiModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class SimpleCommandRequest(ApiModel):
+    command: Literal[
+        "analyse_position",
+        "explain_decision",
+        "list_rules",
+        "trace_decision",
+        "inspect_position",
+        "next_opponent",
+        "retry_policy",
+        "continue_policy",
+        "add_rule_for_mismatch",
+        "go_back",
+        "restart",
+        "hint_policy_move",
+        "list_commands",
+    ]
+    source: Literal["ui", "tool"] = "ui"
+
+
+class PlayMoveCommandRequest(ApiModel):
+    command: Literal["play_move"]
+    source: Literal["ui", "tool"] = "ui"
+    notation: Literal["san", "uci"]
+    move: str = Field(min_length=1, max_length=20)
+
+
+class InspectRuleCommandRequest(ApiModel):
+    command: Literal["inspect_rule"]
+    source: Literal["ui", "tool"] = "ui"
+    rule_id: str = Field(min_length=1, max_length=100)
+
+
+TypedCommandRequest: TypeAlias = Annotated[
+    SimpleCommandRequest | PlayMoveCommandRequest | InspectRuleCommandRequest,
+    Field(discriminator="command"),
+]
 
 
 class MoveActionRequest(ApiModel):
@@ -229,12 +271,110 @@ class PositionAnalysisSnapshot(ApiModel):
     engine_moves: list[EngineMoveSnapshot] = Field(default_factory=list)
 
 
+class AvailableCommandSnapshot(ApiModel):
+    id: str
+    slash: str
+    usage: str
+    description: str
+    arguments: list[dict[str, object]] = Field(default_factory=list)
+
+
+class PositionAnalysisAttachment(ApiModel):
+    kind: Literal["position-analysis"] = "position-analysis"
+    analysis: PositionAnalysisSnapshot
+
+
+class PolicyReferenceSnapshot(ApiModel):
+    kind: Literal["rule", "exact-override"]
+    id: str
+    priority: int | None = None
+    move_san: str | None = None
+    note: str | None = None
+    reason: str
+
+
+class DecisionExplanationAttachment(ApiModel):
+    kind: Literal["decision-explanation"] = "decision-explanation"
+    selected: PolicyReferenceSnapshot | None
+    higher_priority_waiting: list[PolicyReferenceSnapshot] = Field(default_factory=list)
+    shadowed_active: list[PolicyReferenceSnapshot] = Field(default_factory=list)
+    dormant: list[PolicyReferenceSnapshot] = Field(default_factory=list)
+    condition_reasons: list[str] = Field(default_factory=list)
+    provenance: list[str] = Field(default_factory=list)
+
+
+class RuleDetailsAttachment(ApiModel):
+    kind: Literal["rule-details"] = "rule-details"
+    rule: RuleRuntimeSnapshot | OverrideRuntimeSnapshot
+    provenance: list[str] = Field(default_factory=list)
+
+
+class RuleListAttachment(ApiModel):
+    kind: Literal["rule-list"] = "rule-list"
+    groups: RuleGroupsSnapshot
+
+
+class DecisionTraceAttachment(ApiModel):
+    kind: Literal["decision-trace"] = "decision-trace"
+    entries: list[str] = Field(default_factory=list)
+    provenance: Literal["policy-trace"] = "policy-trace"
+
+
+class LegalMoveSnapshot(ApiModel):
+    uci: str
+    san: str
+
+
+class PositionDetailsAttachment(ApiModel):
+    kind: Literal["position-details"] = "position-details"
+    fen: str
+    history_san: list[str]
+    turn: Literal["white", "black"]
+    ply: int
+    in_check: bool
+    last_move_uci: str | None
+    legal_moves: list[LegalMoveSnapshot] = Field(default_factory=list)
+    game_over: GameOverSnapshot | None
+
+
+class CommandListAttachment(ApiModel):
+    kind: Literal["command-list"] = "command-list"
+    commands: list[AvailableCommandSnapshot] = Field(default_factory=list)
+
+
+class ValidationErrorAttachment(ApiModel):
+    kind: Literal["validation-error"] = "validation-error"
+    code: str
+    details: dict[str, object] = Field(default_factory=dict)
+
+
+ChatAttachment: TypeAlias = Annotated[
+    PositionAnalysisAttachment
+    | DecisionExplanationAttachment
+    | RuleDetailsAttachment
+    | RuleListAttachment
+    | DecisionTraceAttachment
+    | PositionDetailsAttachment
+    | CommandListAttachment
+    | ValidationErrorAttachment,
+    Field(discriminator="kind"),
+]
+
+
+class ChatMessageSnapshot(ApiModel):
+    id: str
+    sequence: int
+    role: Literal["user", "assistant", "system", "tool"]
+    text: str
+    attachment: ChatAttachment | None = None
+
+
 class ActivitySnapshot(ApiModel):
     id: int
+    sequence: int
     kind: Literal["info", "move", "success", "warning"]
     title: str
     message: str
-    analysis: PositionAnalysisSnapshot | None = None
 
 
 class WorkspaceSnapshot(ApiModel):
@@ -249,4 +389,16 @@ class WorkspaceSnapshot(ApiModel):
     evaluation: EvaluationSnapshot
     navigation: NavigationSnapshot
     activity: list[ActivitySnapshot] = Field(default_factory=list)
+    chat: list[ChatMessageSnapshot] = Field(default_factory=list)
+    available_commands: list[AvailableCommandSnapshot] = Field(default_factory=list)
     errors: list[ApiErrorItem] = Field(default_factory=list)
+
+
+class HighlightMoveEffect(ApiModel):
+    kind: Literal["highlight-move"] = "highlight-move"
+    uci: str
+
+
+class CommandResponse(ApiModel):
+    workspace: WorkspaceSnapshot
+    effects: list[HighlightMoveEffect] = Field(default_factory=list)

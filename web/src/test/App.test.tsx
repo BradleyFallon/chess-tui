@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router-dom";
 
 import App from "../App";
 import { WorkspaceProvider } from "../develop/WorkspaceContext";
-import { jsonResponse, workspaceFixture } from "./fixtures";
+import { commandResponse, jsonResponse, workspaceFixture } from "./fixtures";
 
 vi.mock("react-chessboard", () => ({
   Chessboard: ({ options }: { options: { position?: string; squareStyles?: Record<string, { background?: string }>; onPieceDrop?: (args: { sourceSquare: string; targetSquare: string }) => boolean } }) => (
@@ -38,28 +38,71 @@ test("workspace renders board, grouped rule status, lifecycle, and activity", as
   expect(screen.queryByText(/legacy/i)).not.toBeInTheDocument();
 });
 
+test("activity and deterministic chat attachments render in sequence order", async () => {
+  const initial = workspaceFixture();
+  const snapshot = workspaceFixture({
+    activity: [
+      initial.activity[0],
+      { id: 2, sequence: 3, kind: "info", title: "Middle activity", message: "A state update." },
+    ],
+    chat: [
+      { id: "message-1", sequence: 2, role: "user", text: "What changed?", attachment: null },
+      {
+        id: "message-2", sequence: 4, role: "assistant", text: "Current position details.",
+        attachment: { kind: "position-details", fen: initial.position.fen, historySan: [], turn: "white", ply: 0, inCheck: false, lastMoveUci: null, legalMoves: [{ uci: "d2d4", san: "d4" }], gameOver: null },
+      },
+      {
+        id: "message-3", sequence: 5, role: "assistant", text: "Why this move.",
+        attachment: { kind: "decision-explanation", selected: { kind: "rule", id: "develop-d-pawn", priority: 400, moveSan: "d4", note: "Control the center.", reason: "Selected." }, higherPriorityWaiting: [], shadowedActive: [], dormant: [], conditionReasons: ["Active from start."], provenance: ["policy-trace"] },
+      },
+      { id: "message-4", sequence: 6, role: "assistant", text: "Trace.", attachment: { kind: "decision-trace", entries: ["Selected develop-d-pawn."], provenance: "policy-trace" } },
+      { id: "message-5", sequence: 7, role: "assistant", text: "Invalid.", attachment: { kind: "validation-error", code: "UNKNOWN_RULE", details: {} } },
+    ],
+  });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(snapshot)));
+  renderRoute("/develop");
+
+  const feed = await screen.findByRole("log");
+  const content = feed.textContent ?? "";
+  expect(content.indexOf("Development session ready")).toBeLessThan(content.indexOf("What changed?"));
+  expect(content.indexOf("What changed?")).toBeLessThan(content.indexOf("Middle activity"));
+  expect(content.indexOf("Middle activity")).toBeLessThan(content.indexOf("Current position details."));
+  expect(within(feed).getByText(initial.position.fen)).toBeInTheDocument();
+  expect(within(feed).getByText((_, node) =>
+    node?.tagName === "SPAN" && node.textContent === "Selected: develop-d-pawn · 400",
+  )).toBeInTheDocument();
+  expect(within(feed).getByText("Selected develop-d-pawn.")).toBeInTheDocument();
+  expect(within(feed).getByText("UNKNOWN_RULE")).toBeInTheDocument();
+});
+
 test("correct move advances directly to opponent and Enter calls Next", async () => {
   const initial = workspaceFixture();
   const opponent = workspaceFixture({
     phase: "opponent-ready", decision: null,
     position: { ...initial.position, turn: "black", historySan: ["d4"], ply: 1, lastMoveUci: "d2d4", legalMovesUci: ["d7d5"] },
-    activity: [{ id: 2, kind: "success", title: "White played d4", message: "Correct. Control the center." }],
+    activity: [{ id: 2, sequence: 2, kind: "success", title: "White played d4", message: "Correct. Control the center." }],
   });
   const advanced = workspaceFixture({ position: { ...initial.position, historySan: ["d4", "d5"], ply: 2 } });
-  const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(initial)).mockResolvedValueOnce(jsonResponse(opponent)).mockResolvedValueOnce(jsonResponse(advanced));
+  const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(initial)).mockResolvedValueOnce(jsonResponse(commandResponse(opponent))).mockResolvedValueOnce(jsonResponse(commandResponse(advanced)));
   vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
   await userEvent.click(await screen.findByRole("button", { name: "Play d4" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    "/api/sessions/session-1/commands",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ command: "play_move", source: "ui", notation: "uci", move: "d2d4" }) }),
+  ));
   expect(await screen.findByRole("button", { name: "Next" })).toBeInTheDocument();
   const composer = screen.getByRole("combobox", { name: "Enter move in SAN" });
   composer.focus(); fireEvent.keyDown(composer, { key: "Enter" });
-  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions/session-1/opponent/next", expect.objectContaining({ method: "POST" })));
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions/session-1/commands", expect.objectContaining({ method: "POST", body: JSON.stringify({ command: "next_opponent", source: "ui" }) })));
 });
 
 test("SAN composer submits moves", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonResponse(workspaceFixture()));
+  const snapshot = workspaceFixture();
+  const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(snapshot)).mockResolvedValueOnce(jsonResponse(commandResponse(snapshot)));
   vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
   await userEvent.type(await screen.findByRole("combobox", { name: "Enter move in SAN" }), "d4{Enter}");
-  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions/session-1/moves/san", expect.objectContaining({ method: "POST", body: JSON.stringify({ san: "d4" }) })));
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions/session-1/chat", expect.objectContaining({ method: "POST", body: JSON.stringify({ text: "d4" }) })));
 });
 
 test("typing anywhere sends printable keys to the move composer", async () => {
@@ -82,7 +125,8 @@ test("typing anywhere sends printable keys to the move composer", async () => {
 });
 
 test("slash commands show concise help, filter, and execute from the composer", async () => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture())));
+  const snapshot = workspaceFixture();
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonResponse(snapshot)).mockResolvedValueOnce(jsonResponse(commandResponse(snapshot, [{ kind: "highlight-move", uci: "d2d4" }]))));
   renderRoute("/develop");
   const composer = await screen.findByRole("combobox", { name: "Enter move in SAN" });
 
@@ -107,11 +151,18 @@ test("analyse command adds book and engine suggestions to the status feed", asyn
     activity: [
       ...initial.activity,
       {
-        id: 2,
+        id: 2, sequence: 3,
         kind: "info",
-        title: "Position analysis",
-        message: "Candidate moves for White from the local book and Stockfish.",
-        analysis: {
+        title: "Position analysis completed",
+        message: "Candidate moves are available in the conversation.",
+      },
+    ],
+    chat: [
+      { id: "chat-1", sequence: 2, role: "user", text: "/analyse", attachment: null },
+      {
+        id: "chat-2", sequence: 4, role: "assistant",
+        text: "Candidate moves for White from the local book and Stockfish.",
+        attachment: { kind: "position-analysis", analysis: {
           bookMoves: [
             { uci: "d2d4", san: "d4", source: "policy", games: null, frequency: null },
           ],
@@ -119,13 +170,13 @@ test("analyse command adds book and engine suggestions to the status feed", asyn
             { uci: "d2d4", san: "d4", evaluationCp: 32, mateIn: null, principalVariation: ["d2d4", "g8f6"] },
             { uci: "g1f3", san: "Nf3", evaluationCp: 20, mateIn: null, principalVariation: ["g1f3"] },
           ],
-        },
+        } },
       },
     ],
   });
   const fetchMock = vi.fn()
     .mockResolvedValueOnce(jsonResponse(initial))
-    .mockResolvedValueOnce(jsonResponse(analysed));
+    .mockResolvedValueOnce(jsonResponse(commandResponse(analysed)));
   vi.stubGlobal("fetch", fetchMock);
   renderRoute("/develop");
 
@@ -134,8 +185,8 @@ test("analyse command adds book and engine suggestions to the status feed", asyn
     "/analyse{Enter}",
   );
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
-    "/api/sessions/session-1/analysis",
-    expect.objectContaining({ method: "POST" }),
+    "/api/sessions/session-1/chat",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ text: "/analyse" }) }),
   ));
   expect(await screen.findByRole("heading", { name: "Book moves" })).toBeInTheDocument();
   expect(screen.getByText("selected policy")).toBeInTheDocument();
@@ -169,6 +220,11 @@ test("mismatch chat command adds a rule for the attempted move", async () => {
       sourceId: "develop-d-pawn", note: "Control the center.", trace: [],
       engineReview: null,
     },
+    availableCommands: [
+      { id: "add_rule_for_mismatch", slash: "/add-rule", usage: "/add-rule", description: "Add an exact-position rule that accepts the attempted move.", arguments: [] },
+      { id: "retry_policy", slash: "/retry", usage: "/retry", description: "Discard the attempted move and try again.", arguments: [] },
+      { id: "continue_policy", slash: "/continue", usage: "/continue", description: "Discard the attempt and play the selected policy move.", arguments: [] },
+    ],
   });
   const accepted = workspaceFixture({
     phase: "opponent-ready",
@@ -183,7 +239,7 @@ test("mismatch chat command adds a rule for the attempted move", async () => {
     activity: [
       ...initial.activity,
       {
-        id: 2,
+        id: 2, sequence: 3,
         kind: "success",
         title: "Added rule allow-e2e4-ply-0",
         message: "e4 is now the exact-position policy move here and was accepted.",
@@ -192,7 +248,7 @@ test("mismatch chat command adds a rule for the attempted move", async () => {
   });
   const fetchMock = vi.fn()
     .mockResolvedValueOnce(jsonResponse(mismatch))
-    .mockResolvedValueOnce(jsonResponse(accepted));
+    .mockResolvedValueOnce(jsonResponse(commandResponse(accepted)));
   vi.stubGlobal("fetch", fetchMock);
   renderRoute("/develop");
   const composer = await screen.findByRole("combobox", { name: "Enter move in SAN" });
@@ -203,17 +259,18 @@ test("mismatch chat command adds a rule for the attempted move", async () => {
   await userEvent.type(composer, "/add-rule{Enter}");
 
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
-    "/api/sessions/session-1/policy/add-rule",
-    expect.objectContaining({ method: "POST" }),
+    "/api/sessions/session-1/chat",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ text: "/add-rule" }) }),
   ));
   expect(await screen.findByText("Added rule allow-e2e4-ply-0")).toBeInTheDocument();
 });
 
 test("hint highlights the expected original piece square", async () => {
-  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture()))); renderRoute("/develop");
+  const snapshot = workspaceFixture();
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValueOnce(jsonResponse(snapshot)).mockResolvedValueOnce(jsonResponse(commandResponse(snapshot, [{ kind: "highlight-move", uci: "d2d4" }])))); renderRoute("/develop");
   const board = await screen.findByTestId("chessboard");
   await userEvent.click(screen.getByRole("button", { name: "Hint" }));
-  expect(board).toHaveAttribute("data-hint", "d2");
+  await waitFor(() => expect(board).toHaveAttribute("data-hint", "d2"));
 });
 
 test("full v2 rule editor sends conditions and original-piece action", async () => {
@@ -247,6 +304,10 @@ test("TOML tab, Back, Restart, and failed API preserve the last snapshot", async
   expect(await screen.findByLabelText("Flow TOML source")).toHaveTextContent("version = 2");
   await userEvent.click(screen.getByRole("tab", { name: "Rules" }));
   await userEvent.click(screen.getByRole("button", { name: "Back" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/commands",
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ command: "go_back", source: "ui" }) }),
+  ));
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not save flow");
   expect(screen.getByText("develop-d-pawn")).toBeInTheDocument();
 });

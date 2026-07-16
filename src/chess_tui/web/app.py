@@ -12,19 +12,25 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
+from ..commands import CommandFailure, CommandId, CommandInvocation
 from ..engine import ChessEngineService, EngineError, StockfishEngineService
 from ..flow import FlowStorageError, FlowValidationError
 from .api_models import (
     ApiErrorEnvelope,
     ApiErrorItem,
+    ChatRequest,
+    CommandResponse,
     CreateSessionRequest,
     FlowSourceResponse,
     HealthResponse,
     MoveRequest,
+    InspectRuleCommandRequest,
+    PlayMoveCommandRequest,
     SanMoveRequest,
     UpdateOverrideRequest,
     UpdateRuleRequest,
     WorkspaceSnapshot,
+    TypedCommandRequest,
 )
 from .errors import ApiErrorCode, WebApiError
 from .sessions import SessionManager
@@ -133,6 +139,18 @@ def _register_error_handlers(application: FastAPI) -> None:
         del request
         return _error_response(ApiErrorCode.ENGINE_ERROR, str(error), 500)
 
+    @application.exception_handler(CommandFailure)
+    async def handle_command_error(
+        request: Request, error: CommandFailure
+    ) -> JSONResponse:
+        del request
+        return _error_response(
+            ApiErrorCode.INVALID_REQUEST,
+            str(error),
+            400,
+            {"commandCode": error.code, **error.details},
+        )
+
 
 def _register_api_routes(application: FastAPI) -> None:
     @application.get("/api/health", response_model=HealthResponse)
@@ -180,6 +198,45 @@ def _register_api_routes(application: FastAPI) -> None:
         payload: SanMoveRequest,
     ) -> WorkspaceSnapshot:
         return await _manager(request).submit_san_move(session_id, payload.san)
+
+    @application.post(
+        "/api/sessions/{session_id}/chat",
+        response_model=CommandResponse,
+    )
+    async def submit_chat(
+        request: Request,
+        session_id: str,
+        payload: ChatRequest,
+    ) -> CommandResponse:
+        return await _manager(request).submit_chat(session_id, payload.text)
+
+    @application.post(
+        "/api/sessions/{session_id}/commands",
+        response_model=CommandResponse,
+    )
+    async def execute_command(
+        request: Request,
+        session_id: str,
+        payload: TypedCommandRequest,
+    ) -> CommandResponse:
+        invocation = CommandInvocation(
+            command=CommandId(payload.command),
+            source=payload.source,
+            notation=(
+                payload.notation
+                if isinstance(payload, PlayMoveCommandRequest)
+                else None
+            ),
+            move=(
+                payload.move if isinstance(payload, PlayMoveCommandRequest) else None
+            ),
+            rule_id=(
+                payload.rule_id
+                if isinstance(payload, InspectRuleCommandRequest)
+                else None
+            ),
+        )
+        return await _manager(request).execute_command(session_id, invocation)
 
     @application.post(
         "/api/sessions/{session_id}/policy/retry",

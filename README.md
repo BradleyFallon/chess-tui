@@ -65,9 +65,16 @@ decision and trace, grouped rule lifecycle, Back/Restart navigation, and
 optional Stockfish evaluation. Rules and exact-position overrides can be edited
 in the left panel using original-piece actions and JSON condition expressions;
 the complete flow is validated, saved atomically, and replayed after each edit.
-Moves travel as UCI or SAN over HTTP, but Python remains authoritative for
-legality, policy, persistence, replay, and analysis. Web Quiz remains a
-placeholder and the Textual application remains supported.
+The right-side timeline keeps application activity separate from user/assistant
+conversation while displaying both in deterministic sequence order. Python
+publishes the commands available in each snapshot and handles SAN, `/analyse`,
+`/why`, `/rule`, `/rules`, `/trace`, `/position`, navigation, hint, and mismatch
+commands through the shared command registry. React sends complete chat text or
+typed command invocations; it does not parse slash syntax or reproduce command
+availability rules. Python remains authoritative for legality, policy,
+persistence, replay, analysis, and transient client effects such as hint
+highlighting. Web Quiz remains a placeholder and the Textual application remains
+supported.
 
 For two-process frontend development:
 
@@ -281,6 +288,8 @@ Copy this block when providing the project structure to an LLM:
   styling.
 - `src/chess_tui/web/` - owns FastAPI lifecycle, typed snapshots and errors,
   in-memory sessions, evaluation caching, static serving, and Uvicorn startup.
+- `src/chess_tui/commands/` - defines backend command identities, slash aliases,
+  typed invocations, availability predicates, outcomes, and client effects.
 - `web/` - contains the React/TypeScript client and its Vite, ESLint,
   TypeScript, Vitest, and production-build scripts.
 - `src/chess_tui/output_schema.json` - a packaged placeholder for

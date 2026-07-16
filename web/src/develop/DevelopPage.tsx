@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { Link } from "react-router-dom";
 
 import { BoardPanel } from "../components/BoardPanel";
@@ -13,20 +13,13 @@ export function DevelopPage() {
     loading,
     pending,
     error,
+    effects,
     initialize,
-    submitMove,
-    submitSanMove,
-    retryPolicy,
-    continuePolicy,
-    addRuleForMismatch,
-    playNextOpponent,
-    analysePosition,
+    sendChat,
+    executeCommand,
     updateRule,
     updateOverride,
-    back,
-    restart,
   } = useWorkspace();
-  const [hintedFen, setHintedFen] = useState<string | null>(null);
 
   useEffect(() => {
     if (workspace?.phase !== "opponent-ready" || pending) return;
@@ -45,12 +38,12 @@ export function DevelopPage() {
         || (target instanceof HTMLElement && target.isContentEditable)
       ) return;
       event.preventDefault();
-      void playNextOpponent();
+      void executeCommand({ command: "next_opponent", source: "ui" });
     };
 
     window.addEventListener("keydown", playBlackOnEnter);
     return () => window.removeEventListener("keydown", playBlackOnEnter);
-  }, [pending, playNextOpponent, workspace?.phase]);
+  }, [executeCommand, pending, workspace?.phase]);
 
   if (loading) return <LoadingScreen />;
   if (!workspace) {
@@ -62,7 +55,8 @@ export function DevelopPage() {
       </main>
     );
   }
-  const hintVisible = hintedFen === workspace.position.fen;
+  const hintMoveUci = effects.find((effect) => effect.kind === "highlight-move")?.uci ?? null;
+  const hintVisible = hintMoveUci !== null;
   return (
     <main className="develop-page">
       <header className="app-header">
@@ -88,8 +82,8 @@ export function DevelopPage() {
           pending={pending}
           onUpdateRule={(ruleId, update) => void updateRule(ruleId, update)}
           onUpdateOverride={(overrideId, update) => void updateOverride(overrideId, update)}
-          onBack={() => void back()}
-          onRestart={() => void restart()}
+          onBack={() => void executeCommand({ command: "go_back", source: "ui" })}
+          onRestart={() => void executeCommand({ command: "restart", source: "ui" })}
         />
         <div className="board-region">
           <EvaluationBar
@@ -99,10 +93,9 @@ export function DevelopPage() {
           <BoardPanel
             workspace={workspace}
             pending={pending}
-            hintMoveUci={hintVisible ? workspace.decision?.moveUci ?? null : null}
+            hintMoveUci={hintMoveUci}
             onMove={(uci) => {
-              setHintedFen(null);
-              void submitMove(uci);
+              void executeCommand({ command: "play_move", source: "ui", notation: "uci", move: uci });
             }}
           />
         </div>
@@ -111,15 +104,8 @@ export function DevelopPage() {
             workspace={workspace}
             pending={pending}
             hintVisible={hintVisible}
-            onHint={() => setHintedFen(workspace.position.fen)}
-            onRetry={() => void retryPolicy()}
-            onContinue={() => void continuePolicy()}
-            onAddRule={() => void addRuleForMismatch()}
-            onNextOpponent={() => void playNextOpponent()}
-            onSubmitSan={(san) => void submitSanMove(san)}
-            onBack={() => void back()}
-            onRestart={() => void restart()}
-            onAnalyse={() => void analysePosition()}
+            onSubmit={(text) => void sendChat(text)}
+            onExecute={(command) => void executeCommand(command)}
           />
         </div>
       </div>

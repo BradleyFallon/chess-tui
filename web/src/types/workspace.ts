@@ -80,17 +80,53 @@ export interface EngineMoveSnapshot {
 export interface PositionAnalysisSnapshot {
   bookMoves: BookMoveSnapshot[]; engineMoves: EngineMoveSnapshot[];
 }
+export interface AvailableCommandSnapshot {
+  id: CommandId; slash: string; usage: string; description: string;
+  arguments: Array<{ name: string; description: string; required: boolean }>;
+}
+export interface PolicyReferenceSnapshot {
+  kind: "rule" | "exact-override"; id: string; priority: number | null;
+  moveSan: string | null; note: string | null; reason: string;
+}
+export type ChatAttachment =
+  | { kind: "position-analysis"; analysis: PositionAnalysisSnapshot }
+  | { kind: "decision-explanation"; selected: PolicyReferenceSnapshot | null; higherPriorityWaiting: PolicyReferenceSnapshot[]; shadowedActive: PolicyReferenceSnapshot[]; dormant: PolicyReferenceSnapshot[]; conditionReasons: string[]; provenance: string[] }
+  | { kind: "rule-details"; rule: PolicyItemSnapshot; provenance: string[] }
+  | { kind: "rule-list"; groups: RuleGroupsSnapshot }
+  | { kind: "decision-trace"; entries: string[]; provenance: "policy-trace" }
+  | { kind: "position-details"; fen: string; historySan: string[]; turn: "white" | "black"; ply: number; inCheck: boolean; lastMoveUci: string | null; legalMoves: Array<{ uci: string; san: string }>; gameOver: GameOverSnapshot | null }
+  | { kind: "command-list"; commands: AvailableCommandSnapshot[] }
+  | { kind: "validation-error"; code: string; details: Record<string, unknown> };
+export interface ChatMessageSnapshot {
+  id: string; sequence: number; role: "user" | "assistant" | "system" | "tool";
+  text: string; attachment: ChatAttachment | null;
+}
 export interface ActivitySnapshot {
-  id: number; kind: "info" | "move" | "success" | "warning";
-  title: string; message: string; analysis?: PositionAnalysisSnapshot | null;
+  id: number; sequence: number; kind: "info" | "move" | "success" | "warning";
+  title: string; message: string;
 }
 export interface WorkspaceSnapshot {
   sessionId: string; mode: "develop";
   phase: "policy-ready" | "policy-result" | "opponent-ready" | "game-over";
   flow: FlowSnapshot; position: PositionSnapshot; decision: DecisionSnapshot | null;
   attempt: AttemptSnapshot | null; rules: RuleGroupsSnapshot; evaluation: EvaluationSnapshot;
-  navigation: { canBack: boolean; canRestart: boolean }; activity: ActivitySnapshot[]; errors: ApiErrorItem[];
+  navigation: { canBack: boolean; canRestart: boolean }; activity: ActivitySnapshot[];
+  chat: ChatMessageSnapshot[]; availableCommands: AvailableCommandSnapshot[];
+  errors: ApiErrorItem[];
 }
+
+export type CommandId =
+  | "analyse_position" | "explain_decision" | "inspect_rule" | "list_rules"
+  | "trace_decision" | "inspect_position" | "play_move" | "next_opponent"
+  | "retry_policy" | "continue_policy" | "add_rule_for_mismatch" | "go_back"
+  | "restart" | "hint_policy_move" | "list_commands";
+type SimpleCommandId = Exclude<CommandId, "play_move" | "inspect_rule">;
+export type TypedCommand =
+  | { command: SimpleCommandId; source: "ui" | "tool" }
+  | { command: "play_move"; source: "ui" | "tool"; notation: "san" | "uci"; move: string }
+  | { command: "inspect_rule"; source: "ui" | "tool"; ruleId: string };
+export interface ClientEffect { kind: "highlight-move"; uci: string; }
+export interface CommandResponse { workspace: WorkspaceSnapshot; effects: ClientEffect[]; }
 
 export interface RuleUpdate {
   priority: number; enabled: boolean; note: string | null;

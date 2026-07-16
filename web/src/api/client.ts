@@ -1,4 +1,4 @@
-import type { ApiErrorItem, OverrideUpdate, RuleUpdate, WorkspaceSnapshot } from "../types/workspace";
+import type { ApiErrorItem, CommandResponse, OverrideUpdate, RuleUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
 
 interface ErrorEnvelope {
   error: ApiErrorItem;
@@ -77,6 +77,14 @@ export const workspaceApi = {
     request<WorkspaceSnapshot>(`/api/sessions/${sessionId}`),
   getFlowSource: (sessionId: string) =>
     request<FlowSourceResponse>(`/api/sessions/${sessionId}/flow/source`),
+  sendChat: (sessionId: string, text: string) =>
+    request<CommandResponse>(`/api/sessions/${sessionId}/chat`, {
+      method: "POST", body: JSON.stringify({ text }),
+    }),
+  executeCommand: (sessionId: string, command: TypedCommand) =>
+    request<CommandResponse>(`/api/sessions/${sessionId}/commands`, {
+      method: "POST", body: JSON.stringify(command),
+    }),
   submitMove: (sessionId: string, uci: string) =>
     post(`/api/sessions/${sessionId}/moves`, { uci }),
   submitSanMove: (sessionId: string, san: string) =>

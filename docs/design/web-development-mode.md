@@ -1054,6 +1054,9 @@ class DevelopmentSession:
     workspace: FlowWorkspace
     policy_runtime: PolicyRuntime
     evaluation_history: list[PositionEvaluation]
+    activity: list[ActivityEvent]
+    chat: list[ChatMessage]
+    next_sequence: int
 ```
 
 Sessions may be stored in:
@@ -1067,6 +1070,46 @@ No database is required.
 Durable state remains in the flow TOML.
 
 Session state must be reconstructable through replay.
+
+## 18.1 Backend command and conversation boundary
+
+The implemented Development Mode command layer lives in `chess_tui.commands`.
+It owns stable command IDs, slash aliases, typed invocations, argument metadata,
+availability predicates, outcomes, and client effects. Availability is computed
+from the Python workspace phase, current decision and pending attempt, navigation
+state, and engine status. A workspace snapshot includes only commands that can
+execute in that state.
+
+The two authoritative application endpoints are:
+
+```http
+POST /api/sessions/{session_id}/chat
+POST /api/sessions/{session_id}/commands
+```
+
+`/chat` receives the complete composer text. Python parses slash commands and
+treats other input as SAN. `/commands` receives a discriminated typed invocation
+for board input, buttons, navigation, and other non-conversational UI actions.
+Both return `{workspace, effects}`. Dedicated move, analysis, policy, opponent,
+Back, and Restart routes remain compatibility wrappers over the same command
+behavior.
+
+Application activity and conversation are deliberately different models.
+Activity records committed state changes, while chat records user, assistant,
+system, and tool messages with optional deterministic attachments. Each record
+receives a shared monotonic sequence number; each collection independently keeps
+its latest 100 entries. Back and Restart preserve chat. Restart resets activity
+and then records a new restart event without resetting the timeline sequence.
+
+Implemented deterministic attachments cover position analysis, policy-decision
+explanations, one-rule inspection, grouped rule lists, decision traces, position
+details, command lists, and conversational validation errors. Engine analysis
+details belong to chat; activity records only that analysis completed.
+
+The command/outcome boundary is also the future LLM tool boundary. A future model
+may request the same typed commands and consume deterministic attachments, but it
+must not gain direct workspace, filesystem, persistence, or unrestricted command
+access.
 
 ---
 
@@ -1116,6 +1159,9 @@ Example:
     "canForward": false,
     "canRestart": false
   },
+  "activity": [],
+  "chat": [],
+  "availableCommands": [],
   "errors": []
 }
 ```
@@ -1126,7 +1172,9 @@ Returning one snapshot prevents the frontend from reconstructing domain state fr
 
 # 20. Initial API design
 
-Exact route names may change, but the first API should support these operations.
+The current API supports the generic command and chat endpoints described in
+section 18.1. The routes below remain available as compatibility adapters and
+for clients that prefer one-purpose HTTP operations.
 
 ## Create a session
 

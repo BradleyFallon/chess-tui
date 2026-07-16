@@ -112,7 +112,13 @@ Restart, deterministic-v2 traces and lifecycle groups, rule and exact-override
 editing, structured errors, and White-normalized evaluation. Conditions are
 edited as JSON objects matching the TOML condition language. Python validates
 the whole flow, atomically saves it, and replays the active line before returning
-a new snapshot.
+a new snapshot. Each snapshot also contains the commands currently available,
+computed by Python from phase, policy decision, engine state, and navigation.
+The composer sends complete text to the backend: non-slash input is SAN and slash
+input is parsed by the shared command registry. Conversation messages and
+application activity remain separate collections with a shared monotonic
+sequence, so the browser can render one ordered timeline without conflating the
+two models.
 
 For frontend development, run these in separate terminals:
 

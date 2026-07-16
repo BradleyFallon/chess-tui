@@ -59,6 +59,188 @@ def test_health_and_initial_v2_snapshot(tmp_path: Path) -> None:
         assert all(
             item["kind"] != "opponent-reply" for item in snapshot["rules"]["overrides"]
         )
+        command_ids = {item["id"] for item in snapshot["availableCommands"]}
+        assert "play_move" in command_ids
+        assert "hint_policy_move" in command_ids
+        assert "analyse_position" not in command_ids
+        assert "restart" not in command_ids
+
+
+def test_typed_commands_drive_moves_hints_and_phase_availability(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path, engine=FixtureEngineService()) as (client, _):
+        created = session(client)
+        session_id = created["sessionId"]
+
+        hint = client.post(
+            f"/api/sessions/{session_id}/commands",
+            json={"command": "hint_policy_move", "source": "ui"},
+        )
+        assert hint.status_code == 200
+        assert hint.json()["effects"] == [{"kind": "highlight-move", "uci": "d2d4"}]
+        assert hint.json()["workspace"]["chat"] == []
+
+        played = client.post(
+            f"/api/sessions/{session_id}/commands",
+            json={
+                "command": "play_move",
+                "source": "ui",
+                "notation": "uci",
+                "move": "d2d4",
+            },
+        )
+        assert played.status_code == 200
+        workspace = played.json()["workspace"]
+        assert workspace["phase"] == "opponent-ready"
+        command_ids = {item["id"] for item in workspace["availableCommands"]}
+        assert {"next_opponent", "play_move", "go_back", "restart"} <= command_ids
+        assert "hint_policy_move" not in command_ids
+        assert "explain_decision" not in command_ids
+
+
+def test_typed_command_validation_and_unavailability_are_structured(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, _):
+        created = session(client)
+        session_id = created["sessionId"]
+        invalid = client.post(
+            f"/api/sessions/{session_id}/commands",
+            json={"command": "play_move", "source": "ui", "move": "d4"},
+        )
+        assert invalid.status_code == 422
+        assert invalid.json()["error"]["code"] == "INVALID_REQUEST"
+
+        unavailable = client.post(
+            f"/api/sessions/{session_id}/commands",
+            json={"command": "next_opponent", "source": "ui"},
+        )
+        assert unavailable.status_code == 400
+        assert unavailable.json()["error"]["details"]["commandCode"] == (
+            "COMMAND_UNAVAILABLE"
+        )
+
+
+def test_chat_parses_raw_san_and_returns_conversational_errors(tmp_path: Path) -> None:
+    with web_client(tmp_path) as (client, _):
+        created = session(client)
+        session_id = created["sessionId"]
+        initial_fen = created["position"]["fen"]
+
+        rejected = client.post(
+            f"/api/sessions/{session_id}/chat", json={"text": "/rule missing"}
+        )
+        assert rejected.status_code == 200
+        unchanged = rejected.json()["workspace"]
+        assert unchanged["position"]["fen"] == initial_fen
+        assert unchanged["position"]["historySan"] == []
+        assert unchanged["chat"][-2]["role"] == "user"
+        assert unchanged["chat"][-1]["role"] == "assistant"
+        assert unchanged["chat"][-1]["attachment"]["kind"] == "validation-error"
+        assert unchanged["chat"][-1]["attachment"]["code"] == "UNKNOWN_RULE"
+
+        played = client.post(f"/api/sessions/{session_id}/chat", json={"text": "d4"})
+        assert played.status_code == 200
+        workspace = played.json()["workspace"]
+        assert workspace["position"]["historySan"] == ["d4"]
+        assert workspace["chat"][-1]["text"] == "d4"
+        assert workspace["activity"][-1]["sequence"] > workspace["chat"][-1]["sequence"]
+
+
+def test_deterministic_chat_answers_cover_decision_rules_trace_and_position(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, _):
+        created = session(client)
+        session_id = created["sessionId"]
+        expected_kinds = {
+            "/why": "decision-explanation",
+            "/rule develop-d-pawn": "rule-details",
+            "/rules": "rule-list",
+            "/trace": "decision-trace",
+            "/position": "position-details",
+            "/help": "command-list",
+        }
+        for command, expected_kind in expected_kinds.items():
+            response = client.post(
+                f"/api/sessions/{session_id}/chat", json={"text": command}
+            )
+            assert response.status_code == 200
+            message = response.json()["workspace"]["chat"][-1]
+            assert message["role"] == "assistant"
+            assert message["attachment"]["kind"] == expected_kind
+
+        why = client.post(
+            f"/api/sessions/{session_id}/chat", json={"text": "/why"}
+        ).json()["workspace"]["chat"][-1]["attachment"]
+        assert why["selected"]["id"] == "develop-d-pawn"
+        assert why["selected"]["priority"] == 400
+        assert "user-authored-note" in why["provenance"]
+
+        position = client.post(
+            f"/api/sessions/{session_id}/chat", json={"text": "/position"}
+        ).json()["workspace"]["chat"][-1]["attachment"]
+        assert position["fen"] == created["position"]["fen"]
+        assert {"uci": "d2d4", "san": "d4"} in position["legalMoves"]
+
+
+def test_exact_override_explanations_and_inspection(tmp_path: Path) -> None:
+    with web_client(tmp_path) as (client, _):
+        created = session(client)
+        session_id = created["sessionId"]
+        move(client, session_id, "d2d4")
+        position = move(client, session_id, "e7e5")
+        assert position["decision"]["source"] == "exact-override"
+
+        why = client.post(
+            f"/api/sessions/{session_id}/chat", json={"text": "/why"}
+        ).json()["workspace"]["chat"][-1]["attachment"]
+        assert why["selected"]["kind"] == "exact-override"
+        assert why["selected"]["id"] == "after-d4-e5"
+
+        details = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"text": "/rule after-d4-e5"},
+        ).json()["workspace"]["chat"][-1]["attachment"]
+        assert details["rule"]["kind"] == "exact-override"
+        assert details["rule"]["piece"] == "white:d2"
+        assert details["rule"]["selected"] is True
+
+
+def test_chat_and_activity_sequences_survive_restart_and_limit_independently(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, _):
+        created = session(client)
+        session_id = created["sessionId"]
+        response = client.post(
+            f"/api/sessions/{session_id}/chat", json={"text": "/position"}
+        )
+        assert response.status_code == 200
+        for _ in range(50):
+            response = client.post(
+                f"/api/sessions/{session_id}/chat", json={"text": "/position"}
+            )
+            assert response.status_code == 200
+        workspace = response.json()["workspace"]
+        assert len(workspace["chat"]) == 100
+        assert len(workspace["activity"]) == 1
+        assert all(
+            earlier["sequence"] < later["sequence"]
+            for earlier, later in zip(workspace["chat"], workspace["chat"][1:])
+        )
+
+        client.post(f"/api/sessions/{session_id}/moves", json={"uci": "d2d4"})
+        restarted = client.post(
+            f"/api/sessions/{session_id}/commands",
+            json={"command": "restart", "source": "ui"},
+        )
+        assert restarted.status_code == 200
+        workspace = restarted.json()["workspace"]
+        assert len(workspace["chat"]) == 100
+        assert workspace["activity"][-1]["title"] == "Line restarted"
+        assert workspace["activity"][-1]["sequence"] > workspace["chat"][-1]["sequence"]
 
 
 def test_correct_move_auto_advances_and_opponent_move_returns_policy(
@@ -152,8 +334,8 @@ def test_position_analysis_returns_book_and_engine_candidates(tmp_path: Path) ->
         assert snapshot["phase"] == "opponent-ready"
         assert snapshot["position"]["historySan"] == ["d4"]
         activity = snapshot["activity"][-1]
-        assert activity["title"] == "Position analysis"
-        analysis = activity["analysis"]
+        assert activity["title"] == "Position analysis completed"
+        analysis = snapshot["chat"][-1]["attachment"]["analysis"]
         assert analysis["bookMoves"][0] == {
             "uci": "d7d5",
             "san": "d5",
@@ -176,7 +358,7 @@ def test_position_analysis_includes_policy_move_and_requires_engine(
         response = client.post(
             f"/api/sessions/{created['sessionId']}/analysis", json={}
         )
-        book_moves = response.json()["activity"][-1]["analysis"]["bookMoves"]
+        book_moves = response.json()["chat"][-1]["attachment"]["analysis"]["bookMoves"]
         assert book_moves == [
             {
                 "uci": "d2d4",
@@ -210,6 +392,16 @@ def test_engine_failure_returns_valid_snapshot_with_visible_error(
         assert snapshot["phase"] == "policy-ready"
         assert snapshot["evaluation"]["status"] == "error"
         assert snapshot["errors"][0]["code"] == "ENGINE_ERROR"
+        analysis = client.post(
+            f"/api/sessions/{snapshot['sessionId']}/chat", json={"text": "/analyse"}
+        )
+        assert analysis.status_code == 200
+        analysis_workspace = analysis.json()["workspace"]
+        assert analysis_workspace["chat"][-1]["attachment"]["kind"] == (
+            "validation-error"
+        )
+        assert analysis_workspace["chat"][-1]["attachment"]["code"] == "ENGINE_ERROR"
+        assert len(analysis_workspace["activity"]) == 1
         mismatch = move(client, snapshot["sessionId"], "e2e4")
         assert mismatch["attempt"]["engineReview"]["status"] == "error"
 
