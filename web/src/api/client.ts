@@ -1,4 +1,4 @@
-import type { ApiErrorItem, CommandResponse, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
+import type { ApiErrorItem, CommandResponse, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleUpdate, StructureUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
 
 interface ErrorEnvelope {
   error: ApiErrorItem;
@@ -112,6 +112,15 @@ export const workspaceApi = {
     remove(`/api/sessions/${sessionId}/development-rules/${encodeURIComponent(ruleId)}`),
   reorderDevelopmentRules: (sessionId: string, ruleIds: string[]) =>
     put(`/api/sessions/${sessionId}/development-rules/order`, { ruleIds }),
+  reorderPolicySection: (
+    sessionId: string,
+    section: "response" | "development" | "continuation",
+    itemIds: string[],
+  ) => put(`/api/sessions/${sessionId}/policy-order/${section}`, { itemIds }),
+  updateStructure: (sessionId: string, structureId: string, update: StructureUpdate) =>
+    put(`/api/sessions/${sessionId}/structures/${encodeURIComponent(structureId)}`, update),
+  reorderStructures: (sessionId: string, structureIds: string[]) =>
+    put(`/api/sessions/${sessionId}/structures/order`, { structureIds }),
   addOpeningTag: (sessionId: string, recordId: number) =>
     post(`/api/sessions/${sessionId}/opening-tags`, { recordId }),
   removeOpeningTag: (sessionId: string, recordId: number) =>

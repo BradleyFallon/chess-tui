@@ -26,6 +26,9 @@ export function DevelopPage() {
     applyDevelopmentRule,
     deleteDevelopmentRule,
     reorderDevelopmentRules,
+    reorderPolicySection,
+    updateStructure,
+    reorderStructures,
     addOpeningTag,
     removeOpeningTag,
   } = useWorkspace();
@@ -143,11 +146,14 @@ export function DevelopPage() {
           pending={pending}
           onUpdateRule={(ruleId, update) => void updateRule(ruleId, update)}
           onUpdateOverride={(overrideId, update) => void updateOverride(overrideId, update)}
+          onReorderPolicy={(section, itemIds) => void reorderPolicySection(section, itemIds)}
+          onUpdateStructure={(structureId, update) => void updateStructure(structureId, update)}
+          onReorderStructures={(structureIds) => void reorderStructures(structureIds)}
           onBack={() => void executeCommand({ command: "go_back", source: "ui" })}
           onRestart={() => void executeCommand({ command: "restart", source: "ui" })}
           inspector={
             <PieceDevelopmentPanel
-              key={`${selectedPiece?.ref ?? "none"}:${selectedPiece?.developmentRule?.id ?? "none"}:${selectedPiece?.developmentRule?.target ?? "none"}`}
+              key={`${selectedPiece?.ref ?? "none"}:${selectedPiece?.developmentRules.map((item) => `${item.id}:${item.target}`).join("|") ?? "none"}`}
               workspace={workspace}
               piece={selectedPiece}
               pending={pending}

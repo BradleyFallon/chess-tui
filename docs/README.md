@@ -40,17 +40,18 @@ when enlarged.
 
 ## Deterministic flow mode
 
-Plain `chess-tui` selects the most recently saved strict version 2 flow and
+Plain `chess-tui` selects the most recently saved strict version 3 flow and
 discovers Stockfish from `PATH`, failing startup rather than degrading to a
 fixture bot. `--flow` and `--engine` override those selections. The first ranked
 opponent response is committed automatically; `--select-black` restores the
 interactive selector and manual entry.
 
-`FlowStore` parses named states, abstract rules, exact overrides, and separate
-opponent branch data. `PolicyRuntime` tracks original pieces, latched activation,
-retirement, legality, priority, and decision traces. Resolution is exact
-override, highest-priority active legal rule, then frontier. Version 1 and mixed
-schemas are rejected.
+`FlowStore` parses named conditions, structures, responses, development
+assignments, continuations, exact overrides, and separate opponent branch data.
+`PolicyRuntime` tracks original pieces, last move, latched unlocking, retirement,
+structure selection, legality, authored order, and decision traces. Resolution
+is exact override, first response, first development assignment, first
+continuation, then frontier. Versions 1 and 2 and mixed schemas are rejected.
 
 `FlowWorkspace` owns the board, committed SAN history, provisional controlled
 move, rollback, replay, and generic controlled/opponent turns. Back, Restart,
@@ -111,8 +112,9 @@ chess-tui web \
 The default bind is `127.0.0.1:8765`. Omitting `--engine` is supported and
 reported as `engine-off`. Development Mode supports controlled board/SAN input,
 generic policy retry/continuation, manual or engine opponent moves, Back,
-Restart, deterministic-v2 traces and lifecycle groups, rule and exact-override
-editing, structured errors, and White-normalized evaluation. Conditions are
+Restart, deterministic-v3 traces, structure states, grouped policy order,
+policy and exact-override editing, structured errors, and White-normalized
+evaluation. Conditions are
 edited as JSON objects matching the TOML condition language. Python validates
 the whole flow, atomically saves it, and replays the active line before returning
 a new snapshot. Each snapshot also contains the commands currently available,
@@ -137,6 +139,6 @@ npm run dev
 Web Quiz, graphical condition construction, rule creation/deletion, forward
 navigation, WebSockets, accounts, databases, and hosted deployment are deferred.
 The authoritative specifications are
-`docs/design/rule-policy-v2.md`,
+`docs/design/rule-policy-v3.md`,
 `docs/design/web-development-mode.md`, and
 `docs/design/opening-classification.md`.

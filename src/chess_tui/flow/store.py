@@ -1,14 +1,14 @@
-"""Strict TOML loading and failure-safe persistence for v2 flows."""
+"""Strict TOML loading and failure-safe persistence for version 3 flows."""
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping
 from dataclasses import replace
 import json
 import os
 from pathlib import Path
 import shutil
 import tempfile
-from collections.abc import Mapping
 from typing import Any
 
 import chess
@@ -19,28 +19,30 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
     import tomli as tomllib  # pyright: ignore[reportMissingImports]
 
 from ..policy import (
+    ConditionEvaluator,
     MoveAction,
     OriginalPieceTracker,
     StartingPieceRef,
     condition_to_data,
     parse_condition,
+    referenced_conditions,
     referenced_pieces,
-    referenced_states,
 )
 from .errors import FlowStorageError, FlowValidationError
 from .models import (
-    AuthoredRule,
-    DevelopmentRule,
+    AuthoredPolicyItem,
+    DevelopmentAssignment,
     ExactOverride,
     Flow,
-    NamedState,
+    MoveRule,
+    NamedCondition,
     OpeningTag,
     OpponentReply,
-    PolicyRule,
+    Structure,
 )
 from .position import normalized_position_key, parse_legal_san, replay_san
 
-SUPPORTED_VERSION = 2
+SUPPORTED_VERSION = 3
 
 
 class FlowStore:
@@ -98,17 +100,9 @@ class FlowStore:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
 
-    def replace_rule(self, path: Path, replacement: AuthoredRule) -> Flow:
+    def replace_policy_item(self, path: Path, replacement: AuthoredPolicyItem) -> Flow:
         flow = self.load(path)
-        if all(rule.id != replacement.id for rule in flow.rules):
-            raise FlowValidationError(f"Unknown rule id: {replacement.id!r}.")
-        updated = replace(
-            flow,
-            rules=tuple(
-                replacement if rule.id == replacement.id else rule
-                for rule in flow.rules
-            ),
-        )
+        updated = _replace_policy_item(flow, replacement)
         self.save(path, updated)
         return updated
 
@@ -137,8 +131,6 @@ class FlowStore:
             move = parse_legal_san(board, existing.move_san, context="Opponent reply")
             existing_branch = (normalized_position_key(board), move.uci())
             if existing_branch == branch:
-                # Playing an already-authored branch must not rewrite the file or
-                # move that branch to the end of its presentation order.
                 return flow
             if existing.id != reply.id:
                 retained.append(existing)
@@ -151,30 +143,14 @@ class FlowStore:
     def validate(self, flow: Flow) -> None:
         if flow.version != SUPPORTED_VERSION:
             raise FlowValidationError(
-                f"Unsupported flow version {flow.version}; expected {SUPPORTED_VERSION}."
+                f"Unsupported flow version {flow.version}; expected "
+                f"{SUPPORTED_VERSION}. Version 2 is not accepted."
             )
         if not flow.name.strip():
             raise FlowValidationError("Flow name cannot be empty.")
         if flow.side not in {"white", "black"}:
             raise FlowValidationError(f"Invalid controlled side: {flow.side!r}.")
-        opening_tags: set[tuple[str, str]] = set()
-        for tag in flow.opening_tags:
-            if (
-                len(tag.eco) != 3
-                or tag.eco[0] not in "ABCDE"
-                or not tag.eco[1:].isdigit()
-            ):
-                raise FlowValidationError(
-                    f"Opening tag has invalid ECO code {tag.eco!r}."
-                )
-            if not tag.name.strip():
-                raise FlowValidationError("Opening tag name cannot be empty.")
-            identity = (tag.eco, tag.name)
-            if identity in opening_tags:
-                raise FlowValidationError(
-                    f"Opening tags must be unique; duplicate {tag.name!r} ({tag.eco})."
-                )
-            opening_tags.add(identity)
+        self._validate_opening_tags(flow.opening_tags)
         try:
             start = chess.Board(_expanded_fen(flow.start_fen))
         except ValueError as exc:
@@ -186,62 +162,80 @@ class FlowStore:
             )
         tracker = OriginalPieceTracker(start)
 
-        state_ids = _unique_ids((state.id for state in flow.states), "state")
-        state_map = {state.id: state.when for state in flow.states}
-        for state in flow.states:
+        condition_ids = _unique_ids((item.id for item in flow.conditions), "condition")
+        condition_map = {item.id: item.when for item in flow.conditions}
+        for item in flow.conditions:
             _validate_condition_references(
-                state.when, tracker, state_ids, f"State {state.id!r}"
+                item.when,
+                tracker,
+                condition_ids,
+                f"Condition {item.id!r}",
             )
-        _validate_state_cycles(state_map)
+        _validate_condition_cycles(condition_map)
 
-        _unique_ids((rule.id for rule in flow.rules), "rule")
-        priorities: set[int] = set()
-        development_pieces: set[StartingPieceRef] = set()
-        for rule in flow.rules:
-            if isinstance(rule.priority, bool) or rule.priority in priorities:
+        structure_ids = _unique_ids((item.id for item in flow.structures), "structure")
+        evaluator = ConditionEvaluator(start, tracker, condition_map)
+        for structure in flow.structures:
+            if not structure.name.strip():
                 raise FlowValidationError(
-                    f"Rule priorities must be unique; duplicate {rule.priority}."
+                    f"Structure {structure.id!r} name cannot be empty."
                 )
-            priorities.add(rule.priority)
-            _validate_note(rule.note, f"Rule {rule.id!r}")
-            if isinstance(rule, DevelopmentRule):
-                if rule.piece in development_pieces:
-                    raise FlowValidationError(
-                        "Development rules must assign each starting piece at most "
-                        f"once; duplicate {rule.piece}."
-                    )
-                development_pieces.add(rule.piece)
-                if rule.piece.color != flow.side:
-                    raise FlowValidationError(
-                        f"Rule {rule.id!r}: development rules may only assign the "
-                        f"controlled {flow.side} side."
-                    )
-                if rule.target not in chess.SQUARE_NAMES:
-                    raise FlowValidationError(
-                        f"Rule {rule.id!r}: invalid target {rule.target!r}."
-                    )
-                compiled = rule.compile()
-                condition_pairs = (("readiness", rule.ready_when),)
-            else:
-                if rule.kind != "generic" or rule.development_ref is not None:
-                    raise FlowValidationError(
-                        f"Rule {rule.id!r}: persisted development rules must use "
-                        "the DevelopmentRule authored variant."
-                    )
-                compiled = rule
-                condition_pairs = (
-                    ("activation", rule.activate_when),
-                    ("retirement", rule.retire_when),
+            _validate_note(structure.note, f"Structure {structure.id!r}")
+            for label, condition in (
+                ("availability", structure.available_when),
+                ("selection", structure.selected_when),
+            ):
+                _validate_condition_references(
+                    condition,
+                    tracker,
+                    condition_ids,
+                    f"Structure {structure.id!r} {label}",
                 )
-            _validate_action(compiled.move, tracker, flow.side, f"Rule {rule.id!r}")
-            for label, condition in condition_pairs:
-                if condition is not None:
-                    _validate_condition_references(
-                        condition,
-                        tracker,
-                        state_ids,
-                        f"Rule {rule.id!r} {label}",
+            if evaluator.evaluate(structure.selected_when).value:
+                raise FlowValidationError(
+                    f"Structure {structure.id!r} selected_when is true in the "
+                    "initial position; initial structure selection is not supported."
+                )
+
+        _unique_ids((item.id for item in flow.policy_items), "policy item")
+        for section, items in (
+            ("response", flow.responses),
+            ("development", flow.development),
+            ("continuation", flow.continuations),
+        ):
+            for item in items:
+                _validate_note(item.note, f"{section.title()} {item.id!r}")
+                _validate_scopes(item.structures, structure_ids, item.id)
+                if isinstance(item, DevelopmentAssignment):
+                    if item.piece.color != flow.side:
+                        raise FlowValidationError(
+                            f"Development {item.id!r} may only assign the "
+                            f"controlled {flow.side} side."
+                        )
+                    if item.target not in chess.SQUARE_NAMES:
+                        raise FlowValidationError(
+                            f"Development {item.id!r}: invalid target "
+                            f"{item.target!r}."
+                        )
+                    conditions = (("readiness", item.ready_when),)
+                else:
+                    conditions = (
+                        ("unlock", item.unlock_when),
+                        ("live", item.when),
+                        ("expiration", item.expire_when),
                     )
+                _validate_action(
+                    item.move, tracker, flow.side, f"{section} {item.id!r}"
+                )
+                for label, condition in conditions:
+                    if condition is not None:
+                        _validate_condition_references(
+                            condition,
+                            tracker,
+                            condition_ids,
+                            f"{section.title()} {item.id!r} {label}",
+                        )
+        _validate_development_assignments(flow.development)
 
         _unique_ids((item.id for item in flow.overrides), "override")
         override_positions: set[str] = set()
@@ -290,6 +284,47 @@ class FlowStore:
                 )
             branches.add(branch)
 
+    def warnings(self, flow: Flow) -> tuple[str, ...]:
+        """Return non-fatal static authoring diagnostics."""
+
+        warnings: list[str] = []
+        scoped = {scope for item in flow.policy_items for scope in item.structures}
+        for structure in flow.structures:
+            if structure.id not in scoped:
+                warnings.append(
+                    f"Structure {structure.id!r} is never referenced by a policy item."
+                )
+        references = set().union(
+            *(referenced_conditions(candidate) for candidate in _all_conditions(flow)),
+            set(),
+        )
+        for condition in flow.conditions:
+            if condition.id not in references:
+                warnings.append(
+                    f"Named condition {condition.id!r} is never referenced."
+                )
+        return tuple(warnings)
+
+    def _validate_opening_tags(self, tags: tuple[OpeningTag, ...]) -> None:
+        identities: set[tuple[str, str]] = set()
+        for tag in tags:
+            if (
+                len(tag.eco) != 3
+                or tag.eco[0] not in "ABCDE"
+                or not tag.eco[1:].isdigit()
+            ):
+                raise FlowValidationError(
+                    f"Opening tag has invalid ECO code {tag.eco!r}."
+                )
+            if not tag.name.strip():
+                raise FlowValidationError("Opening tag name cannot be empty.")
+            identity = (tag.eco, tag.name)
+            if identity in identities:
+                raise FlowValidationError(
+                    f"Opening tags must be unique; duplicate {tag.name!r} ({tag.eco})."
+                )
+            identities.add(identity)
+
     def _decode(self, data: dict[str, Any]) -> Flow:
         _require_keys(
             data,
@@ -299,27 +334,28 @@ class FlowStore:
                 "start_fen",
                 "side",
                 "opening_tags",
-                "states",
-                "rules",
+                "conditions",
+                "structures",
+                "responses",
+                "development",
+                "continuations",
                 "overrides",
                 "opponent_replies",
             },
         )
-        collections = {
-            key: data.get(key, [])
-            for key in (
-                "opening_tags",
-                "states",
-                "rules",
-                "overrides",
-                "opponent_replies",
-            )
-        }
+        collection_names = (
+            "opening_tags",
+            "conditions",
+            "structures",
+            "responses",
+            "development",
+            "continuations",
+            "overrides",
+            "opponent_replies",
+        )
+        collections = {key: data.get(key, []) for key in collection_names}
         if not all(isinstance(value, list) for value in collections.values()):
-            raise TypeError(
-                "opening_tags, states, rules, overrides, and opponent_replies "
-                "must be arrays of tables"
-            )
+            raise TypeError(f"{', '.join(collection_names)} must be arrays of tables")
         side = _string(data, "side")
         if side not in {"white", "black"}:
             raise ValueError("side must be 'white' or 'black'")
@@ -331,8 +367,23 @@ class FlowStore:
             opening_tags=tuple(
                 self._decode_opening_tag(item) for item in collections["opening_tags"]
             ),
-            states=tuple(self._decode_state(item) for item in collections["states"]),
-            rules=tuple(self._decode_rule(item) for item in collections["rules"]),
+            conditions=tuple(
+                self._decode_condition(item) for item in collections["conditions"]
+            ),
+            structures=tuple(
+                self._decode_structure(item) for item in collections["structures"]
+            ),
+            responses=tuple(
+                self._decode_move_rule(item, "response")
+                for item in collections["responses"]
+            ),
+            development=tuple(
+                self._decode_development(item) for item in collections["development"]
+            ),
+            continuations=tuple(
+                self._decode_move_rule(item, "continuation")
+                for item in collections["continuations"]
+            ),
             overrides=tuple(
                 self._decode_override(item) for item in collections["overrides"]
             ),
@@ -346,90 +397,85 @@ class FlowStore:
         _require_keys(item, {"eco", "name"})
         return OpeningTag(eco=_string(item, "eco"), name=_string(item, "name"))
 
-    def _decode_state(self, value: object) -> NamedState:
-        item = _mapping(value, "state")
+    def _decode_condition(self, value: object) -> NamedCondition:
+        item = _mapping(value, "condition")
         _require_keys(item, {"id", "when"})
-        return NamedState(
-            _string(item, "id"), parse_condition(item.get("when"), context="state.when")
+        return NamedCondition(
+            _string(item, "id"),
+            parse_condition(item.get("when"), context="condition.when"),
         )
 
-    def _decode_rule(self, value: object) -> AuthoredRule:
-        item = _mapping(value, "rule")
-        kind = item.get("kind", "generic")
-        if kind == "development":
-            _require_keys(
-                item,
-                {
-                    "id",
-                    "kind",
-                    "piece",
-                    "target",
-                    "priority",
-                    "enabled",
-                    "note",
-                    "ready_when",
-                },
-            )
-            piece = StartingPieceRef.parse(_string(item, "piece"))
-            target = _string(item, "target")
-            if target not in chess.SQUARE_NAMES:
-                raise ValueError(f"rule.target has invalid square {target!r}.")
-            return DevelopmentRule(
-                id=_string(item, "id"),
-                piece=piece,
-                target=target,
-                priority=_integer(item, "priority"),
-                enabled=_boolean(item, "enabled", True),
-                note=_optional_string(item, "note"),
-                ready_when=(
-                    parse_condition(item["ready_when"], context="rule.ready_when")
-                    if "ready_when" in item
-                    else None
-                ),
-            )
-        if kind != "generic":
-            raise ValueError(
-                f"Unknown rule kind {kind!r}; expected 'generic' or 'development'."
-            )
+    def _decode_structure(self, value: object) -> Structure:
+        item = _mapping(value, "structure")
+        _require_keys(
+            item,
+            {"id", "name", "available_when", "selected_when", "note"},
+        )
+        return Structure(
+            id=_string(item, "id"),
+            name=_string(item, "name"),
+            available_when=parse_condition(
+                item.get("available_when"), context="structure.available_when"
+            ),
+            selected_when=parse_condition(
+                item.get("selected_when"), context="structure.selected_when"
+            ),
+            note=_optional_string(item, "note"),
+        )
+
+    def _decode_move_rule(self, value: object, context: str) -> MoveRule:
+        item = _mapping(value, context)
         _require_keys(
             item,
             {
                 "id",
-                "kind",
-                "priority",
-                "enabled",
-                "note",
                 "move",
-                "activate_when",
-                "retire_when",
+                "structures",
+                "unlock_when",
+                "when",
+                "expire_when",
+                "note",
             },
         )
-        return PolicyRule(
+        return MoveRule(
             id=_string(item, "id"),
-            priority=_integer(item, "priority"),
-            move=_decode_action(item.get("move"), "rule.move"),
-            enabled=_boolean(item, "enabled", True),
+            move=_decode_action(item.get("move"), f"{context}.move"),
+            structures=_optional_string_tuple(
+                item, "structures", f"{context}.structures"
+            ),
+            unlock_when=_optional_condition(item, "unlock_when", context),
+            when=_optional_condition(item, "when", context),
+            expire_when=_optional_condition(item, "expire_when", context),
             note=_optional_string(item, "note"),
-            activate_when=(
-                parse_condition(item["activate_when"], context="rule.activate_when")
-                if "activate_when" in item
-                else None
+        )
+
+    def _decode_development(self, value: object) -> DevelopmentAssignment:
+        item = _mapping(value, "development")
+        _require_keys(
+            item,
+            {"id", "piece", "target", "structures", "ready_when", "note"},
+        )
+        target = _string(item, "target")
+        if target not in chess.SQUARE_NAMES:
+            raise ValueError(f"development.target has invalid square {target!r}.")
+        return DevelopmentAssignment(
+            id=_string(item, "id"),
+            piece=StartingPieceRef.parse(_string(item, "piece")),
+            target=target,
+            structures=_optional_string_tuple(
+                item, "structures", "development.structures"
             ),
-            retire_when=(
-                parse_condition(item["retire_when"], context="rule.retire_when")
-                if "retire_when" in item
-                else None
-            ),
+            ready_when=_optional_condition(item, "ready_when", "development"),
+            note=_optional_string(item, "note"),
         )
 
     def _decode_override(self, value: object) -> ExactOverride:
         item = _mapping(value, "override")
-        _require_keys(item, {"id", "after", "enabled", "note", "move"})
+        _require_keys(item, {"id", "after", "note", "move"})
         return ExactOverride(
             id=_string(item, "id"),
             after_san=_string_tuple(item.get("after"), "override.after"),
             move=_decode_action(item.get("move"), "override.move"),
-            enabled=_boolean(item, "enabled", True),
             note=_optional_string(item, "note"),
         )
 
@@ -460,56 +506,50 @@ def _encode(flow: Flow) -> str:
                 f"name = {json.dumps(tag.name)}",
             )
         )
-    for state in flow.states:
+    for item in flow.conditions:
         lines.extend(
             (
                 "",
-                "[[states]]",
-                f"id = {json.dumps(state.id)}",
-                f"when = {_toml_value(condition_to_data(state.when))}",
+                "[[conditions]]",
+                f"id = {json.dumps(item.id)}",
+                f"when = {_toml_value(condition_to_data(item.when))}",
             )
         )
-    for rule in flow.rules:
+    for structure in flow.structures:
         lines.extend(
             (
                 "",
-                "[[rules]]",
-                f"id = {json.dumps(rule.id)}",
-                f"priority = {rule.priority}",
+                "[[structures]]",
+                f"id = {json.dumps(structure.id)}",
+                f"name = {json.dumps(structure.name)}",
+                "available_when = "
+                f"{_toml_value(condition_to_data(structure.available_when))}",
+                "selected_when = "
+                f"{_toml_value(condition_to_data(structure.selected_when))}",
             )
         )
-        if isinstance(rule, DevelopmentRule):
-            lines.extend(
-                (
-                    'kind = "development"',
-                    f"piece = {json.dumps(str(rule.piece))}",
-                    f"target = {json.dumps(rule.target)}",
-                )
+        if structure.note is not None:
+            lines.append(f"note = {json.dumps(structure.note)}")
+    _encode_move_rules(lines, "responses", flow.responses)
+    for item in flow.development:
+        lines.extend(
+            (
+                "",
+                "[[development]]",
+                f"id = {json.dumps(item.id)}",
+                f"piece = {json.dumps(str(item.piece))}",
+                f"target = {json.dumps(item.target)}",
             )
-            if not rule.enabled:
-                lines.append("enabled = false")
-            if rule.note is not None:
-                lines.append(f"note = {json.dumps(rule.note)}")
-            if rule.ready_when is not None:
-                lines.append(
-                    f"ready_when = {_toml_value(condition_to_data(rule.ready_when))}"
-                )
-        else:
-            if not rule.enabled:
-                lines.append("enabled = false")
-            if rule.note is not None:
-                lines.append(f"note = {json.dumps(rule.note)}")
-            lines.append(f"move = {_encode_action(rule.move)}")
-            if rule.activate_when is not None:
-                lines.append(
-                    "activate_when = "
-                    f"{_toml_value(condition_to_data(rule.activate_when))}"
-                )
-            if rule.retire_when is not None:
-                lines.append(
-                    "retire_when = "
-                    f"{_toml_value(condition_to_data(rule.retire_when))}"
-                )
+        )
+        if item.structures:
+            lines.append(f"structures = {_toml_value(list(item.structures))}")
+        if item.ready_when is not None:
+            lines.append(
+                f"ready_when = {_toml_value(condition_to_data(item.ready_when))}"
+            )
+        if item.note is not None:
+            lines.append(f"note = {json.dumps(item.note)}")
+    _encode_move_rules(lines, "continuations", flow.continuations)
     for override in flow.overrides:
         lines.extend(
             (
@@ -517,13 +557,11 @@ def _encode(flow: Flow) -> str:
                 "[[overrides]]",
                 f"id = {json.dumps(override.id)}",
                 f"after = {_toml_value(list(override.after_san))}",
+                f"move = {_encode_action(override.move)}",
             )
         )
-        if not override.enabled:
-            lines.append("enabled = false")
         if override.note is not None:
             lines.append(f"note = {json.dumps(override.note)}")
-        lines.append(f"move = {_encode_action(override.move)}")
     for reply in flow.opponent_replies:
         lines.extend(
             (
@@ -537,6 +575,31 @@ def _encode(flow: Flow) -> str:
         if reply.note is not None:
             lines.append(f"note = {json.dumps(reply.note)}")
     return "\n".join(lines) + "\n"
+
+
+def _encode_move_rules(
+    lines: list[str], section: str, rules: tuple[MoveRule, ...]
+) -> None:
+    for rule in rules:
+        lines.extend(
+            (
+                "",
+                f"[[{section}]]",
+                f"id = {json.dumps(rule.id)}",
+                f"move = {_encode_action(rule.move)}",
+            )
+        )
+        if rule.structures:
+            lines.append(f"structures = {_toml_value(list(rule.structures))}")
+        for key, condition in (
+            ("unlock_when", rule.unlock_when),
+            ("when", rule.when),
+            ("expire_when", rule.expire_when),
+        ):
+            if condition is not None:
+                lines.append(f"{key} = {_toml_value(condition_to_data(condition))}")
+        if rule.note is not None:
+            lines.append(f"note = {json.dumps(rule.note)}")
 
 
 def _toml_value(value: object) -> str:
@@ -570,12 +633,11 @@ def _decode_action(value: object, context: str) -> MoveAction:
     item = _mapping(value, context)
     if set(item) != {"piece", "to"}:
         raise ValueError(f"{context} must contain exactly 'piece' and 'to'.")
-    piece = _string(item, "piece")
     destination = _string(item, "to")
     if destination not in chess.SQUARE_NAMES:
         raise ValueError(f"{context} has invalid destination {destination!r}.")
     return MoveAction(
-        StartingPieceRef.parse(piece).original_piece_id,
+        StartingPieceRef.parse(_string(item, "piece")).original_piece_id,
         destination,
     )
 
@@ -589,7 +651,7 @@ def _validate_action(
         )
     if action.piece.color != side:
         raise FlowValidationError(
-            f"{context}: rules may only move the controlled {side} side."
+            f"{context}: policy items may only move the controlled {side} side."
         )
     reference = StartingPieceRef.from_original(action.piece)
     if tracker.get(action.piece).piece_type != _expected_piece_type(reference):
@@ -615,7 +677,10 @@ def _expected_piece_type(reference: StartingPieceRef) -> chess.PieceType:
 
 
 def _validate_action_legal(
-    board: chess.Board, tracker: OriginalPieceTracker, action: MoveAction, context: str
+    board: chess.Board,
+    tracker: OriginalPieceTracker,
+    action: MoveAction,
+    context: str,
 ) -> None:
     square = tracker.get(action.piece).current_square
     if square is None:
@@ -630,19 +695,23 @@ def _validate_action_legal(
 
 
 def _validate_condition_references(
-    condition, tracker: OriginalPieceTracker, state_ids: set[str], context: str
+    condition,
+    tracker: OriginalPieceTracker,
+    condition_ids: set[str],
+    context: str,
 ) -> None:
-    missing_states = referenced_states(condition) - state_ids
-    if missing_states:
+    missing_conditions = referenced_conditions(condition) - condition_ids
+    if missing_conditions:
         raise FlowValidationError(
-            f"{context}: unknown states {sorted(missing_states)}."
+            f"{context}: unknown conditions {sorted(missing_conditions)}."
         )
     missing_pieces = [
         str(item) for item in referenced_pieces(condition) if not tracker.has(item)
     ]
     if missing_pieces:
         raise FlowValidationError(
-            f"{context}: original pieces absent from start_fen: {sorted(missing_pieces)}."
+            f"{context}: original pieces absent from start_fen: "
+            f"{sorted(missing_pieces)}."
         )
     for piece_id in referenced_pieces(condition):
         reference = StartingPieceRef.from_original(piece_id)
@@ -653,23 +722,108 @@ def _validate_condition_references(
             )
 
 
-def _validate_state_cycles(states: Mapping[str, object]) -> None:
+def _validate_condition_cycles(conditions: Mapping[str, object]) -> None:
     visiting: set[str] = set()
     visited: set[str] = set()
 
-    def visit(state_id: str) -> None:
-        if state_id in visiting:
-            raise FlowValidationError(f"Named state cycle includes {state_id!r}.")
-        if state_id in visited:
+    def visit(condition_id: str) -> None:
+        if condition_id in visiting:
+            raise FlowValidationError(
+                f"Named condition cycle includes {condition_id!r}."
+            )
+        if condition_id in visited:
             return
-        visiting.add(state_id)
-        for dependency in referenced_states(states[state_id]):  # type: ignore[arg-type]
+        visiting.add(condition_id)
+        for dependency in referenced_conditions(conditions[condition_id]):  # type: ignore[arg-type]
             visit(dependency)
-        visiting.remove(state_id)
-        visited.add(state_id)
+        visiting.remove(condition_id)
+        visited.add(condition_id)
 
-    for state_id in states:
-        visit(state_id)
+    for condition_id in conditions:
+        visit(condition_id)
+
+
+def _validate_scopes(
+    scopes: tuple[str, ...], structure_ids: set[str], item_id: str
+) -> None:
+    if len(scopes) != len(set(scopes)):
+        raise FlowValidationError(
+            f"Policy item {item_id!r} contains duplicate structure scopes."
+        )
+    missing = set(scopes) - structure_ids
+    if missing:
+        raise FlowValidationError(
+            f"Policy item {item_id!r} references unknown structures "
+            f"{sorted(missing)}."
+        )
+
+
+def _validate_development_assignments(
+    assignments: tuple[DevelopmentAssignment, ...],
+) -> None:
+    by_piece: dict[StartingPieceRef, list[DevelopmentAssignment]] = {}
+    for item in assignments:
+        by_piece.setdefault(item.piece, []).append(item)
+    for piece, items in by_piece.items():
+        globals_for_piece = [item for item in items if not item.structures]
+        if len(globals_for_piece) > 1:
+            raise FlowValidationError(
+                f"{piece} has more than one global development assignment."
+            )
+        scopes_seen: set[str] = set()
+        for item in items:
+            overlap = scopes_seen.intersection(item.structures)
+            if overlap:
+                raise FlowValidationError(
+                    f"{piece} has overlapping development assignments for "
+                    f"structures {sorted(overlap)}."
+                )
+            scopes_seen.update(item.structures)
+
+
+def _all_conditions(flow: Flow) -> Iterable:
+    for item in flow.conditions:
+        yield item.when
+    for item in flow.structures:
+        yield item.available_when
+        yield item.selected_when
+    for item in (*flow.responses, *flow.continuations):
+        for condition in (item.unlock_when, item.when, item.expire_when):
+            if condition is not None:
+                yield condition
+    for item in flow.development:
+        if item.ready_when is not None:
+            yield item.ready_when
+
+
+def _replace_policy_item(flow: Flow, replacement: AuthoredPolicyItem) -> Flow:
+    if isinstance(replacement, DevelopmentAssignment):
+        if all(item.id != replacement.id for item in flow.development):
+            raise FlowValidationError(f"Unknown development id: {replacement.id!r}.")
+        return replace(
+            flow,
+            development=tuple(
+                replacement if item.id == replacement.id else item
+                for item in flow.development
+            ),
+        )
+    if any(item.id == replacement.id for item in flow.responses):
+        return replace(
+            flow,
+            responses=tuple(
+                replacement if item.id == replacement.id else item
+                for item in flow.responses
+            ),
+        )
+    if any(item.id == replacement.id for item in flow.continuations):
+        return replace(
+            flow,
+            continuations=tuple(
+                replacement if item.id == replacement.id else item
+                for item in flow.continuations
+            ),
+        )
+    raise FlowValidationError(f"Unknown move-rule id: {replacement.id!r}.")
 
 
 def _replay_with_tracker(
@@ -690,7 +844,7 @@ def _replay_with_tracker(
     return board, tracker
 
 
-def _unique_ids(values, label: str) -> set[str]:
+def _unique_ids(values: Iterable[str], label: str) -> set[str]:
     seen: set[str] = set()
     for value in values:
         if not value.strip() or value in seen:
@@ -743,14 +897,21 @@ def _integer(mapping: dict[str, Any], key: str) -> int:
     return value
 
 
-def _boolean(mapping: dict[str, Any], key: str, default: bool) -> bool:
-    value = mapping.get(key, default)
-    if not isinstance(value, bool):
-        raise TypeError(f"{key} must be a boolean")
-    return value
-
-
 def _string_tuple(value: object, context: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise TypeError(f"{context} must be an array of strings")
     return tuple(value)
+
+
+def _optional_string_tuple(
+    mapping: dict[str, Any], key: str, context: str
+) -> tuple[str, ...]:
+    if key not in mapping:
+        return ()
+    return _string_tuple(mapping[key], context)
+
+
+def _optional_condition(mapping: dict[str, Any], key: str, context: str):
+    if key not in mapping:
+        return None
+    return parse_condition(mapping[key], context=f"{context}.{key}")

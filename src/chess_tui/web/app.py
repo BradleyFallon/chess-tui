@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Literal, cast
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -28,11 +28,14 @@ from .api_models import (
     HealthResponse,
     MoveRequest,
     OpeningTagRequest,
+    PolicyOrderRequest,
     InspectRuleCommandRequest,
     PlayMoveCommandRequest,
     SanMoveRequest,
+    StructureOrderRequest,
     UpdateOverrideRequest,
     UpdateRuleRequest,
+    UpdateStructureRequest,
     WorkspaceSnapshot,
     TypedCommandRequest,
 )
@@ -334,6 +337,45 @@ def _register_api_routes(application: FastAPI) -> None:
         payload: DevelopmentOrderRequest,
     ) -> WorkspaceSnapshot:
         return await _manager(request).reorder_development_rules(session_id, payload)
+
+    @application.put(
+        "/api/sessions/{session_id}/policy-order/{section}",
+        response_model=WorkspaceSnapshot,
+    )
+    async def reorder_policy_section(
+        request: Request,
+        session_id: str,
+        section: Literal["response", "development", "continuation"],
+        payload: PolicyOrderRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).reorder_policy_section(
+            session_id, section, payload
+        )
+
+    @application.put(
+        "/api/sessions/{session_id}/structures/order",
+        response_model=WorkspaceSnapshot,
+    )
+    async def reorder_structures(
+        request: Request,
+        session_id: str,
+        payload: StructureOrderRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).reorder_structures(session_id, payload)
+
+    @application.put(
+        "/api/sessions/{session_id}/structures/{structure_id}",
+        response_model=WorkspaceSnapshot,
+    )
+    async def update_structure(
+        request: Request,
+        session_id: str,
+        structure_id: str,
+        payload: UpdateStructureRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).update_structure(
+            session_id, structure_id, payload
+        )
 
     @application.put(
         "/api/sessions/{session_id}/overrides/{override_id}",

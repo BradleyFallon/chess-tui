@@ -12,7 +12,7 @@ from chess_tui.renderers.mode import RendererMode
 from chess_tui.screens.author import AuthorScreen, FlowPhase
 from chess_tui.tui import ChessTui
 
-FIXTURE = Path(__file__).parent / "fixtures" / "london-flow.toml"
+FIXTURE = Path(__file__).parents[1] / "flows" / "london.toml"
 
 
 def test_author_board_controller_commits_legal_san() -> None:
@@ -22,7 +22,7 @@ def test_author_board_controller_commits_legal_san() -> None:
     assert confirmed.move.uci == "d2d4"
 
 
-def test_textual_flow_screen_starts_with_v2_policy(tmp_path: Path) -> None:
+def test_textual_flow_screen_starts_with_v3_policy(tmp_path: Path) -> None:
     async def run() -> None:
         path = tmp_path / "flow.toml"
         shutil.copy2(FIXTURE, path)

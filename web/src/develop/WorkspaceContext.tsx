@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { ApiError, workspaceApi } from "../api/client";
-import type { ClientEffect, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
+import type { ClientEffect, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleUpdate, StructureUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
 
 const SESSION_KEY = "chess-flow-development-session";
 
@@ -29,6 +29,12 @@ interface WorkspaceContextValue {
   applyDevelopmentRule: (draft: DevelopmentRuleDraft) => Promise<void>;
   deleteDevelopmentRule: (ruleId: string) => Promise<void>;
   reorderDevelopmentRules: (ruleIds: string[]) => Promise<void>;
+  reorderPolicySection: (
+    section: "response" | "development" | "continuation",
+    itemIds: string[],
+  ) => Promise<void>;
+  updateStructure: (structureId: string, update: StructureUpdate) => Promise<void>;
+  reorderStructures: (structureIds: string[]) => Promise<void>;
   addOpeningTag: (recordId: number) => Promise<void>;
   removeOpeningTag: (recordId: number) => Promise<void>;
 }
@@ -137,6 +143,12 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       applyDevelopmentRule: (draft) => operate((id) => workspaceApi.applyDevelopmentRule(id, draft)),
       deleteDevelopmentRule: (ruleId) => operate((id) => workspaceApi.deleteDevelopmentRule(id, ruleId)),
       reorderDevelopmentRules: (ruleIds) => operate((id) => workspaceApi.reorderDevelopmentRules(id, ruleIds)),
+      reorderPolicySection: (section, itemIds) =>
+        operate((id) => workspaceApi.reorderPolicySection(id, section, itemIds)),
+      updateStructure: (structureId, update) =>
+        operate((id) => workspaceApi.updateStructure(id, structureId, update)),
+      reorderStructures: (structureIds) =>
+        operate((id) => workspaceApi.reorderStructures(id, structureIds)),
       addOpeningTag: (recordId) => operate((id) => workspaceApi.addOpeningTag(id, recordId)),
       removeOpeningTag: (recordId) => operate((id) => workspaceApi.removeOpeningTag(id, recordId)),
     }),

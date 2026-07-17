@@ -1,4 +1,4 @@
-"""Textual diagnostics and play surface for deterministic v2 flows."""
+"""Textual diagnostics and play surface for deterministic v3 flows."""
 
 from __future__ import annotations
 
@@ -39,7 +39,7 @@ class FlowPhase(str, Enum):
 
 
 class AuthorScreen(Screen[None]):
-    """Play a flow and inspect v2 decisions; editing lives in web/TOML."""
+    """Play a flow and inspect v3 decisions; editing lives in web/TOML."""
 
     AUTO_FOCUS = ""
     CSS = f"""

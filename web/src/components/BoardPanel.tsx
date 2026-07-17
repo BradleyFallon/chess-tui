@@ -157,17 +157,18 @@ export function BoardPanel({
 }
 
 function developmentMarker(piece: WorkspaceSnapshot["startingPieces"][number]) {
-  const rule = piece.developmentRule;
+  const rule = piece.developmentRules[0] ?? null;
   if (!rule) {
     return { icon: "+", status: "unassigned", label: `${piece.label}. No development rule assigned.` };
   }
   const icon = {
-    dormant: "○",
-    ready: "●",
+    inactive: "○",
+    applicable: "●",
     selected: "★",
     waiting: "!",
-    retired: "·",
-    disabled: "×",
+    developed: "·",
+    captured: "×",
+    "out-of-scope": "◇",
   }[rule.status];
   return {
     icon,

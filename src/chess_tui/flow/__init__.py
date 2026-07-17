@@ -3,14 +3,15 @@
 from .author import AuthorBoardController, ConfirmedAuthorMove, FlowAuthor
 from .errors import FlowError, FlowPolicyError, FlowStorageError, FlowValidationError
 from .models import (
-    AuthoredRule,
-    DevelopmentRule,
+    AuthoredPolicyItem,
+    DevelopmentAssignment,
     ExactOverride,
     Flow,
-    NamedState,
+    MoveRule,
+    NamedCondition,
     OpeningTag,
     OpponentReply,
-    PolicyRule,
+    Structure,
 )
 from .position import normalized_position_key, replay_san
 from .store import FlowStore
@@ -18,10 +19,10 @@ from .workspace import AttemptResult, FlowWorkspace, PolicyMoveAttempt, PolicyTu
 
 __all__ = [
     "AttemptResult",
-    "AuthoredRule",
+    "AuthoredPolicyItem",
     "AuthorBoardController",
     "ConfirmedAuthorMove",
-    "DevelopmentRule",
+    "DevelopmentAssignment",
     "ExactOverride",
     "Flow",
     "FlowAuthor",
@@ -31,11 +32,12 @@ __all__ = [
     "FlowStore",
     "FlowValidationError",
     "FlowWorkspace",
-    "NamedState",
+    "MoveRule",
+    "NamedCondition",
     "OpeningTag",
     "OpponentReply",
     "PolicyMoveAttempt",
-    "PolicyRule",
+    "Structure",
     "PolicyTurn",
     "normalized_position_key",
     "replay_san",

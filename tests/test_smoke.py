@@ -417,7 +417,7 @@ def test_cli_web_dispatch_bypasses_textual_and_passes_server_settings(
     flow.write_text(
         "\n".join(
             (
-                "version = 2",
+                "version = 3",
                 'name = "Web"',
                 f'start_fen = "{DEFAULT_STARTING_FEN}"',
                 'side = "white"',

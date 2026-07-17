@@ -1,13 +1,15 @@
-"""Immutable persisted models for deterministic version 2 flows."""
+"""Immutable persisted models for deterministic version 3 flows."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from ..policy.models import Condition, MoveAction, MovedCondition, StartingPieceRef
+from ..policy.models import Condition, MoveAction, StartingPieceRef
 
 FlowSide: TypeAlias = Literal["white", "black"]
+MoveRuleSection: TypeAlias = Literal["response", "continuation"]
+PolicySection: TypeAlias = Literal["response", "development", "continuation"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -17,50 +19,46 @@ class OpeningTag:
 
 
 @dataclass(frozen=True, slots=True)
-class NamedState:
+class NamedCondition:
     id: str
     when: Condition
 
 
 @dataclass(frozen=True, slots=True)
-class PolicyRule:
+class Structure:
     id: str
-    priority: int
-    move: MoveAction
-    enabled: bool = True
+    name: str
+    available_when: Condition
+    selected_when: Condition
     note: str | None = None
-    activate_when: Condition | None = None
-    retire_when: Condition | None = None
-    kind: Literal["generic", "development"] = "generic"
-    development_ref: StartingPieceRef | None = None
 
 
 @dataclass(frozen=True, slots=True)
-class DevelopmentRule:
+class MoveRule:
+    id: str
+    move: MoveAction
+    structures: tuple[str, ...] = ()
+    unlock_when: Condition | None = None
+    when: Condition | None = None
+    expire_when: Condition | None = None
+    note: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentAssignment:
     id: str
     piece: StartingPieceRef
     target: str
-    priority: int
-    enabled: bool = True
-    note: str | None = None
+    structures: tuple[str, ...] = ()
     ready_when: Condition | None = None
+    note: str | None = None
 
-    def compile(self) -> PolicyRule:
-        piece_id = self.piece.original_piece_id
-        return PolicyRule(
-            id=self.id,
-            priority=self.priority,
-            move=MoveAction(piece_id, self.target),
-            enabled=self.enabled,
-            note=self.note,
-            activate_when=self.ready_when,
-            retire_when=MovedCondition(piece_id),
-            kind="development",
-            development_ref=self.piece,
-        )
+    @property
+    def move(self) -> MoveAction:
+        return MoveAction(self.piece.original_piece_id, self.target)
 
 
-AuthoredRule: TypeAlias = PolicyRule | DevelopmentRule
+AuthoredPolicyItem: TypeAlias = MoveRule | DevelopmentAssignment
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,7 +66,6 @@ class ExactOverride:
     id: str
     after_san: tuple[str, ...]
     move: MoveAction
-    enabled: bool = True
     note: str | None = None
 
 
@@ -87,14 +84,23 @@ class Flow:
     start_fen: str
     side: FlowSide
     opening_tags: tuple[OpeningTag, ...] = ()
-    states: tuple[NamedState, ...] = ()
-    rules: tuple[AuthoredRule, ...] = ()
+    conditions: tuple[NamedCondition, ...] = ()
+    structures: tuple[Structure, ...] = ()
+    responses: tuple[MoveRule, ...] = ()
+    development: tuple[DevelopmentAssignment, ...] = ()
+    continuations: tuple[MoveRule, ...] = ()
     overrides: tuple[ExactOverride, ...] = ()
     opponent_replies: tuple[OpponentReply, ...] = ()
 
     @property
-    def compiled_rules(self) -> tuple[PolicyRule, ...]:
-        return tuple(
-            rule.compile() if isinstance(rule, DevelopmentRule) else rule
-            for rule in self.rules
-        )
+    def policy_items(self) -> tuple[AuthoredPolicyItem, ...]:
+        return (*self.responses, *self.development, *self.continuations)
+
+    def section_for(self, item_id: str) -> PolicySection:
+        if any(item.id == item_id for item in self.responses):
+            return "response"
+        if any(item.id == item_id for item in self.development):
+            return "development"
+        if any(item.id == item_id for item in self.continuations):
+            return "continuation"
+        raise KeyError(item_id)

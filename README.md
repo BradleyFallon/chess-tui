@@ -71,11 +71,12 @@ The server binds to `127.0.0.1:8765` and opens a browser by default. Use
 default Textual flow, the web workspace may omit `--engine`; evaluation then
 shows `engine-off` and never substitutes fixture analysis.
 
-Development Mode displays the Python-owned board, SAN history, deterministic-v2
-decision and trace, grouped rule lifecycle, Back/Restart navigation, and
-optional Stockfish evaluation. Rules and exact-position overrides can be edited
-in the left panel using canonical starting-piece references and JSON conditions;
-the complete flow is validated, saved atomically, and replayed after each edit.
+Development Mode displays the Python-owned board, SAN history, deterministic-v3
+decision trace, structure state, authored policy order, Back/Restart navigation,
+and optional Stockfish evaluation. Responses, structure-scoped development,
+continuations, and exact-position overrides use canonical starting-piece
+references and the closed JSON condition language. The complete flow is
+validated, saved atomically, and replayed after each edit.
 The right-side timeline keeps application activity separate from user/assistant
 conversation while displaying both in deterministic sequence order. Python
 publishes the commands available in each snapshot and handles SAN, `/analyse`,
@@ -165,16 +166,17 @@ data in ChessFlow.
 
 ## Flow controls
 
-Flow mode runs a strict version 2 deterministic policy. Each rule has a unique
-priority, an original-piece action, optional activation and retirement
-conditions, and a one-shot lifecycle. Resolution is exact-position override,
-then the highest-priority active legal rule, then frontier.
+Flow mode runs a strict version 3 deterministic policy. Authored section and
+item order replace numeric priority. Structures select mutually exclusive plans;
+move rules have latched unlock, live applicability, permanent expiration, and
+one-shot execution. Resolution is exact override, first response, first
+development assignment, first continuation, then frontier.
 
 - Play on the board or type SAN. A correct controlled-side move commits
   immediately and advances to the opponent; a mismatch supports `R`/`Escape`
   to retry and `Enter` to use the selected policy move.
 - The Textual side panel shows the selected rule, note, and full decision trace.
-  Edit v2 rules in local Web Development Mode or directly in TOML, then use
+  Edit v3 policy items in local Web Development Mode or directly in TOML, then use
   `Ctrl+R` to validate and deterministically replay the active line.
 - On the opponent turn, normal mode automatically plays the first indexed book
   or Stockfish response. `--select-black` restores interactive selection and
@@ -184,7 +186,7 @@ then the highest-priority active legal rule, then frontier.
 - `Ctrl+N` restarts, `I` focuses SAN entry, `Escape` leaves text entry or retries
   a pending result, and `Q` quits from navigation mode.
 
-Version 1 flows are rejected. Saves are atomic and preserve the previous file
+Versions 1 and 2 are rejected. Saves are atomic and preserve the previous file
 as `<flow>.bak`; Back and Restart rebuild original-piece and lifecycle state by
 replaying SAN without deleting rules, overrides, or explored branches.
 

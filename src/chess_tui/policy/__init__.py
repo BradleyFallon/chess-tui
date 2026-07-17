@@ -1,11 +1,11 @@
-"""Deterministic rule-policy v2 primitives and runtime."""
+"""Deterministic rule-policy v3 primitives and runtime."""
 
 from .conditions import (
     ConditionEvaluator,
     condition_to_data,
     parse_condition,
+    referenced_conditions,
     referenced_pieces,
-    referenced_states,
 )
 from .models import (
     AllCondition,
@@ -13,20 +13,24 @@ from .models import (
     AtCondition,
     AttackedByCondition,
     AttackedCondition,
+    CapturedCondition,
     Condition,
     ConditionResult,
     EffectiveRuleStatus,
     EmptyCondition,
     InCheckCondition,
+    LastMove,
+    LastMoveCondition,
     MoveAction,
     MovedCondition,
+    NamedConditionRef,
     NotCondition,
     OccupiedByCondition,
     OccupiedCondition,
     OriginalPieceId,
     RuleLifecycle,
     StartingPieceRef,
-    StateCondition,
+    UnmovedCondition,
 )
 from .tracker import OriginalPieceRuntime, OriginalPieceTracker
 
@@ -36,14 +40,18 @@ __all__ = [
     "AtCondition",
     "AttackedByCondition",
     "AttackedCondition",
+    "CapturedCondition",
     "Condition",
     "ConditionEvaluator",
     "ConditionResult",
     "EffectiveRuleStatus",
     "EmptyCondition",
     "InCheckCondition",
+    "LastMove",
+    "LastMoveCondition",
     "MoveAction",
     "MovedCondition",
+    "NamedConditionRef",
     "NotCondition",
     "OccupiedByCondition",
     "OccupiedCondition",
@@ -52,9 +60,9 @@ __all__ = [
     "OriginalPieceTracker",
     "RuleLifecycle",
     "StartingPieceRef",
-    "StateCondition",
+    "UnmovedCondition",
     "condition_to_data",
     "parse_condition",
+    "referenced_conditions",
     "referenced_pieces",
-    "referenced_states",
 ]

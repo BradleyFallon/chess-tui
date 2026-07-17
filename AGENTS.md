@@ -12,7 +12,7 @@ The project is evolving toward two primary user modes:
    Tests whether the user can follow an opening policy from memory without exposing the underlying rules before the move is submitted.
 
 2. **Flow Development Mode**
-   Lets the user explore lines, create and edit deterministic opening rules, inspect rule lifecycle and priority, navigate backward through positions, and analyze flow coverage and effectiveness with Stockfish.
+   Lets the user explore lines, create and edit deterministic opening policy items, inspect structures, lifecycle, and authored order, navigate backward through positions, and analyze flow coverage and effectiveness with Stockfish.
 
 Both modes must use the same Python chess, policy, flow, persistence, and engine implementations.
 
@@ -20,7 +20,7 @@ Both modes must use the same Python chess, policy, flow, persistence, and engine
 
 Before changing rule-policy or flow-schema behavior, read:
 
-* `docs/design/rule-policy-v2.md`
+* `docs/design/rule-policy-v3.md`
 
 Before changing the local web application or development-mode behavior, read:
 
@@ -47,7 +47,8 @@ Python owns:
 * Original-piece identity
 * Rule-condition evaluation
 * Rule lifecycle
-* Rule priority resolution
+* Authored section and item-order resolution
+* Mutually exclusive structure selection
 * Exact-position overrides
 * Flow replay and Back behavior
 * TOML parsing, validation, and persistence
@@ -124,7 +125,7 @@ Screens, routes, and React components should coordinate and display state. They 
   * `piece:black:knight:queenside`
 * Do not use relative identifiers such as `us` and `them`.
 * A broad rule may match many board states.
-* Every individual rule specifies exactly one concrete move.
+* Every move rule specifies exactly one concrete move.
 * The policy resolves to exactly one move or a flow frontier.
 * There are no multiple equally correct flow moves.
 * A move may be strategically reasonable and still be a flow mismatch.
@@ -151,31 +152,40 @@ Do not make the rule engine choose among several candidate moves.
 * An active rule whose configured move is currently illegal is skipped.
 * An illegal move does not automatically retire the rule.
 
-### Priority
+### Authored order
 
-* Explicit priority determines which active rule wins.
-* Do not infer priority from apparent rule specificity.
-* The initial rule-policy design requires unique priorities.
-* Do not use declaration order as a hidden tie-breaker.
-* User interfaces may present priority as an ordered list and generate numeric values when saving.
+* Section order is exact override, response, development, continuation, frontier.
+* Within each policy section, the first authored applicable legal item wins.
+* There is no numeric priority and no specificity ranking.
+* Persisted list order is semantic, visible, and editable.
 
 ### Rule lifecycle
 
-Rules may be:
+Move rules may be:
 
 ```text
-DORMANT
-ACTIVE
+LOCKED
+UNLOCKED
 RETIRED
 ```
 
-* A rule without `activate_when` begins active.
-* Activation is latched.
-* Once activated, a rule does not return to dormant if its trigger later becomes false.
+* A rule without `unlock_when` begins unlocked.
+* Unlocking is latched.
+* `when` is live and does not latch.
 * Retirement is permanent on the current line.
-* Retirement is evaluated before activation when both become true at the same transition.
-* In the initial design, successfully executing a rule’s configured move retires that rule.
+* Retirement is evaluated before unlocking when both become true at the same transition.
+* Successfully executing a move rule retires it.
 * Reusable rules are deferred until explicitly designed.
+
+### Structures
+
+* Structures are mutually exclusive on a line.
+* Availability is live until selection.
+* After each committed move, the first authored available structure whose `selected_when` is true is selected permanently.
+* All other structures become rejected.
+* Global policy items omit `structures`.
+* Before selection, a scoped item participates when at least one listed structure is available.
+* After selection, it participates only when the selected structure is listed.
 
 ### Resolution order
 
@@ -183,14 +193,17 @@ Policy resolution order is:
 
 ```text
 1. Exact-position override
-2. Highest-priority active legal abstract rule
-3. Flow frontier
+2. First applicable response
+3. First applicable development assignment
+4. First applicable continuation
+5. Flow frontier
 ```
 
 Do not silently change this order.
 
-Version 1 numbered defaults and exceptions are intentionally unsupported. Do not
-add a fallback parser, mixed-schema model, or compatibility resolver.
+Versions 1 and 2 and mixed schemas are intentionally unsupported. Do not add a
+fallback parser, migration-on-load path, mixed-schema model, or compatibility
+resolver.
 
 ### Original-piece identity
 
@@ -515,7 +528,7 @@ Unless a task explicitly changes the order, prefer this progression:
 4. Add move submission, Back, and Restart.
 5. Add evaluation display.
 6. Add lifecycle and decision-trace inspection.
-7. Implement and integrate rule-policy version 2.
+7. Extend and integrate rule-policy version 3.
 8. Add rule ordering and basic rule editing.
 9. Add rule creation from an experimental move.
 10. Add broader flow analysis and coverage testing.

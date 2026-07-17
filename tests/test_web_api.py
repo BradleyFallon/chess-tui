@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 import shutil
 from typing import Any
@@ -9,10 +10,10 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from chess_tui.engine import EngineProcessError, FixtureEngineService
-from chess_tui.flow import DevelopmentRule, FlowStore
+from chess_tui.flow import DevelopmentAssignment, FlowStore
 from chess_tui.web.app import WebAppSettings, create_app
 
-FIXTURE = Path(__file__).parent / "fixtures" / "london-flow.toml"
+FIXTURE = Path(__file__).parents[1] / "flows" / "london.toml"
 
 
 @contextmanager
@@ -23,6 +24,8 @@ def web_client(
     flow_dir.mkdir(parents=True, exist_ok=True)
     path = flow_dir / "london.toml"
     shutil.copy2(FIXTURE, path)
+    store = FlowStore()
+    store.save(path, replace(store.load(path), opening_tags=()))
     settings = WebAppSettings(
         project_root=tmp_path,
         allowed_flow_directory=flow_dir,
@@ -45,17 +48,18 @@ def move(client: TestClient, session_id: str, uci: str) -> dict[str, Any]:
     return response.json()
 
 
-def test_health_and_initial_v2_snapshot(tmp_path: Path) -> None:
+def test_health_and_initial_v3_snapshot(tmp_path: Path) -> None:
     with web_client(tmp_path) as (client, _):
         assert client.get("/api/health").json()["engine"]["status"] == "off"
         snapshot = session(client)
         assert snapshot["phase"] == "policy-ready"
-        assert snapshot["flow"]["policyModel"] == "deterministic-v2"
+        assert snapshot["flow"]["policyModel"] == "deterministic-v3"
         assert snapshot["flow"]["side"] == "white"
         assert snapshot["decision"]["sourceId"] == "develop-d-pawn"
         assert snapshot["decision"]["moveUci"] == "d2d4"
         assert snapshot["rules"]["selected"]["id"] == "develop-d-pawn"
-        assert snapshot["rules"]["dormant"]
+        assert snapshot["rules"]["development"]
+        assert snapshot["rules"]["structures"]
         assert snapshot["opening"]["primaryMatch"] is None
         assert snapshot["openingHistory"] == []
         assert all(
@@ -85,14 +89,14 @@ def test_starting_piece_snapshots_and_development_draft_operations(
         d_pawn = pieces["piece:white:pawn:d"]
         assert d_pawn["state"] == "undeveloped"
         assert d_pawn["currentSquare"] == "d2"
-        assert d_pawn["developmentRule"]["status"] == "selected"
-        assert d_pawn["developmentRule"]["order"] == 1
+        assert d_pawn["developmentRules"][0]["status"] == "selected"
+        assert d_pawn["developmentRules"][0]["order"] == 1
 
         draft = {
             "id": None,
             "piece": "piece:white:pawn:a",
             "target": "a3",
-            "enabled": True,
+            "structures": [],
             "note": "Give the rook luft.",
             "readyWhen": {"moved": "piece:white:pawn:d"},
         }
@@ -113,12 +117,12 @@ def test_starting_piece_snapshots_and_development_draft_operations(
             for item in applied.json()["startingPieces"]
             if item["ref"] == "piece:white:pawn:a"
         )
-        assert a_pawn["developmentRule"]["target"] == "a3"
+        assert a_pawn["developmentRules"][0]["target"] == "a3"
 
         development_ids = [
-            item["developmentRule"]["id"]
+            rule["id"]
             for item in applied.json()["startingPieces"]
-            if item["developmentRule"] is not None
+            for rule in item["developmentRules"]
         ]
         reordered = client.put(
             f"/api/sessions/{session_id}/development-rules/order",
@@ -127,11 +131,11 @@ def test_starting_piece_snapshots_and_development_draft_operations(
         assert reordered.status_code == 200
         orders = sorted(
             (
-                item["developmentRule"]["order"],
-                item["developmentRule"]["id"],
+                rule["order"],
+                rule["id"],
             )
             for item in reordered.json()["startingPieces"]
-            if item["developmentRule"] is not None
+            for rule in item["developmentRules"]
         )
         assert [item[1] for item in orders] == list(reversed(development_ids))
 
@@ -144,7 +148,7 @@ def test_starting_piece_snapshots_and_development_draft_operations(
             for item in deleted.json()["startingPieces"]
             if item["ref"] == "piece:white:pawn:a"
         )
-        assert a_pawn["developmentRule"] is None
+        assert a_pawn["developmentRules"] == []
 
 
 def test_invalid_development_preview_and_apply_preserve_valid_state(
@@ -158,7 +162,7 @@ def test_invalid_development_preview_and_apply_preserve_valid_state(
             "id": None,
             "piece": "piece:white:pawn:queenside",
             "target": "z9",
-            "enabled": True,
+            "structures": [],
             "readyWhen": None,
         }
         preview = client.post(
@@ -178,14 +182,14 @@ def test_invalid_development_preview_and_apply_preserve_valid_state(
         generic_edit = client.put(
             f"/api/sessions/{session_id}/rules/develop-d-pawn",
             json={
-                "priority": 1000,
-                "enabled": True,
                 "move": {"piece": "piece:white:pawn:d", "to": "d3"},
-                "activateWhen": None,
-                "retireWhen": None,
+                "structures": [],
+                "unlockWhen": None,
+                "when": None,
+                "expireWhen": None,
             },
         )
-        assert generic_edit.status_code == 422
+        assert generic_edit.status_code == 400
         assert path.read_text(encoding="utf-8") == original
 
 
@@ -393,7 +397,6 @@ def test_deterministic_chat_answers_cover_decision_rules_trace_and_position(
             f"/api/sessions/{session_id}/chat", json={"text": "/why"}
         ).json()["workspace"]["chat"][-1]["attachment"]
         assert why["selected"]["id"] == "develop-d-pawn"
-        assert why["selected"]["priority"] == 1000
         assert "user-authored-note" in why["provenance"]
 
         position = client.post(
@@ -645,7 +648,7 @@ def test_rule_edit_is_atomic_and_reassesses_pending_attempt(tmp_path: Path) -> N
             "id": "develop-d-pawn",
             "piece": "piece:white:pawn:d",
             "target": "d3",
-            "enabled": True,
+            "structures": [],
             "note": "Claim with d3.",
             "readyWhen": None,
         }
@@ -655,8 +658,8 @@ def test_rule_edit_is_atomic_and_reassesses_pending_attempt(tmp_path: Path) -> N
         assert response.status_code == 200
         assert response.json()["phase"] == "opponent-ready"
         assert response.json()["position"]["historySan"] == ["d3"]
-        saved = FlowStore().load(path).rules[0]
-        assert isinstance(saved, DevelopmentRule)
+        saved = FlowStore().load(path).development[0]
+        assert isinstance(saved, DevelopmentAssignment)
         assert saved.target == "d3"
 
         original = path.read_text(encoding="utf-8")
@@ -674,21 +677,67 @@ def test_override_edit_and_validation(tmp_path: Path) -> None:
         session_id = created["sessionId"]
         payload = {
             "afterSan": ["d4", "e5"],
-            "enabled": False,
-            "note": "Temporarily disabled",
+            "note": "Updated exception",
             "move": {"piece": "piece:white:pawn:d", "to": "e5"},
         }
         response = client.put(
             f"/api/sessions/{session_id}/overrides/after-d4-e5", json=payload
         )
         assert response.status_code == 200
-        assert not FlowStore().load(path).overrides[0].enabled
+        assert FlowStore().load(path).overrides[0].note == "Updated exception"
         payload["afterSan"] = ["illegal"]
         failed = client.put(
             f"/api/sessions/{session_id}/overrides/after-d4-e5", json=payload
         )
         assert failed.status_code == 422
-        assert not FlowStore().load(path).overrides[0].enabled
+        assert FlowStore().load(path).overrides[0].note == "Updated exception"
+
+
+def test_structure_edit_and_authored_policy_reordering(tmp_path: Path) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+
+        response_ids = [item["id"] for item in created["rules"]["responses"]]
+        reordered = client.put(
+            f"/api/sessions/{session_id}/policy-order/response",
+            json={"itemIds": list(reversed(response_ids))},
+        )
+        assert reordered.status_code == 200
+        assert [item.id for item in FlowStore().load(path).responses] == list(
+            reversed(response_ids)
+        )
+
+        traditional = next(
+            item
+            for item in reordered.json()["rules"]["structures"]
+            if item["id"] == "traditional"
+        )
+        updated = client.put(
+            f"/api/sessions/{session_id}/structures/traditional",
+            json={
+                "name": "Traditional London shell",
+                "note": "Updated from Development Mode.",
+                "availableWhen": traditional["availableWhen"]["expression"],
+                "selectedWhen": traditional["selectedWhen"]["expression"],
+            },
+        )
+        assert updated.status_code == 200
+        saved = FlowStore().load(path)
+        assert (
+            next(item.name for item in saved.structures if item.id == "traditional")
+            == "Traditional London shell"
+        )
+
+        structure_ids = [item.id for item in saved.structures]
+        order = client.put(
+            f"/api/sessions/{session_id}/structures/order",
+            json={"structureIds": list(reversed(structure_ids))},
+        )
+        assert order.status_code == 200
+        assert [item.id for item in FlowStore().load(path).structures] == list(
+            reversed(structure_ids)
+        )
 
 
 def test_back_restart_source_and_structured_errors(tmp_path: Path) -> None:
@@ -696,7 +745,9 @@ def test_back_restart_source_and_structured_errors(tmp_path: Path) -> None:
         created = session(client)
         session_id = created["sessionId"]
         source = client.get(f"/api/sessions/{session_id}/flow/source")
-        assert source.status_code == 200 and "[[rules]]" in source.json()["content"]
+        assert (
+            source.status_code == 200 and "[[development]]" in source.json()["content"]
+        )
         move(client, session_id, "d2d4")
         back = client.post(f"/api/sessions/{session_id}/back", json={}).json()
         assert back["position"]["historySan"] == []

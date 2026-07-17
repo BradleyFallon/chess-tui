@@ -1,4 +1,4 @@
-"""Application service for persisted version 2 flow data and board interaction."""
+"""Application service for persisted version 3 flow data and board interaction."""
 
 from __future__ import annotations
 
@@ -12,12 +12,13 @@ from ..board import ParsedFen, parse_fen
 from ..game import BoardInteraction, ChessMove
 from .errors import FlowValidationError
 from .models import (
-    AuthoredRule,
-    DevelopmentRule,
+    AuthoredPolicyItem,
+    DevelopmentAssignment,
     ExactOverride,
     Flow,
     OpeningTag,
     OpponentReply,
+    Structure,
 )
 from .position import normalized_position_key, parse_legal_san, replay_san
 from .store import FlowStore
@@ -38,47 +39,63 @@ class FlowAuthor:
         self.flow = candidate
         return candidate
 
-    def candidate_with_rule(self, replacement: AuthoredRule) -> Flow:
-        if all(rule.id != replacement.id for rule in self.flow.rules):
-            raise FlowValidationError(f"Unknown rule id: {replacement.id!r}.")
-        return replace(
-            self.flow,
-            rules=tuple(
-                replacement if rule.id == replacement.id else rule
-                for rule in self.flow.rules
-            ),
-        )
+    def candidate_with_rule(self, replacement: AuthoredPolicyItem) -> Flow:
+        if isinstance(replacement, DevelopmentAssignment):
+            if all(item.id != replacement.id for item in self.flow.development):
+                raise FlowValidationError(
+                    f"Unknown development id: {replacement.id!r}."
+                )
+            return replace(
+                self.flow,
+                development=tuple(
+                    replacement if item.id == replacement.id else item
+                    for item in self.flow.development
+                ),
+            )
+        if any(item.id == replacement.id for item in self.flow.responses):
+            return replace(
+                self.flow,
+                responses=tuple(
+                    replacement if item.id == replacement.id else item
+                    for item in self.flow.responses
+                ),
+            )
+        if any(item.id == replacement.id for item in self.flow.continuations):
+            return replace(
+                self.flow,
+                continuations=tuple(
+                    replacement if item.id == replacement.id else item
+                    for item in self.flow.continuations
+                ),
+            )
+        raise FlowValidationError(f"Unknown move-rule id: {replacement.id!r}.")
 
     def candidate_with_added_development_rule(
-        self, development_rule: DevelopmentRule
+        self, development_rule: DevelopmentAssignment
     ) -> Flow:
-        if any(rule.id == development_rule.id for rule in self.flow.rules):
+        if any(item.id == development_rule.id for item in self.flow.policy_items):
             raise FlowValidationError(f"Duplicate rule id: {development_rule.id!r}.")
-        if any(
-            isinstance(rule, DevelopmentRule) and rule.piece == development_rule.piece
-            for rule in self.flow.rules
-        ):
-            raise FlowValidationError(
-                f"{development_rule.piece} already has a development rule."
-            )
-        return replace(self.flow, rules=(*self.flow.rules, development_rule))
+        return replace(
+            self.flow, development=(*self.flow.development, development_rule)
+        )
 
     def candidate_without_development_rule(self, rule_id: str) -> Flow:
-        existing = next((rule for rule in self.flow.rules if rule.id == rule_id), None)
-        if not isinstance(existing, DevelopmentRule):
+        existing = next(
+            (item for item in self.flow.development if item.id == rule_id), None
+        )
+        if existing is None:
             raise FlowValidationError(f"Unknown development rule id: {rule_id!r}.")
         return replace(
             self.flow,
-            rules=tuple(rule for rule in self.flow.rules if rule.id != rule_id),
+            development=tuple(
+                item for item in self.flow.development if item.id != rule_id
+            ),
         )
 
     def candidate_with_development_order(
         self, ordered_rule_ids: tuple[str, ...]
     ) -> Flow:
-        development_rules = [
-            rule for rule in self.flow.rules if isinstance(rule, DevelopmentRule)
-        ]
-        expected_ids = {rule.id for rule in development_rules}
+        expected_ids = {item.id for item in self.flow.development}
         if (
             len(ordered_rule_ids) != len(expected_ids)
             or set(ordered_rule_ids) != expected_ids
@@ -86,29 +103,37 @@ class FlowAuthor:
             raise FlowValidationError(
                 "Development order must contain every development rule exactly once."
             )
-        generic_priorities = {
-            rule.priority
-            for rule in self.flow.rules
-            if not isinstance(rule, DevelopmentRule)
-        }
-        priorities: list[int] = []
-        candidate = 1000
-        for _rule_id in ordered_rule_ids:
-            while candidate in generic_priorities:
-                candidate -= 1
-            priorities.append(candidate)
-            candidate -= 100
-        by_id = dict(zip(ordered_rule_ids, priorities, strict=True))
+        by_id = {item.id: item for item in self.flow.development}
         return replace(
             self.flow,
-            rules=tuple(
-                (
-                    replace(rule, priority=by_id[rule.id])
-                    if isinstance(rule, DevelopmentRule)
-                    else rule
-                )
-                for rule in self.flow.rules
-            ),
+            development=tuple(by_id[item_id] for item_id in ordered_rule_ids),
+        )
+
+    def candidate_with_policy_order(
+        self,
+        section: str,
+        ordered_item_ids: tuple[str, ...],
+    ) -> Flow:
+        if section not in {"response", "development", "continuation"}:
+            raise FlowValidationError(f"Unknown policy section {section!r}.")
+        field = {
+            "response": "responses",
+            "development": "development",
+            "continuation": "continuations",
+        }[section]
+        items = getattr(self.flow, field)
+        expected_ids = {item.id for item in items}
+        if (
+            len(ordered_item_ids) != len(expected_ids)
+            or set(ordered_item_ids) != expected_ids
+        ):
+            raise FlowValidationError(
+                f"{section.title()} order must contain every item exactly once."
+            )
+        by_id = {item.id: item for item in items}
+        return replace(
+            self.flow,
+            **{field: tuple(by_id[item_id] for item_id in ordered_item_ids)},
         )
 
     def candidate_with_override(self, replacement: ExactOverride) -> Flow:
@@ -120,6 +145,34 @@ class FlowAuthor:
                 replacement if item.id == replacement.id else item
                 for item in self.flow.overrides
             ),
+        )
+
+    def candidate_with_structure(self, replacement: Structure) -> Flow:
+        if all(item.id != replacement.id for item in self.flow.structures):
+            raise FlowValidationError(f"Unknown structure id: {replacement.id!r}.")
+        return replace(
+            self.flow,
+            structures=tuple(
+                replacement if item.id == replacement.id else item
+                for item in self.flow.structures
+            ),
+        )
+
+    def candidate_with_structure_order(
+        self, ordered_structure_ids: tuple[str, ...]
+    ) -> Flow:
+        expected_ids = {item.id for item in self.flow.structures}
+        if (
+            len(ordered_structure_ids) != len(expected_ids)
+            or set(ordered_structure_ids) != expected_ids
+        ):
+            raise FlowValidationError(
+                "Structure order must contain every structure exactly once."
+            )
+        by_id = {item.id: item for item in self.flow.structures}
+        return replace(
+            self.flow,
+            structures=tuple(by_id[item_id] for item_id in ordered_structure_ids),
         )
 
     def candidate_with_added_override(self, override: ExactOverride) -> Flow:

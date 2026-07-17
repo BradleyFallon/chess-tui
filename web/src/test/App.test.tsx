@@ -31,11 +31,11 @@ function renderRoute(path = "/") {
   return render(<MemoryRouter initialEntries={[path]}><WorkspaceProvider><App /></WorkspaceProvider></MemoryRouter>);
 }
 
-test("menu and development workspace show the v2 policy", async () => {
+test("menu and development workspace show the v3 policy", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture())));
   renderRoute();
   expect(await screen.findByText("London System")).toBeInTheDocument();
-  expect(screen.getByText(/deterministic-v2/)).toBeInTheDocument();
+  expect(screen.getByText(/deterministic-v3/)).toBeInTheDocument();
   expect(screen.getByRole("link", { name: /Develop/ })).toBeInTheDocument();
 });
 
@@ -43,10 +43,10 @@ test("workspace renders board, grouped rule status, lifecycle, and activity", as
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture())));
   renderRoute("/develop");
   expect(await screen.findByTestId("chessboard")).toBeInTheDocument();
-  const panel = screen.getByRole("heading", { name: "Rule status" }).closest("aside");
+  const panel = screen.getByRole("heading", { name: "Policy order" }).closest("aside");
   expect(panel).not.toBeNull();
   expect(within(panel!).getAllByText("develop-d-pawn").length).toBeGreaterThan(0);
-  expect(within(panel!).getByText("Dormant")).toBeInTheDocument();
+  expect(within(panel!).getByText("Development")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Options" })).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: /Auto-respond/ })).not.toBeChecked();
   expect(screen.getByRole("log")).toHaveTextContent("Development session ready");
@@ -64,7 +64,7 @@ test("piece inspection coexists with move entry and renders status markers", asy
   const board = await screen.findByTestId("chessboard");
   expect(board).toHaveAttribute("data-orientation", "white");
   expect(screen.getByRole("img", { name: /White d-pawn.*selected/i })).toHaveTextContent("★");
-  expect(screen.getByRole("img", { name: /White queenside bishop.*dormant/i })).toHaveTextContent("○");
+  expect(screen.getByRole("img", { name: /White queenside bishop.*inactive/i })).toHaveTextContent("○");
 
   await userEvent.click(screen.getByRole("button", { name: "Click d2" }));
   expect(screen.getByRole("heading", { name: "White d-pawn" })).toBeInTheDocument();
@@ -88,7 +88,7 @@ test("unassigned piece can choose, cancel, validate, and apply a board target", 
         ref: "piece:white:pawn:a", originalPieceId: "white:a2", color: "white",
         pieceType: "pawn", qualifier: "a", label: "White a-pawn",
         startingSquare: "a2", currentSquare: "a2", state: "undeveloped",
-        firstMovedPly: null, capturedPly: null, developmentRule: null,
+        firstMovedPly: null, capturedPly: null, developmentRules: [],
       },
     ],
   });
@@ -96,11 +96,11 @@ test("unassigned piece can choose, cancel, validate, and apply a board target", 
     startingPieces: initial.startingPieces.map((piece) => piece.ref === "piece:white:pawn:a"
       ? {
         ...piece,
-        developmentRule: {
-          id: "develop-white-pawn-a", target: "f4", priority: 700, order: 3,
+        developmentRules: [{
+          id: "develop-white-pawn-a", target: "f4", order: 3, structures: [],
           status: "waiting" as const, readyWhen: null, note: "Test target.",
-          enabled: true, reason: "a2f4 is not legal.",
-        },
+          reason: "a2f4 is not legal.",
+        }],
       }
       : piece),
   });
@@ -108,7 +108,7 @@ test("unassigned piece can choose, cancel, validate, and apply a board target", 
     .mockResolvedValueOnce(jsonResponse(initial))
     .mockResolvedValueOnce(jsonResponse({
       valid: true, ruleId: "develop-white-pawn-a",
-      piece: "piece:white:pawn:a", target: "f4", priority: 700, errors: [],
+      piece: "piece:white:pawn:a", target: "f4", order: 3, errors: [],
     }))
     .mockResolvedValueOnce(jsonResponse(applied))
     .mockResolvedValueOnce(jsonResponse(initial));
@@ -194,18 +194,18 @@ test("captured development pieces remain inspectable from the order list", async
           currentSquare: null,
           state: "captured-undeveloped" as const,
           capturedPly: 4,
-          developmentRule: {
-            ...piece.developmentRule!,
-            status: "retired" as const,
+          developmentRules: [{
+            ...piece.developmentRules[0],
+            status: "captured" as const,
             reason: "White queenside bishop was captured.",
-          },
+          }],
         }
         : piece),
   });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(captured)));
   renderRoute("/develop");
   await userEvent.click(await screen.findByText(/Development order/));
-  await userEvent.click(screen.getByRole("button", { name: "White queenside bishop" }));
+  await userEvent.click(screen.getByRole("button", { name: /White queenside bishop → f4/ }));
   expect(screen.getByText("Captured undeveloped · ply 4")).toBeInTheDocument();
   expect(screen.getByText("Captured")).toBeInTheDocument();
 });
@@ -225,7 +225,7 @@ test("activity and deterministic chat attachments render in sequence order", asy
       },
       {
         id: "message-3", sequence: 5, role: "assistant", text: "Why this move.",
-        attachment: { kind: "decision-explanation", selected: { kind: "rule", id: "develop-d-pawn", priority: 400, moveSan: "d4", note: "Control the center.", reason: "Selected." }, higherPriorityWaiting: [], shadowedActive: [], dormant: [], conditionReasons: ["Active from start."], provenance: ["policy-trace"] },
+        attachment: { kind: "decision-explanation", selected: { kind: "rule", id: "develop-d-pawn", moveSan: "d4", note: "Control the center.", reason: "Selected." }, waiting: [], applicableLater: [], unavailable: [], conditionReasons: ["Unlocked from start."], provenance: ["policy-trace"] },
       },
       { id: "message-4", sequence: 6, role: "assistant", text: "Trace.", attachment: { kind: "decision-trace", entries: ["Selected develop-d-pawn."], provenance: "policy-trace" } },
       { id: "message-5", sequence: 7, role: "assistant", text: "Invalid.", attachment: { kind: "validation-error", code: "UNKNOWN_RULE", details: {} } },
@@ -241,7 +241,7 @@ test("activity and deterministic chat attachments render in sequence order", asy
   expect(content.indexOf("Middle activity")).toBeLessThan(content.indexOf("Current position details."));
   expect(within(feed).getByText(initial.position.fen)).toBeInTheDocument();
   expect(within(feed).getByText((_, node) =>
-    node?.tagName === "SPAN" && node.textContent === "Selected: develop-d-pawn · 400",
+    node?.tagName === "SPAN" && node.textContent === "Selected: develop-d-pawn",
   )).toBeInTheDocument();
   expect(within(feed).getByText("Selected develop-d-pawn.")).toBeInTheDocument();
   expect(within(feed).getByText("UNKNOWN_RULE")).toBeInTheDocument();
@@ -534,7 +534,7 @@ test("mismatch shows retry, selected continuation, engine review, and editor dir
     phase: "policy-result",
     attempt: {
       result: "mismatch", playedUci: "e2e4", playedSan: "e4", expectedUci: "d2d4", expectedSan: "d4",
-      source: "rule", sourceId: "develop-d-pawn", note: "Control the center.", trace: [],
+      source: "development", sourceId: "develop-d-pawn", note: "Control the center.", trace: [],
       engineReview: { status: "ready", quality: "blunder", lossCp: 260, bestMoveUci: "d2d4", bestMoveSan: "d4", evaluationBeforeCp: 20, evaluationAfterCp: -240, mateBefore: null, mateAfter: null, errorMessage: null },
     },
   });
@@ -551,7 +551,7 @@ test("mismatch chat command adds a rule for the attempted move", async () => {
     phase: "policy-result",
     attempt: {
       result: "mismatch", playedUci: "e2e4", playedSan: "e4",
-      expectedUci: "d2d4", expectedSan: "d4", source: "rule",
+      expectedUci: "d2d4", expectedSan: "d4", source: "development",
       sourceId: "develop-d-pawn", note: "Control the center.", trace: [],
       engineReview: null,
     },
@@ -609,14 +609,14 @@ test("hint highlights the expected original piece square", async () => {
   await waitFor(() => expect(board).toHaveAttribute("data-hint", "d2"));
 });
 
-test("full v2 rule editor sends conditions and original-piece action", async () => {
+test("full v3 rule editor sends conditions and original-piece action", async () => {
   const initial = workspaceFixture();
   const generic = ruleFixture({
     id: "generic-center-rule",
-    authoredKind: "generic",
+    section: "response",
   });
   const snapshot = workspaceFixture({
-    rules: { ...initial.rules, selected: generic },
+    rules: { ...initial.rules, selected: generic, responses: [generic] },
   });
   const fetchMock = vi.fn().mockResolvedValue(jsonResponse(snapshot));
   vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");

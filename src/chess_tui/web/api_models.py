@@ -1,4 +1,4 @@
-"""Typed request and complete-workspace response models for the v2 web API."""
+"""Typed request and complete-workspace response models for the v3 web API."""
 
 from __future__ import annotations
 
@@ -85,17 +85,16 @@ class MoveActionRequest(ApiModel):
 
 
 class UpdateRuleRequest(ApiModel):
-    priority: int
-    enabled: bool = True
     note: str | None = None
     move: MoveActionRequest
-    activate_when: dict[str, object] | None = None
-    retire_when: dict[str, object] | None = None
+    structures: list[str] = Field(default_factory=list)
+    unlock_when: dict[str, object] | None = None
+    when: dict[str, object] | None = None
+    expire_when: dict[str, object] | None = None
 
 
 class UpdateOverrideRequest(ApiModel):
     after_san: list[str]
-    enabled: bool = True
     note: str | None = None
     move: MoveActionRequest
 
@@ -104,7 +103,7 @@ class DevelopmentRuleDraftRequest(ApiModel):
     id: str | None = Field(default=None, min_length=1, max_length=100)
     piece: str = Field(min_length=3, max_length=80)
     target: str = Field(min_length=2, max_length=2)
-    enabled: bool = True
+    structures: list[str] = Field(default_factory=list)
     note: str | None = None
     ready_when: dict[str, object] | None = None
 
@@ -113,12 +112,27 @@ class DevelopmentOrderRequest(ApiModel):
     rule_ids: list[str] = Field(min_length=1)
 
 
+class PolicyOrderRequest(ApiModel):
+    item_ids: list[str] = Field(min_length=1)
+
+
+class UpdateStructureRequest(ApiModel):
+    name: str = Field(min_length=1, max_length=120)
+    note: str | None = None
+    available_when: dict[str, object]
+    selected_when: dict[str, object]
+
+
+class StructureOrderRequest(ApiModel):
+    structure_ids: list[str] = Field(min_length=1)
+
+
 class DevelopmentRuleValidationResponse(ApiModel):
     valid: bool
     rule_id: str
     piece: str
     target: str
-    priority: int
+    order: int
     errors: list[str] = Field(default_factory=list)
 
 
@@ -162,7 +176,8 @@ class FlowSnapshot(ApiModel):
     path: str
     side: Literal["white", "black"]
     opening_tags: list[OpeningTagSnapshot] = Field(default_factory=list)
-    policy_model: Literal["deterministic-v2"] = "deterministic-v2"
+    warnings: list[str] = Field(default_factory=list)
+    policy_model: Literal["deterministic-v3"] = "deterministic-v3"
 
 
 class GameOverSnapshot(ApiModel):
@@ -189,23 +204,32 @@ class ConditionSnapshot(ApiModel):
 
 class RuleRuntimeSnapshot(ApiModel):
     kind: Literal["rule"] = "rule"
-    authored_kind: Literal["generic", "development"] = "generic"
+    section: Literal["response", "development", "continuation"]
     id: str
-    priority: int
-    enabled: bool
+    order: int
+    structures: list[str] = Field(default_factory=list)
     piece: str
     destination: str
     move_uci: str | None
     move_san: str | None
     legal: bool
-    lifecycle: Literal["dormant", "active", "retired"]
-    status: Literal["selected", "active", "waiting", "dormant", "retired", "disabled"]
+    lifecycle: Literal["locked", "unlocked", "retired"]
+    status: Literal[
+        "locked",
+        "inactive",
+        "waiting",
+        "applicable",
+        "selected",
+        "retired",
+        "out-of-scope",
+    ]
     selected: bool
     shadowed: bool
     note: str | None
-    activate_when: ConditionSnapshot | None
-    retire_when: ConditionSnapshot | None
-    activated_at_ply: int | None
+    unlock_when: ConditionSnapshot | None
+    when: ConditionSnapshot | None
+    expire_when: ConditionSnapshot | None
+    unlocked_at_ply: int | None
     retired_at_ply: int | None
     reason: str
 
@@ -213,12 +237,19 @@ class RuleRuntimeSnapshot(ApiModel):
 class DevelopmentRuleSnapshot(ApiModel):
     id: str
     target: str
-    priority: int
     order: int
-    status: Literal["dormant", "ready", "waiting", "selected", "retired", "disabled"]
+    structures: list[str] = Field(default_factory=list)
+    status: Literal[
+        "inactive",
+        "waiting",
+        "applicable",
+        "selected",
+        "developed",
+        "captured",
+        "out-of-scope",
+    ]
     ready_when: ConditionSnapshot | None
     note: str | None
-    enabled: bool
     reason: str
 
 
@@ -239,13 +270,23 @@ class StartingPieceSnapshot(ApiModel):
     ]
     first_moved_ply: int | None
     captured_ply: int | None
-    development_rule: DevelopmentRuleSnapshot | None
+    development_rules: list[DevelopmentRuleSnapshot] = Field(default_factory=list)
+
+
+class StructureRuntimeSnapshot(ApiModel):
+    id: str
+    name: str
+    status: Literal["unavailable", "available", "selected", "rejected"]
+    available_when: ConditionSnapshot
+    selected_when: ConditionSnapshot
+    selected_at_ply: int | None
+    note: str | None
+    reason: str
 
 
 class OverrideRuntimeSnapshot(ApiModel):
     kind: Literal["exact-override"] = "exact-override"
     id: str
-    enabled: bool
     after_san: list[str]
     piece: str
     destination: str
@@ -260,21 +301,21 @@ class OverrideRuntimeSnapshot(ApiModel):
 
 class RuleGroupsSnapshot(ApiModel):
     selected: RuleRuntimeSnapshot | OverrideRuntimeSnapshot | None
-    applies_now: list[RuleRuntimeSnapshot] = Field(default_factory=list)
-    waiting: list[RuleRuntimeSnapshot] = Field(default_factory=list)
-    dormant: list[RuleRuntimeSnapshot] = Field(default_factory=list)
-    retired: list[RuleRuntimeSnapshot] = Field(default_factory=list)
-    disabled: list[RuleRuntimeSnapshot] = Field(default_factory=list)
+    responses: list[RuleRuntimeSnapshot] = Field(default_factory=list)
+    development: list[RuleRuntimeSnapshot] = Field(default_factory=list)
+    continuations: list[RuleRuntimeSnapshot] = Field(default_factory=list)
     overrides: list[OverrideRuntimeSnapshot] = Field(default_factory=list)
+    structures: list[StructureRuntimeSnapshot] = Field(default_factory=list)
 
 
 class DecisionSnapshot(ApiModel):
     status: Literal["ready", "frontier"]
     move_uci: str | None
     move_san: str | None
-    source: Literal["rule", "exact-override", "frontier"]
+    source: Literal[
+        "response", "development", "continuation", "exact-override", "frontier"
+    ]
     source_id: str | None
-    priority: int | None
     note: str | None
     trace: list[str] = Field(default_factory=list)
 
@@ -298,7 +339,9 @@ class AttemptSnapshot(ApiModel):
     played_san: str
     expected_uci: str | None
     expected_san: str | None
-    source: Literal["rule", "exact-override", "frontier"]
+    source: Literal[
+        "response", "development", "continuation", "exact-override", "frontier"
+    ]
     source_id: str | None
     note: str | None
     trace: list[str] = Field(default_factory=list)
@@ -441,7 +484,6 @@ class PositionAnalysisAttachment(ApiModel):
 class PolicyReferenceSnapshot(ApiModel):
     kind: Literal["rule", "exact-override"]
     id: str
-    priority: int | None = None
     move_san: str | None = None
     note: str | None = None
     reason: str
@@ -450,9 +492,9 @@ class PolicyReferenceSnapshot(ApiModel):
 class DecisionExplanationAttachment(ApiModel):
     kind: Literal["decision-explanation"] = "decision-explanation"
     selected: PolicyReferenceSnapshot | None
-    higher_priority_waiting: list[PolicyReferenceSnapshot] = Field(default_factory=list)
-    shadowed_active: list[PolicyReferenceSnapshot] = Field(default_factory=list)
-    dormant: list[PolicyReferenceSnapshot] = Field(default_factory=list)
+    waiting: list[PolicyReferenceSnapshot] = Field(default_factory=list)
+    applicable_later: list[PolicyReferenceSnapshot] = Field(default_factory=list)
+    unavailable: list[PolicyReferenceSnapshot] = Field(default_factory=list)
     condition_reasons: list[str] = Field(default_factory=list)
     provenance: list[str] = Field(default_factory=list)
 

@@ -2,12 +2,11 @@ import type { CommandResponse, ClientEffect, RuleRuntimeSnapshot, WorkspaceSnaps
 
 export function ruleFixture(overrides: Partial<RuleRuntimeSnapshot> = {}): RuleRuntimeSnapshot {
   return {
-    kind: "rule", authoredKind: "development", id: "develop-d-pawn", priority: 400, enabled: true,
+    kind: "rule", section: "development", id: "develop-d-pawn", order: 1, structures: [],
     piece: "piece:white:pawn:d", destination: "d4", moveUci: "d2d4", moveSan: "d4",
-    legal: true, lifecycle: "active", status: "selected", selected: true,
-    shadowed: false, note: "Control the center.", activateWhen: null,
-    retireWhen: { expression: { moved: "piece:white:pawn:d" }, value: false, explanation: "White d-pawn has not moved" },
-    activatedAtPly: 0, retiredAtPly: null, reason: "Highest-priority active legal rule.",
+    legal: true, lifecycle: "unlocked", status: "selected", selected: true,
+    shadowed: false, note: "Control the center.", unlockWhen: null, when: null,
+    expireWhen: null, unlockedAtPly: 0, retiredAtPly: null, reason: "First applicable assignment in development order.",
     ...overrides,
   };
 }
@@ -22,22 +21,25 @@ export function workspaceFixture(overrides: Partial<WorkspaceSnapshot> = {}): Wo
   };
   return {
     sessionId: "session-1", mode: "develop", phase: "policy-ready",
-    flow: { name: "London System", version: 2, path: "flows/london.toml", side: "white", openingTags: [], policyModel: "deterministic-v2" },
+    flow: { name: "London System", version: 3, path: "flows/london.toml", side: "white", openingTags: [], warnings: [], policyModel: "deterministic-v3" },
     position: {
       fen: "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
       historySan: [], turn: "white", ply: 0, lastMoveUci: null,
       legalMovesUci: ["d2d4", "e2e4"], gameOver: null,
     },
     decision: {
-      status: "ready", moveUci: "d2d4", moveSan: "d4", source: "rule",
-      sourceId: "develop-d-pawn", priority: 400, note: "Control the center.",
-      trace: ["Selected rule develop-d-pawn at priority 400."],
+      status: "ready", moveUci: "d2d4", moveSan: "d4", source: "development",
+      sourceId: "develop-d-pawn", note: "Control the center.",
+      trace: ["Development develop-d-pawn: selected."],
     },
     attempt: null,
     rules: {
-      selected, appliesNow: [], waiting: [],
-      dormant: [ruleFixture({ id: "develop-dark-bishop", priority: 390, piece: "piece:white:bishop:queenside", destination: "f4", moveUci: null, moveSan: null, legal: false, lifecycle: "dormant", status: "dormant", selected: false, note: "Develop outside the chain.", activatedAtPly: null, reason: "White d-pawn has not moved" })],
-      retired: [], disabled: [], overrides: [],
+      selected, responses: [],
+      development: [
+        selected,
+        ruleFixture({ id: "develop-dark-bishop", order: 2, piece: "piece:white:bishop:queenside", destination: "f4", moveUci: null, moveSan: null, legal: false, lifecycle: "unlocked", status: "inactive", selected: false, note: "Develop outside the chain.", unlockedAtPly: 0, reason: "White d-pawn has not moved" }),
+      ],
+      continuations: [], overrides: [], structures: [],
     },
     startingPieces: [
       {
@@ -45,22 +47,22 @@ export function workspaceFixture(overrides: Partial<WorkspaceSnapshot> = {}): Wo
         pieceType: "pawn", qualifier: "d", label: "White d-pawn",
         startingSquare: "d2", currentSquare: "d2", state: "undeveloped",
         firstMovedPly: null, capturedPly: null,
-        developmentRule: {
-          id: "develop-d-pawn", target: "d4", priority: 1000, order: 1,
+        developmentRules: [{
+          id: "develop-d-pawn", target: "d4", order: 1, structures: [],
           status: "selected", readyWhen: null, note: "Control the center.",
-          enabled: true, reason: "Highest-priority active legal rule.",
-        },
+          reason: "First applicable assignment in development order.",
+        }],
       },
       {
         ref: "piece:white:bishop:queenside", originalPieceId: "white:c1", color: "white",
         pieceType: "bishop", qualifier: "queenside", label: "White queenside bishop",
         startingSquare: "c1", currentSquare: "c1", state: "undeveloped",
         firstMovedPly: null, capturedPly: null,
-        developmentRule: {
-          id: "develop-dark-bishop", target: "f4", priority: 900, order: 2,
-          status: "dormant", readyWhen: null, note: "Develop outside the chain.",
-          enabled: true, reason: "White d-pawn has not moved.",
-        },
+        developmentRules: [{
+          id: "develop-dark-bishop", target: "f4", order: 2, structures: [],
+          status: "inactive", readyWhen: null, note: "Develop outside the chain.",
+          reason: "White d-pawn has not moved.",
+        }],
       },
     ],
     opening,

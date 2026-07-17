@@ -1,8 +1,9 @@
-# Piece-centered development authoring
+# Piece-centered development authoring (Historical v2 slice)
 
-This document defines the implemented piece-development workflow in Web
-Development Mode. It extends deterministic-v2; it does not add a resolver or
-lifecycle engine.
+> The authoritative piece-development schema and runtime are now part of
+> [rule-policy-v3.md](rule-policy-v3.md). This document records the former v2
+> implementation and must not override v3 structure-scoped assignments or
+> authored-order semantics.
 
 ## Starting-piece references
 

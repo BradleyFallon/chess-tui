@@ -1,4 +1,4 @@
-"""In-memory Development Mode sessions over the shared v2 Python core."""
+"""In-memory Development Mode sessions over the shared v3 Python core."""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ from ..engine import (
 )
 from ..flow import (
     AttemptResult,
-    DevelopmentRule,
+    DevelopmentAssignment,
     ExactOverride,
     Flow,
     FlowError,
@@ -39,7 +39,8 @@ from ..flow import (
     FlowWorkspace,
     OpeningTag,
     PolicyMoveAttempt,
-    PolicyRule,
+    MoveRule,
+    Structure,
     normalized_position_key,
 )
 from ..flow.position import replay_san
@@ -104,6 +105,7 @@ from .api_models import (
     OpeningTagSnapshot,
     OverrideRuntimeSnapshot,
     PolicyReferenceSnapshot,
+    PolicyOrderRequest,
     PositionAnalysisAttachment,
     PositionDetailsAttachment,
     PositionSnapshot,
@@ -113,8 +115,11 @@ from .api_models import (
     RuleListAttachment,
     RuleRuntimeSnapshot,
     StartingPieceSnapshot,
+    StructureOrderRequest,
+    StructureRuntimeSnapshot,
     UpdateOverrideRequest,
     UpdateRuleRequest,
+    UpdateStructureRequest,
     ValidationErrorAttachment,
     WorkspaceSnapshot,
 )
@@ -653,7 +658,7 @@ class SessionManager:
             can_back=workspace.can_go_back,
             can_restart=workspace.can_restart,
             has_rules=bool(
-                workspace.author.flow.rules or workspace.author.flow.overrides
+                workspace.author.flow.policy_items or workspace.author.flow.overrides
             ),
         )
 
@@ -836,38 +841,42 @@ class SessionManager:
             workspace = session.workspace
             opening_ply_before = len(workspace.opening_history)
             existing_rule = next(
-                (rule for rule in workspace.author.flow.rules if rule.id == rule_id),
+                (
+                    rule
+                    for rule in (
+                        *workspace.author.flow.responses,
+                        *workspace.author.flow.continuations,
+                    )
+                    if rule.id == rule_id
+                ),
                 None,
             )
             if existing_rule is None:
                 raise WebApiError(
                     ApiErrorCode.INVALID_REQUEST, f"Unknown rule id {rule_id!r}."
                 )
-            if isinstance(existing_rule, DevelopmentRule):
-                raise WebApiError(
-                    ApiErrorCode.INVALID_REQUEST,
-                    "Development rules must be edited through the "
-                    "piece-development draft endpoint.",
-                    status_code=422,
-                )
             try:
-                replacement = PolicyRule(
+                replacement = MoveRule(
                     id=rule_id,
-                    priority=payload.priority,
-                    enabled=payload.enabled,
                     note=_clean_note(payload.note),
                     move=MoveAction(
                         StartingPieceRef.parse(payload.move.piece).original_piece_id,
                         payload.move.to,
                     ),
-                    activate_when=(
-                        parse_condition(payload.activate_when, context="activateWhen")
-                        if payload.activate_when is not None
+                    structures=tuple(payload.structures),
+                    unlock_when=(
+                        parse_condition(payload.unlock_when, context="unlockWhen")
+                        if payload.unlock_when is not None
                         else None
                     ),
-                    retire_when=(
-                        parse_condition(payload.retire_when, context="retireWhen")
-                        if payload.retire_when is not None
+                    when=(
+                        parse_condition(payload.when, context="when")
+                        if payload.when is not None
+                        else None
+                    ),
+                    expire_when=(
+                        parse_condition(payload.expire_when, context="expireWhen")
+                        if payload.expire_when is not None
                         else None
                     ),
                 )
@@ -914,10 +923,11 @@ class SessionManager:
             except (TypeError, ValueError, FlowError) as error:
                 return DevelopmentRuleValidationResponse(
                     valid=False,
-                    rule_id=payload.id or _development_rule_id(payload.piece),
+                    rule_id=payload.id
+                    or _development_rule_id(payload.piece, tuple(payload.structures)),
                     piece=payload.piece,
                     target=payload.target,
-                    priority=0,
+                    order=0,
                     errors=[str(error)],
                 )
             return DevelopmentRuleValidationResponse(
@@ -925,7 +935,19 @@ class SessionManager:
                 rule_id=rule.id,
                 piece=str(rule.piece),
                 target=rule.target,
-                priority=rule.priority,
+                order=(
+                    next(
+                        index
+                        for index, item in enumerate(
+                            workspace.author.flow.development, start=1
+                        )
+                        if item.id == rule.id
+                    )
+                    if any(
+                        item.id == rule.id for item in workspace.author.flow.development
+                    )
+                    else len(workspace.author.flow.development) + 1
+                ),
             )
 
     async def apply_development_rule(
@@ -995,7 +1017,100 @@ class SessionManager:
                 session,
                 "info",
                 "Updated development order",
-                "Unique priorities were generated, saved atomically, and replayed.",
+                "Authored order was saved atomically and replayed.",
+            )
+            return await self._snapshot(session)
+
+    async def reorder_policy_section(
+        self,
+        session_id: str,
+        section: Literal["response", "development", "continuation"],
+        payload: PolicyOrderRequest,
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            try:
+                session.workspace.reorder_policy_section(
+                    section, tuple(payload.item_ids)
+                )
+            except (ValueError, FlowError) as error:
+                if isinstance(error, FlowError):
+                    raise
+                raise WebApiError(
+                    ApiErrorCode.FLOW_VALIDATION_ERROR,
+                    str(error),
+                    status_code=422,
+                ) from error
+            self._append_activity(
+                session,
+                "info",
+                f"Updated {section} order",
+                "Authored policy order was saved atomically and replayed.",
+            )
+            return await self._snapshot(session)
+
+    async def update_structure(
+        self,
+        session_id: str,
+        structure_id: str,
+        payload: UpdateStructureRequest,
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            try:
+                replacement = Structure(
+                    id=structure_id,
+                    name=payload.name.strip(),
+                    available_when=parse_condition(
+                        payload.available_when,
+                        context="availableWhen",
+                    ),
+                    selected_when=parse_condition(
+                        payload.selected_when,
+                        context="selectedWhen",
+                    ),
+                    note=_clean_note(payload.note),
+                )
+                workspace.update_structure(replacement)
+            except (TypeError, ValueError, FlowError) as error:
+                if isinstance(error, FlowError):
+                    raise
+                raise WebApiError(
+                    ApiErrorCode.FLOW_VALIDATION_ERROR,
+                    str(error),
+                    status_code=422,
+                ) from error
+            self._append_activity(
+                session,
+                "info",
+                f"Updated structure {structure_id}",
+                "The complete flow was validated, saved, and replayed.",
+            )
+            return await self._snapshot(session)
+
+    async def reorder_structures(
+        self,
+        session_id: str,
+        payload: StructureOrderRequest,
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            try:
+                session.workspace.reorder_structures(tuple(payload.structure_ids))
+            except (ValueError, FlowError) as error:
+                if isinstance(error, FlowError):
+                    raise
+                raise WebApiError(
+                    ApiErrorCode.FLOW_VALIDATION_ERROR,
+                    str(error),
+                    status_code=422,
+                ) from error
+            self._append_activity(
+                session,
+                "info",
+                "Updated structure order",
+                "Structure selection order was saved and replayed.",
             )
             return await self._snapshot(session)
 
@@ -1015,7 +1130,6 @@ class SessionManager:
                 replacement = ExactOverride(
                     id=override_id,
                     after_san=tuple(payload.after_san),
-                    enabled=payload.enabled,
                     note=_clean_note(payload.note),
                     move=MoveAction(
                         StartingPieceRef.parse(payload.move.piece).original_piece_id,
@@ -1223,6 +1337,7 @@ class SessionManager:
                     )
                     for tag in workspace.author.flow.opening_tags
                 ],
+                warnings=list(workspace.author.store.warnings(workspace.author.flow)),
             ),
             position=PositionSnapshot(
                 fen=workspace.board.fen(en_passant="fen"),
@@ -1500,7 +1615,7 @@ class SessionManager:
 
 def _development_candidate(
     workspace: FlowWorkspace, payload: DevelopmentRuleDraftRequest
-) -> tuple[DevelopmentRule, Flow]:
+) -> tuple[DevelopmentAssignment, Flow]:
     piece = StartingPieceRef.parse(payload.piece)
     ready_when = (
         parse_condition(payload.ready_when, context="readyWhen")
@@ -1510,17 +1625,21 @@ def _development_candidate(
     existing = None
     if payload.id is not None:
         existing = next(
-            (rule for rule in workspace.author.flow.rules if rule.id == payload.id),
+            (
+                rule
+                for rule in workspace.author.flow.development
+                if rule.id == payload.id
+            ),
             None,
         )
-        if not isinstance(existing, DevelopmentRule):
+        if existing is None:
             raise ValueError(f"Unknown development rule id {payload.id!r}.")
     else:
         existing = next(
             (
                 rule
-                for rule in workspace.author.flow.rules
-                if isinstance(rule, DevelopmentRule) and rule.piece == piece
+                for rule in workspace.author.flow.development
+                if rule.piece == piece and rule.structures == tuple(payload.structures)
             ),
             None,
         )
@@ -1529,38 +1648,27 @@ def _development_candidate(
             existing,
             piece=piece,
             target=payload.target,
-            enabled=payload.enabled,
+            structures=tuple(payload.structures),
             note=_clean_note(payload.note),
             ready_when=ready_when,
         )
         return rule, workspace.author.candidate_with_rule(rule)
 
-    priorities = {rule.priority for rule in workspace.author.flow.rules}
-    priority = 1000
-    development_priorities = [
-        rule.priority
-        for rule in workspace.author.flow.rules
-        if isinstance(rule, DevelopmentRule)
-    ]
-    if development_priorities:
-        priority = min(development_priorities) - 100
-    while priority in priorities:
-        priority -= 1
-    rule = DevelopmentRule(
-        id=payload.id or _development_rule_id(str(piece)),
+    rule = DevelopmentAssignment(
+        id=payload.id or _development_rule_id(str(piece), tuple(payload.structures)),
         piece=piece,
         target=payload.target,
-        priority=priority,
-        enabled=payload.enabled,
+        structures=tuple(payload.structures),
         note=_clean_note(payload.note),
         ready_when=ready_when,
     )
     return rule, workspace.author.candidate_with_added_development_rule(rule)
 
 
-def _development_rule_id(piece: str) -> str:
+def _development_rule_id(piece: str, structures: tuple[str, ...] = ()) -> str:
     normalized = piece.removeprefix("piece:").replace(":", "-")
-    return f"develop-{normalized}"
+    suffix = f"-{'-'.join(structures)}" if structures else ""
+    return f"develop-{normalized}{suffix}"
 
 
 def _phase(workspace: FlowWorkspace) -> str:
@@ -1591,7 +1699,6 @@ def _decision_snapshot(decision: PolicyDecision | None) -> DecisionSnapshot | No
         move_san=decision.move_san,
         source=decision.source.value,  # type: ignore[arg-type]
         source_id=decision.source_id,
-        priority=decision.priority,
         note=decision.note,
         trace=list(decision.trace),
     )
@@ -1604,7 +1711,6 @@ def _policy_reference(
         return PolicyReferenceSnapshot(
             kind="rule",
             id=item.rule.id,
-            priority=item.rule.priority,
             move_san=item.move_san,
             note=item.rule.note,
             reason=item.reason,
@@ -1634,13 +1740,15 @@ def _decision_explanation(
         (item for item in decision.override_resolutions if item.selected), None
     )
     selected_item = selected_override or selected_rule
-    selected_priority = selected_rule.rule.priority if selected_rule else None
     reasons: list[str] = []
     if selected_rule is not None:
-        if selected_rule.activation is not None:
-            reasons.append(selected_rule.activation.explanation)
-        if selected_rule.retirement is not None:
-            reasons.append(selected_rule.retirement.explanation)
+        for condition in (
+            selected_rule.unlock,
+            selected_rule.live_condition,
+            selected_rule.expiration,
+        ):
+            if condition is not None:
+                reasons.append(condition.explanation)
         if selected_rule.rule.note:
             reasons.append(selected_rule.rule.note)
     elif selected_override is not None:
@@ -1651,21 +1759,25 @@ def _decision_explanation(
         reasons.append("No active legal policy action resolved in this position.")
     return DecisionExplanationAttachment(
         selected=_policy_reference(selected_item) if selected_item else None,
-        higher_priority_waiting=[
+        waiting=[
             _policy_reference(item)
             for item in decision.rule_resolutions
             if item.status is EffectiveRuleStatus.WAITING
-            and (selected_priority is None or item.rule.priority > selected_priority)
         ],
-        shadowed_active=[
+        applicable_later=[
             _policy_reference(item)
             for item in decision.rule_resolutions
-            if item.status is EffectiveRuleStatus.ACTIVE and item.shadowed
+            if item.status is EffectiveRuleStatus.APPLICABLE
         ],
-        dormant=[
+        unavailable=[
             _policy_reference(item)
             for item in decision.rule_resolutions
-            if item.status is EffectiveRuleStatus.DORMANT
+            if item.status
+            in {
+                EffectiveRuleStatus.LOCKED,
+                EffectiveRuleStatus.INACTIVE,
+                EffectiveRuleStatus.OUT_OF_SCOPE,
+            }
         ],
         condition_reasons=reasons,
         provenance=["policy-trace", "condition-evaluator", "user-authored-note"],
@@ -1678,21 +1790,16 @@ def _decision_explanation_text(
     if attachment.selected is None:
         return "No policy rule or exact override is selected in this position."
     selected = attachment.selected
-    priority = (
-        f" at priority {selected.priority}" if selected.priority is not None else ""
-    )
-    return f"Selected {selected.kind} {selected.id}{priority}."
+    return f"Selected {selected.kind} {selected.id} by authored policy order."
 
 
 def _find_policy_item(
     groups: RuleGroupsSnapshot, item_id: str
 ) -> RuleRuntimeSnapshot | OverrideRuntimeSnapshot | None:
     items: list[RuleRuntimeSnapshot | OverrideRuntimeSnapshot] = [
-        *groups.applies_now,
-        *groups.waiting,
-        *groups.dormant,
-        *groups.retired,
-        *groups.disabled,
+        *groups.responses,
+        *groups.development,
+        *groups.continuations,
         *groups.overrides,
     ]
     if groups.selected is not None:
@@ -1733,14 +1840,25 @@ def _rule_groups(
     workspace: FlowWorkspace, decision: PolicyDecision | None
 ) -> RuleGroupsSnapshot:
     if decision is not None:
-        rules = [_rule_snapshot(item) for item in decision.rule_resolutions]
+        order_by_id = {
+            item.id: order
+            for authored in (
+                workspace.author.flow.responses,
+                workspace.author.flow.development,
+                workspace.author.flow.continuations,
+            )
+            for order, item in enumerate(authored, start=1)
+        }
+        rules = [
+            _rule_snapshot(item, order_by_id[item.rule.id])
+            for item in decision.rule_resolutions
+        ]
         overrides = [_override_snapshot(item) for item in decision.override_resolutions]
     else:
         rules = _passive_rule_snapshots(workspace)
         overrides = [
             OverrideRuntimeSnapshot(
                 id=item.id,
-                enabled=item.enabled,
                 after_san=list(item.after_san),
                 piece=str(StartingPieceRef.from_original(item.move.piece)),
                 destination=item.move.to_square,
@@ -1758,12 +1876,11 @@ def _rule_groups(
     selected_override = next((item for item in overrides if item.selected), None)
     return RuleGroupsSnapshot(
         selected=selected_override or selected_rule,
-        applies_now=[item for item in rules if item.status == "active"],
-        waiting=[item for item in rules if item.status == "waiting"],
-        dormant=[item for item in rules if item.status == "dormant"],
-        retired=[item for item in rules if item.status == "retired"],
-        disabled=[item for item in rules if item.status == "disabled"],
+        responses=[item for item in rules if item.section == "response"],
+        development=[item for item in rules if item.section == "development"],
+        continuations=[item for item in rules if item.section == "continuation"],
         overrides=overrides,
+        structures=_structure_snapshots(workspace, decision),
     )
 
 
@@ -1773,28 +1890,16 @@ def _starting_piece_snapshots(
     rule_snapshots: dict[str, RuleRuntimeSnapshot] = {}
     if isinstance(groups.selected, RuleRuntimeSnapshot):
         rule_snapshots[groups.selected.id] = groups.selected
-    for group in (
-        groups.applies_now,
-        groups.waiting,
-        groups.dormant,
-        groups.retired,
-        groups.disabled,
-    ):
+    for group in (groups.responses, groups.development, groups.continuations):
         rule_snapshots.update((item.id, item) for item in group)
 
-    development_rules = sorted(
-        (
-            rule
-            for rule in workspace.author.flow.rules
-            if isinstance(rule, DevelopmentRule)
-        ),
-        key=lambda item: item.priority,
-        reverse=True,
-    )
+    development_rules = workspace.author.flow.development
     order_by_id = {
         rule.id: order for order, rule in enumerate(development_rules, start=1)
     }
-    development_by_piece = {rule.piece: rule for rule in development_rules}
+    development_by_piece: dict[StartingPieceRef, list[DevelopmentAssignment]] = {}
+    for rule in development_rules:
+        development_by_piece.setdefault(rule.piece, []).append(rule)
     controlled_color = workspace.author.flow.side
     result: list[StartingPieceSnapshot] = []
     for tracked in sorted(
@@ -1807,28 +1912,29 @@ def _starting_piece_snapshots(
             ref = StartingPieceRef.from_original(tracked.id)
         except ValueError:
             continue
-        development_rule = development_by_piece.get(ref)
-        development_snapshot = None
-        if development_rule is not None:
+        development_snapshots: list[DevelopmentRuleSnapshot] = []
+        for development_rule in development_by_piece.get(ref, []):
             runtime = rule_snapshots[development_rule.id]
             status_map = {
-                "active": "ready",
+                "applicable": "applicable",
                 "selected": "selected",
                 "waiting": "waiting",
-                "dormant": "dormant",
-                "retired": "retired",
-                "disabled": "disabled",
+                "inactive": "inactive",
+                "locked": "inactive",
+                "out-of-scope": "out-of-scope",
+                "retired": ("captured" if tracked.captured else "developed"),
             }
-            development_snapshot = DevelopmentRuleSnapshot(
-                id=development_rule.id,
-                target=development_rule.target,
-                priority=development_rule.priority,
-                order=order_by_id[development_rule.id],
-                status=status_map[runtime.status],  # type: ignore[arg-type]
-                ready_when=runtime.activate_when,
-                note=development_rule.note,
-                enabled=development_rule.enabled,
-                reason=runtime.reason,
+            development_snapshots.append(
+                DevelopmentRuleSnapshot(
+                    id=development_rule.id,
+                    target=development_rule.target,
+                    order=order_by_id[development_rule.id],
+                    structures=list(development_rule.structures),
+                    status=status_map[runtime.status],  # type: ignore[arg-type]
+                    ready_when=runtime.when,
+                    note=development_rule.note,
+                    reason=runtime.reason,
+                )
             )
         if tracked.captured:
             state = (
@@ -1853,18 +1959,26 @@ def _starting_piece_snapshots(
                 state=state,  # type: ignore[arg-type]
                 first_moved_ply=tracked.first_moved_ply,
                 captured_ply=tracked.captured_ply,
-                development_rule=development_snapshot,
+                development_rules=development_snapshots,
             )
         )
     return result
 
 
-def _rule_snapshot(item: RuleResolution) -> RuleRuntimeSnapshot:
+def _rule_snapshot(item: RuleResolution, order: int) -> RuleRuntimeSnapshot:
+    if isinstance(item.rule, DevelopmentAssignment):
+        unlock_condition = None
+        live_condition = item.rule.ready_when
+        expire_condition = None
+    else:
+        unlock_condition = item.rule.unlock_when
+        live_condition = item.rule.when
+        expire_condition = item.rule.expire_when
     return RuleRuntimeSnapshot(
         id=item.rule.id,
-        authored_kind=item.rule.kind,
-        priority=item.rule.priority,
-        enabled=item.rule.enabled,
+        section=item.section,
+        order=order,
+        structures=list(item.rule.structures),
         piece=str(StartingPieceRef.from_original(item.rule.move.piece)),
         destination=item.rule.move.to_square,
         move_uci=item.move.uci() if item.move else None,
@@ -1875,9 +1989,10 @@ def _rule_snapshot(item: RuleResolution) -> RuleRuntimeSnapshot:
         selected=item.selected,
         shadowed=item.shadowed,
         note=item.rule.note,
-        activate_when=_condition_snapshot(item.rule.activate_when, item.activation),
-        retire_when=_condition_snapshot(item.rule.retire_when, item.retirement),
-        activated_at_ply=item.activated_at_ply,
+        unlock_when=_condition_snapshot(unlock_condition, item.unlock),
+        when=_condition_snapshot(live_condition, item.live_condition),
+        expire_when=_condition_snapshot(expire_condition, item.expiration),
+        unlocked_at_ply=item.unlocked_at_ply,
         retired_at_ply=item.retired_at_ply,
         reason=item.reason,
     )
@@ -1886,7 +2001,6 @@ def _rule_snapshot(item: RuleResolution) -> RuleRuntimeSnapshot:
 def _override_snapshot(item: OverrideResolution) -> OverrideRuntimeSnapshot:
     return OverrideRuntimeSnapshot(
         id=item.override.id,
-        enabled=item.override.enabled,
         after_san=list(item.override.after_san),
         piece=str(StartingPieceRef.from_original(item.override.move.piece)),
         destination=item.override.move.to_square,
@@ -1902,55 +2016,160 @@ def _override_snapshot(item: OverrideResolution) -> OverrideRuntimeSnapshot:
 
 def _passive_rule_snapshots(workspace: FlowWorkspace) -> list[RuleRuntimeSnapshot]:
     evaluator = ConditionEvaluator(
-        workspace.board, workspace.runtime.tracker, workspace.runtime.states
+        workspace.board,
+        workspace.runtime.tracker,
+        workspace.runtime.conditions,
+        workspace.runtime.last_move,
     )
     snapshots: list[RuleRuntimeSnapshot] = []
-    for rule in sorted(
-        workspace.author.flow.compiled_rules,
-        key=lambda item: item.priority,
-        reverse=True,
-    ):
-        state = workspace.runtime.rule_states[rule.id]
-        if not rule.enabled:
-            status = EffectiveRuleStatus.DISABLED
-            reason = "Rule is disabled."
-        elif state.lifecycle.value == "retired":
-            status = EffectiveRuleStatus.RETIRED
-            reason = state.retirement_reason or "Rule retired."
-        elif state.lifecycle.value == "dormant":
-            status = EffectiveRuleStatus.DORMANT
-            reason = "Activation is pending."
-        else:
-            status = EffectiveRuleStatus.ACTIVE
-            reason = "Active; legality will be checked on the controlled side's turn."
-        activation = (
-            evaluator.evaluate(rule.activate_when) if rule.activate_when else None
-        )
-        retirement = evaluator.evaluate(rule.retire_when) if rule.retire_when else None
-        snapshots.append(
-            RuleRuntimeSnapshot(
-                id=rule.id,
-                authored_kind=rule.kind,
-                priority=rule.priority,
-                enabled=rule.enabled,
-                piece=str(StartingPieceRef.from_original(rule.move.piece)),
-                destination=rule.move.to_square,
-                move_uci=None,
-                move_san=None,
-                legal=False,
-                lifecycle=state.lifecycle.value,
-                status=status.value,
-                selected=False,
-                shadowed=False,
-                note=rule.note,
-                activate_when=_condition_snapshot(rule.activate_when, activation),
-                retire_when=_condition_snapshot(rule.retire_when, retirement),
-                activated_at_ply=state.activated_at_ply,
-                retired_at_ply=state.retired_at_ply,
-                reason=reason,
+    sections = (
+        ("response", workspace.author.flow.responses),
+        ("development", workspace.author.flow.development),
+        ("continuation", workspace.author.flow.continuations),
+    )
+    for section, rules in sections:
+        for order, rule in enumerate(rules, start=1):
+            in_scope, scope_reason = workspace.runtime._scope(
+                rule.structures, evaluator
             )
-        )
+            if isinstance(rule, DevelopmentAssignment):
+                tracked = workspace.runtime.tracker.get(rule.piece.original_piece_id)
+                live = (
+                    evaluator.evaluate(rule.ready_when)
+                    if rule.ready_when is not None
+                    else None
+                )
+                lifecycle = (
+                    "retired" if tracked.has_moved or tracked.captured else "unlocked"
+                )
+                if not in_scope:
+                    status = EffectiveRuleStatus.OUT_OF_SCOPE
+                    reason = scope_reason
+                elif tracked.has_moved or tracked.captured:
+                    status = EffectiveRuleStatus.RETIRED
+                    reason = (
+                        f"{rule.piece.label} was captured."
+                        if tracked.captured
+                        else f"{rule.piece.label} already moved."
+                    )
+                elif live is not None and not live.value:
+                    status = EffectiveRuleStatus.INACTIVE
+                    reason = live.explanation
+                else:
+                    status = EffectiveRuleStatus.WAITING
+                    reason = "Legality will be checked on the controlled side's turn."
+                unlock = expiration = None
+                unlocked_at_ply = 0
+                retired_at_ply = (
+                    tracked.captured_ply
+                    if tracked.captured
+                    else tracked.first_moved_ply
+                )
+            else:
+                state = workspace.runtime.rule_states[rule.id]
+                unlock = (
+                    evaluator.evaluate(rule.unlock_when)
+                    if rule.unlock_when is not None
+                    else None
+                )
+                live = evaluator.evaluate(rule.when) if rule.when is not None else None
+                expiration = (
+                    evaluator.evaluate(rule.expire_when)
+                    if rule.expire_when is not None
+                    else None
+                )
+                lifecycle = state.lifecycle.value
+                unlocked_at_ply = state.unlocked_at_ply
+                retired_at_ply = state.retired_at_ply
+                if not in_scope:
+                    status = EffectiveRuleStatus.OUT_OF_SCOPE
+                    reason = scope_reason
+                elif state.retired:
+                    status = EffectiveRuleStatus.RETIRED
+                    reason = state.retirement_reason or "Rule retired."
+                elif not state.unlocked:
+                    status = EffectiveRuleStatus.LOCKED
+                    reason = (
+                        unlock.explanation
+                        if unlock is not None
+                        else "Unlock condition is pending."
+                    )
+                elif live is not None and not live.value:
+                    status = EffectiveRuleStatus.INACTIVE
+                    reason = live.explanation
+                else:
+                    status = EffectiveRuleStatus.WAITING
+                    reason = "Legality will be checked on the controlled side's turn."
+            snapshots.append(
+                RuleRuntimeSnapshot(
+                    id=rule.id,
+                    section=section,  # type: ignore[arg-type]
+                    order=order,
+                    structures=list(rule.structures),
+                    piece=str(StartingPieceRef.from_original(rule.move.piece)),
+                    destination=rule.move.to_square,
+                    move_uci=None,
+                    move_san=None,
+                    legal=False,
+                    lifecycle=lifecycle,  # type: ignore[arg-type]
+                    status=status.value,
+                    selected=False,
+                    shadowed=False,
+                    note=rule.note,
+                    unlock_when=_condition_snapshot(
+                        rule.unlock_when if isinstance(rule, MoveRule) else None,
+                        unlock,
+                    ),
+                    when=_condition_snapshot(
+                        (rule.when if isinstance(rule, MoveRule) else rule.ready_when),
+                        live,
+                    ),
+                    expire_when=_condition_snapshot(
+                        rule.expire_when if isinstance(rule, MoveRule) else None,
+                        expiration,
+                    ),
+                    unlocked_at_ply=unlocked_at_ply,
+                    retired_at_ply=retired_at_ply,
+                    reason=reason,
+                )
+            )
     return snapshots
+
+
+def _structure_snapshots(
+    workspace: FlowWorkspace, decision: PolicyDecision | None
+) -> list[StructureRuntimeSnapshot]:
+    if decision is not None:
+        resolutions = decision.structure_resolutions
+    else:
+        evaluator = ConditionEvaluator(
+            workspace.board,
+            workspace.runtime.tracker,
+            workspace.runtime.conditions,
+            workspace.runtime.last_move,
+        )
+        resolutions = workspace.runtime._resolve_structures(evaluator)
+    return [
+        StructureRuntimeSnapshot(
+            id=item.structure.id,
+            name=item.structure.name,
+            status=item.status.value,
+            available_when=ConditionSnapshot(
+                expression=condition_to_data(item.structure.available_when),
+                value=item.available.value,
+                explanation=item.available.explanation,
+            ),
+            selected_when=ConditionSnapshot(
+                expression=condition_to_data(item.structure.selected_when),
+                value=item.selected.value,
+                explanation=item.selected.explanation,
+            ),
+            selected_at_ply=item.selected_at_ply,
+            note=item.structure.note,
+            reason=item.reason,
+        )
+        for item in resolutions
+    ]
 
 
 def _condition_snapshot(condition, result) -> ConditionSnapshot | None:

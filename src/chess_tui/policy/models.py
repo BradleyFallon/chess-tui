@@ -1,4 +1,4 @@
-"""Typed building blocks for deterministic version 2 flow policies."""
+"""Typed building blocks for deterministic version 3 flow policies."""
 
 from __future__ import annotations
 
@@ -156,6 +156,16 @@ class MovedCondition:
 
 
 @dataclass(frozen=True, slots=True)
+class UnmovedCondition:
+    piece: OriginalPieceId
+
+
+@dataclass(frozen=True, slots=True)
+class CapturedCondition:
+    piece: OriginalPieceId
+
+
+@dataclass(frozen=True, slots=True)
 class AtCondition:
     piece: OriginalPieceId
     square: str
@@ -195,8 +205,14 @@ class InCheckCondition:
 
 
 @dataclass(frozen=True, slots=True)
-class StateCondition:
-    state_id: str
+class NamedConditionRef:
+    condition_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class LastMoveCondition:
+    piece: OriginalPieceId
+    to_square: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,6 +232,8 @@ class NotCondition:
 
 Condition: TypeAlias = (
     MovedCondition
+    | UnmovedCondition
+    | CapturedCondition
     | AtCondition
     | OccupiedCondition
     | EmptyCondition
@@ -223,7 +241,8 @@ Condition: TypeAlias = (
     | AttackedCondition
     | AttackedByCondition
     | InCheckCondition
-    | StateCondition
+    | NamedConditionRef
+    | LastMoveCondition
     | AllCondition
     | AnyCondition
     | NotCondition
@@ -231,18 +250,25 @@ Condition: TypeAlias = (
 
 
 class RuleLifecycle(str, Enum):
-    DORMANT = "dormant"
-    ACTIVE = "active"
+    LOCKED = "locked"
+    UNLOCKED = "unlocked"
     RETIRED = "retired"
 
 
 class EffectiveRuleStatus(str, Enum):
     SELECTED = "selected"
-    ACTIVE = "active"
+    APPLICABLE = "applicable"
     WAITING = "waiting"
-    DORMANT = "dormant"
+    INACTIVE = "inactive"
+    LOCKED = "locked"
     RETIRED = "retired"
-    DISABLED = "disabled"
+    OUT_OF_SCOPE = "out-of-scope"
+
+
+@dataclass(frozen=True, slots=True)
+class LastMove:
+    piece: OriginalPieceId
+    to_square: str
 
 
 @dataclass(frozen=True, slots=True)

@@ -47,6 +47,11 @@ class OriginalPieceTracker:
                 f"Original piece {piece_id} is absent from start_fen."
             ) from exc
 
+    def piece_id_at(self, square: chess.Square) -> OriginalPieceId | None:
+        """Return the original identity currently occupying ``square``."""
+
+        return self._by_square.get(square)
+
     def apply_move(
         self, board_before: chess.Board, move: chess.Move, *, ply: int
     ) -> None:

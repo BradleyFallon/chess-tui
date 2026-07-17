@@ -1,4 +1,4 @@
-"""Interactive coordinator for replaying and testing a deterministic v2 flow."""
+"""Interactive coordinator for replaying and testing a deterministic v3 flow."""
 
 from __future__ import annotations
 
@@ -21,7 +21,14 @@ from ..policy import MoveAction
 from ..policy.runtime import DecisionSource, PolicyDecision, PolicyRuntime
 from .author import AuthorBoardController, ConfirmedAuthorMove, FlowAuthor
 from .errors import FlowError, FlowValidationError
-from .models import AuthoredRule, DevelopmentRule, ExactOverride, Flow, OpeningTag
+from .models import (
+    AuthoredPolicyItem,
+    DevelopmentAssignment,
+    ExactOverride,
+    Flow,
+    OpeningTag,
+    Structure,
+)
 from .position import normalized_position_key
 
 
@@ -235,20 +242,20 @@ class FlowWorkspace:
         assert confirmed is not None
         return confirmed
 
-    def update_rule(self, replacement: AuthoredRule) -> PolicyMoveAttempt | None:
+    def update_rule(self, replacement: AuthoredPolicyItem) -> PolicyMoveAttempt | None:
         return self._apply_candidate(self.author.candidate_with_rule(replacement))
 
     def add_development_rule(
-        self, development_rule: DevelopmentRule
+        self, development_rule: DevelopmentAssignment
     ) -> PolicyMoveAttempt | None:
         return self._apply_candidate(
             self.author.candidate_with_added_development_rule(development_rule)
         )
 
     def save_development_rule(
-        self, development_rule: DevelopmentRule
+        self, development_rule: DevelopmentAssignment
     ) -> PolicyMoveAttempt | None:
-        if any(rule.id == development_rule.id for rule in self.author.flow.rules):
+        if any(item.id == development_rule.id for item in self.author.flow.development):
             candidate = self.author.candidate_with_rule(development_rule)
         else:
             candidate = self.author.candidate_with_added_development_rule(
@@ -268,8 +275,25 @@ class FlowWorkspace:
             self.author.candidate_with_development_order(ordered_rule_ids)
         )
 
+    def reorder_policy_section(
+        self, section: str, ordered_item_ids: tuple[str, ...]
+    ) -> PolicyMoveAttempt | None:
+        return self._apply_candidate(
+            self.author.candidate_with_policy_order(section, ordered_item_ids)
+        )
+
     def update_override(self, replacement: ExactOverride) -> PolicyMoveAttempt | None:
         return self._apply_candidate(self.author.candidate_with_override(replacement))
+
+    def update_structure(self, replacement: Structure) -> PolicyMoveAttempt | None:
+        return self._apply_candidate(self.author.candidate_with_structure(replacement))
+
+    def reorder_structures(
+        self, ordered_structure_ids: tuple[str, ...]
+    ) -> PolicyMoveAttempt | None:
+        return self._apply_candidate(
+            self.author.candidate_with_structure_order(ordered_structure_ids)
+        )
 
     def add_opening_tag(self, tag: OpeningTag) -> None:
         self._apply_candidate(self.author.candidate_with_added_opening_tag(tag))
@@ -286,7 +310,8 @@ class FlowWorkspace:
         move = chess.Move.from_uci(attempt.selected_move.move.uci)
         if move.promotion is not None:
             raise FlowValidationError(
-                "Promotion moves cannot be authored because v2 actions do not encode promotion."
+                "Promotion moves cannot be authored because deterministic actions "
+                "do not encode promotion."
             )
         tracked_piece = next(
             (
@@ -312,7 +337,6 @@ class FlowWorkspace:
             ),
             after_san=attempt.history_before,
             move=MoveAction(tracked_piece.id, chess.square_name(move.to_square)),
-            enabled=True,
             note=f"Added from chat to allow {attempt.selected_move.san} here.",
         )
         candidate = (
@@ -424,7 +448,7 @@ class FlowWorkspace:
     ) -> None:
         move = chess.Move.from_uci(confirmed.move.uci)
         selected_rule_id = (
-            decision.source_id if decision.source is DecisionSource.RULE else None
+            decision.source_id if decision.source in _POLICY_ITEM_SOURCES else None
         )
         self.runtime.commit_move(
             board_before,
@@ -435,7 +459,7 @@ class FlowWorkspace:
         )
         self.history.append(confirmed.san)
         in_book = self.opening_classifier.compare_move_to_book(board_before, move)
-        if decision.source is DecisionSource.RULE:
+        if decision.source in _POLICY_ITEM_SOURCES:
             move_source = (
                 OpeningMoveProvenance.BOOK_AND_POLICY
                 if in_book
@@ -524,7 +548,7 @@ class FlowWorkspace:
             prefix.append(san)
             path = tuple(prefix)
             recorded_reply_id: str | None = None
-            if decision is not None and decision.source is DecisionSource.RULE:
+            if decision is not None and decision.source in _POLICY_ITEM_SOURCES:
                 source = (
                     OpeningMoveProvenance.BOOK_AND_POLICY
                     if in_book
@@ -582,7 +606,7 @@ class FlowWorkspace:
                 board,
                 selected_rule_id=(
                     decision.source_id
-                    if decision is not None and decision.source is DecisionSource.RULE
+                    if decision is not None and decision.source in _POLICY_ITEM_SOURCES
                     else None
                 ),
                 ply=ply,
@@ -615,3 +639,10 @@ def _start_board(flow: Flow) -> chess.Board:
     return (
         chess.Board() if flow.start_fen == "startpos" else chess.Board(flow.start_fen)
     )
+
+
+_POLICY_ITEM_SOURCES = {
+    DecisionSource.RESPONSE,
+    DecisionSource.DEVELOPMENT,
+    DecisionSource.CONTINUATION,
+}

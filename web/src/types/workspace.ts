@@ -11,7 +11,8 @@ export interface OpeningTagSnapshot {
 export interface FlowSnapshot {
   name: string; version: number; path: string; side: "white" | "black";
   openingTags: OpeningTagSnapshot[];
-  policyModel: "deterministic-v2";
+  warnings: string[];
+  policyModel: "deterministic-v3";
 }
 
 export interface GameOverSnapshot { result: string; termination: string; winner: "white" | "black" | null; }
@@ -24,22 +25,24 @@ export type ConditionExpression = Record<string, unknown>;
 export interface ConditionSnapshot { expression: ConditionExpression; value: boolean; explanation: string; }
 
 export interface RuleRuntimeSnapshot {
-  kind: "rule"; authoredKind: "generic" | "development";
-  id: string; priority: number; enabled: boolean; piece: string;
+  kind: "rule"; section: "response" | "development" | "continuation";
+  id: string; order: number; structures: string[]; piece: string;
   destination: string; moveUci: string | null; moveSan: string | null; legal: boolean;
-  lifecycle: "dormant" | "active" | "retired";
-  status: "selected" | "active" | "waiting" | "dormant" | "retired" | "disabled";
+  lifecycle: "locked" | "unlocked" | "retired";
+  status: "locked" | "inactive" | "waiting" | "applicable" | "selected" | "retired" | "out-of-scope";
   selected: boolean; shadowed: boolean; note: string | null;
-  activateWhen: ConditionSnapshot | null; retireWhen: ConditionSnapshot | null;
-  activatedAtPly: number | null; retiredAtPly: number | null; reason: string;
+  unlockWhen: ConditionSnapshot | null; when: ConditionSnapshot | null;
+  expireWhen: ConditionSnapshot | null;
+  unlockedAtPly: number | null; retiredAtPly: number | null; reason: string;
 }
 
 export type DevelopmentStatus =
-  | "dormant" | "ready" | "waiting" | "selected" | "retired" | "disabled";
+  | "inactive" | "waiting" | "applicable" | "selected" | "developed"
+  | "captured" | "out-of-scope";
 export interface DevelopmentRuleSnapshot {
-  id: string; target: string; priority: number; order: number;
+  id: string; target: string; order: number; structures: string[];
   status: DevelopmentStatus; readyWhen: ConditionSnapshot | null;
-  note: string | null; enabled: boolean; reason: string;
+  note: string | null; reason: string;
 }
 export interface StartingPieceSnapshot {
   ref: string; originalPieceId: string; color: "white" | "black";
@@ -48,27 +51,33 @@ export interface StartingPieceSnapshot {
   currentSquare: string | null;
   state: "undeveloped" | "developed" | "captured-undeveloped" | "captured-developed";
   firstMovedPly: number | null; capturedPly: number | null;
-  developmentRule: DevelopmentRuleSnapshot | null;
+  developmentRules: DevelopmentRuleSnapshot[];
 }
 
 export interface OverrideRuntimeSnapshot {
-  kind: "exact-override"; id: string; enabled: boolean; afterSan: string[];
+  kind: "exact-override"; id: string; afterSan: string[];
   piece: string; destination: string; moveUci: string | null; moveSan: string | null;
   matched: boolean; legal: boolean; selected: boolean; note: string | null; reason: string;
 }
 
 export type PolicyItemSnapshot = RuleRuntimeSnapshot | OverrideRuntimeSnapshot;
+export interface StructureRuntimeSnapshot {
+  id: string; name: string;
+  status: "unavailable" | "available" | "selected" | "rejected";
+  availableWhen: ConditionSnapshot; selectedWhen: ConditionSnapshot;
+  selectedAtPly: number | null; note: string | null; reason: string;
+}
 export interface RuleGroupsSnapshot {
   selected: PolicyItemSnapshot | null;
-  appliesNow: RuleRuntimeSnapshot[]; waiting: RuleRuntimeSnapshot[];
-  dormant: RuleRuntimeSnapshot[]; retired: RuleRuntimeSnapshot[];
-  disabled: RuleRuntimeSnapshot[]; overrides: OverrideRuntimeSnapshot[];
+  responses: RuleRuntimeSnapshot[]; development: RuleRuntimeSnapshot[];
+  continuations: RuleRuntimeSnapshot[]; overrides: OverrideRuntimeSnapshot[];
+  structures: StructureRuntimeSnapshot[];
 }
 
 export interface DecisionSnapshot {
   status: "ready" | "frontier"; moveUci: string | null; moveSan: string | null;
-  source: "rule" | "exact-override" | "frontier"; sourceId: string | null;
-  priority: number | null; note: string | null; trace: string[];
+  source: "response" | "development" | "continuation" | "exact-override" | "frontier";
+  sourceId: string | null; note: string | null; trace: string[];
 }
 
 export interface EngineReviewSnapshot {
@@ -81,7 +90,8 @@ export interface EngineReviewSnapshot {
 export interface AttemptSnapshot {
   result: "correct" | "mismatch" | "frontier"; playedUci: string; playedSan: string;
   expectedUci: string | null; expectedSan: string | null;
-  source: "rule" | "exact-override" | "frontier"; sourceId: string | null;
+  source: "response" | "development" | "continuation" | "exact-override" | "frontier";
+  sourceId: string | null;
   note: string | null; trace: string[]; engineReview: EngineReviewSnapshot | null;
 }
 
@@ -138,7 +148,7 @@ export interface AvailableCommandSnapshot {
   arguments: Array<{ name: string; description: string; required: boolean }>;
 }
 export interface PolicyReferenceSnapshot {
-  kind: "rule" | "exact-override"; id: string; priority: number | null;
+  kind: "rule" | "exact-override"; id: string;
   moveSan: string | null; note: string | null; reason: string;
 }
 export type ChatAttachment =
@@ -148,7 +158,7 @@ export type ChatAttachment =
   | { kind: "book-details"; playedMoveInBook: boolean | null; continuations: BookContinuationSnapshot[] }
   | { kind: "book-history"; entries: OpeningHistoryItemSnapshot[]; firstPolicyWithoutBookPly: number | null }
   | { kind: "position-analysis"; analysis: PositionAnalysisSnapshot }
-  | { kind: "decision-explanation"; selected: PolicyReferenceSnapshot | null; higherPriorityWaiting: PolicyReferenceSnapshot[]; shadowedActive: PolicyReferenceSnapshot[]; dormant: PolicyReferenceSnapshot[]; conditionReasons: string[]; provenance: string[] }
+  | { kind: "decision-explanation"; selected: PolicyReferenceSnapshot | null; waiting: PolicyReferenceSnapshot[]; applicableLater: PolicyReferenceSnapshot[]; unavailable: PolicyReferenceSnapshot[]; conditionReasons: string[]; provenance: string[] }
   | { kind: "rule-details"; rule: PolicyItemSnapshot; provenance: string[] }
   | { kind: "rule-list"; groups: RuleGroupsSnapshot }
   | { kind: "decision-trace"; entries: string[]; provenance: "policy-trace" }
@@ -194,21 +204,28 @@ export interface ClientEffect { kind: "highlight-move"; uci: string; }
 export interface CommandResponse { workspace: WorkspaceSnapshot; effects: ClientEffect[]; }
 
 export interface RuleUpdate {
-  priority: number; enabled: boolean; note: string | null;
+  note: string | null; structures: string[];
   move: { piece: string; to: string };
-  activateWhen: ConditionExpression | null; retireWhen: ConditionExpression | null;
+  unlockWhen: ConditionExpression | null; when: ConditionExpression | null;
+  expireWhen: ConditionExpression | null;
 }
 
 export interface OverrideUpdate {
-  afterSan: string[]; enabled: boolean; note: string | null;
+  afterSan: string[]; note: string | null;
   move: { piece: string; to: string };
 }
 
+export interface StructureUpdate {
+  name: string; note: string | null;
+  availableWhen: ConditionExpression;
+  selectedWhen: ConditionExpression;
+}
+
 export interface DevelopmentRuleDraft {
-  id: string | null; piece: string; target: string; enabled: boolean;
+  id: string | null; piece: string; target: string; structures: string[];
   note: string | null; readyWhen: ConditionExpression | null;
 }
 export interface DevelopmentRuleValidation {
   valid: boolean; ruleId: string; piece: string; target: string;
-  priority: number; errors: string[];
+  order: number; errors: string[];
 }

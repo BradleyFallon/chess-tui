@@ -8,14 +8,14 @@ import pytest
 
 from chess_tui.flow import (
     AttemptResult,
-    DevelopmentRule,
+    DevelopmentAssignment,
     FlowStore,
     FlowValidationError,
     FlowWorkspace,
 )
 from chess_tui.opening import OpeningMoveProvenance
 
-FIXTURE = Path(__file__).parent / "fixtures" / "london-flow.toml"
+FIXTURE = Path(__file__).parents[1] / "flows" / "london.toml"
 
 
 def workspace(tmp_path: Path) -> FlowWorkspace:
@@ -41,7 +41,10 @@ def test_correct_mismatch_retry_and_continue(tmp_path: Path) -> None:
     kept = work.continue_with_policy_move()
     assert kept.san == "d4"
     assert work.history == ["d4"]
-    assert work.runtime.rule_states["develop-d-pawn"].lifecycle.value == "retired"
+    d_pawn = next(
+        item for item in work.runtime.tracker.pieces if str(item.id) == "white:d2"
+    )
+    assert d_pawn.has_moved
 
 
 def test_correct_move_commits_and_opponent_reply_recomputes_decision(
@@ -149,13 +152,13 @@ def test_edit_revalidates_replays_and_reassesses_pending_move(tmp_path: Path) ->
     work = workspace(tmp_path)
     attempt = work.submit_policy_san("d3")
     assert attempt.result is AttemptResult.MISMATCH
-    rule = work.author.flow.rules[0]
-    assert isinstance(rule, DevelopmentRule)
+    rule = work.author.flow.development[0]
+    assert isinstance(rule, DevelopmentAssignment)
     work.update_rule(replace(rule, target="d3"))
     assert work.attempt is None
     assert work.history == ["d3"]
-    saved = FlowStore().load(work.author.path).rules[0]
-    assert isinstance(saved, DevelopmentRule)
+    saved = FlowStore().load(work.author.path).development[0]
+    assert isinstance(saved, DevelopmentAssignment)
     assert saved.target == "d3"
 
 
@@ -200,9 +203,9 @@ def test_failed_edit_preserves_file_and_live_attempt(tmp_path: Path) -> None:
     work = workspace(tmp_path)
     attempt = work.submit_policy_san("e4")
     original = work.author.path.read_text(encoding="utf-8")
-    rule = work.author.flow.rules[0]
+    rule = work.author.flow.development[0]
     with pytest.raises(FlowValidationError):
-        work.update_rule(replace(rule, priority=work.author.flow.rules[1].priority))
+        work.update_rule(replace(rule, structures=("unknown",)))
     assert work.author.path.read_text(encoding="utf-8") == original
     assert work.attempt is attempt
 
@@ -219,13 +222,12 @@ def test_black_controlled_flow_uses_generic_policy_and_opponent_turns(
     path = tmp_path / "black.toml"
     path.write_text(
         """
-version=2
+version=3
 name="Black policy"
 start_fen="rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1"
 side="black"
-[[rules]]
+[[responses]]
 id="reply-e5"
-priority=10
 move={piece="piece:black:pawn:e",to="e5"}
 """,
         encoding="utf-8",

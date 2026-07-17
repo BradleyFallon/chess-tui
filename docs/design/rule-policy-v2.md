@@ -1,4 +1,8 @@
-# Deterministic Rule Policy — Version 2
+# Deterministic Rule Policy — Version 2 (Historical)
+
+> Version 2 is obsolete and rejected by the loader. The authoritative design is
+> [rule-policy-v3.md](rule-policy-v3.md). This file is retained only as
+> migration history; do not implement new behavior from it.
 
 > Canonical authored piece references, typed development rules, compilation,
 > statuses, and intrinsic move/capture retirement are defined in
@@ -7,9 +11,9 @@
 
 ## Status
 
-Implemented design specification.
+Historical design specification.
 
-This document defines the active version 2 flow schema and policy runtime for deterministic, rule-based chess opening flows.
+This document defined the former version 2 flow schema.
 
 ## 1. Purpose
 

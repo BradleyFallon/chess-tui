@@ -1,4 +1,4 @@
-"""Parsing, serialization, validation, and evaluation for v2 conditions."""
+"""Parsing, serialization, validation, and evaluation for v3 conditions."""
 
 from __future__ import annotations
 
@@ -13,18 +13,22 @@ from .models import (
     AtCondition,
     AttackedByCondition,
     AttackedCondition,
+    CapturedCondition,
     Condition,
     ConditionResult,
     ColorName,
     EmptyCondition,
     InCheckCondition,
+    LastMove,
+    LastMoveCondition,
     MovedCondition,
+    NamedConditionRef,
     NotCondition,
     OccupiedByCondition,
     OccupiedCondition,
     OriginalPieceId,
     StartingPieceRef,
-    StateCondition,
+    UnmovedCondition,
 )
 from .tracker import OriginalPieceTracker
 
@@ -45,6 +49,10 @@ def parse_condition(value: object, *, context: str = "condition") -> Condition:
     kind, payload = next(iter(mapping.items()))
     if kind == "moved":
         return MovedCondition(_piece_id(payload, context))
+    if kind == "unmoved":
+        return UnmovedCondition(_piece_id(payload, context))
+    if kind == "captured":
+        return CapturedCondition(_piece_id(payload, context))
     if kind == "at":
         item = _exact_mapping(payload, {"piece", "square"}, context)
         return AtCondition(
@@ -74,10 +82,15 @@ def parse_condition(value: object, *, context: str = "condition") -> Condition:
         )
     if kind == "in_check":
         return InCheckCondition(_color(payload, context))
-    if kind == "state":
+    if kind == "condition":
         if not isinstance(payload, str) or not payload.strip():
-            raise ValueError(f"{context} state id must be a non-empty string.")
-        return StateCondition(payload)
+            raise ValueError(f"{context} condition id must be a non-empty string.")
+        return NamedConditionRef(payload)
+    if kind == "last_move":
+        item = _exact_mapping(payload, {"piece", "to"}, context)
+        return LastMoveCondition(
+            _piece_id(item["piece"], context), _square(item["to"], context)
+        )
     if kind in {"all", "any"}:
         if not isinstance(payload, list) or not payload:
             raise ValueError(f"{context} {kind} must be a non-empty array.")
@@ -94,6 +107,10 @@ def parse_condition(value: object, *, context: str = "condition") -> Condition:
 def condition_to_data(condition: Condition) -> dict[str, object]:
     if isinstance(condition, MovedCondition):
         return {"moved": str(StartingPieceRef.from_original(condition.piece))}
+    if isinstance(condition, UnmovedCondition):
+        return {"unmoved": str(StartingPieceRef.from_original(condition.piece))}
+    if isinstance(condition, CapturedCondition):
+        return {"captured": str(StartingPieceRef.from_original(condition.piece))}
     if isinstance(condition, AtCondition):
         return {
             "at": {
@@ -124,8 +141,15 @@ def condition_to_data(condition: Condition) -> dict[str, object]:
         }
     if isinstance(condition, InCheckCondition):
         return {"in_check": condition.color}
-    if isinstance(condition, StateCondition):
-        return {"state": condition.state_id}
+    if isinstance(condition, NamedConditionRef):
+        return {"condition": condition.condition_id}
+    if isinstance(condition, LastMoveCondition):
+        return {
+            "last_move": {
+                "piece": str(StartingPieceRef.from_original(condition.piece)),
+                "to": condition.to_square,
+            }
+        }
     if isinstance(condition, AllCondition):
         return {"all": [condition_to_data(item) for item in condition.conditions]}
     if isinstance(condition, AnyCondition):
@@ -133,18 +157,30 @@ def condition_to_data(condition: Condition) -> dict[str, object]:
     return {"not": condition_to_data(condition.condition)}
 
 
-def referenced_states(condition: Condition) -> set[str]:
-    if isinstance(condition, StateCondition):
-        return {condition.state_id}
+def referenced_conditions(condition: Condition) -> set[str]:
+    if isinstance(condition, NamedConditionRef):
+        return {condition.condition_id}
     if isinstance(condition, (AllCondition, AnyCondition)):
-        return set().union(*(referenced_states(item) for item in condition.conditions))
+        return set().union(
+            *(referenced_conditions(item) for item in condition.conditions)
+        )
     if isinstance(condition, NotCondition):
-        return referenced_states(condition.condition)
+        return referenced_conditions(condition.condition)
     return set()
 
 
 def referenced_pieces(condition: Condition) -> set[OriginalPieceId]:
-    if isinstance(condition, (MovedCondition, AtCondition, AttackedCondition)):
+    if isinstance(
+        condition,
+        (
+            MovedCondition,
+            UnmovedCondition,
+            CapturedCondition,
+            AtCondition,
+            AttackedCondition,
+            LastMoveCondition,
+        ),
+    ):
         return {condition.piece}
     if isinstance(condition, AttackedByCondition):
         return {condition.target, condition.attacker}
@@ -160,11 +196,13 @@ class ConditionEvaluator:
         self,
         board: chess.Board,
         tracker: OriginalPieceTracker,
-        states: Mapping[str, Condition],
+        conditions: Mapping[str, Condition],
+        last_move: LastMove | None = None,
     ) -> None:
         self.board = board
         self.tracker = tracker
-        self.states = states
+        self.conditions = conditions
+        self.last_move = last_move
 
     def evaluate(self, condition: Condition) -> ConditionResult:
         return self._evaluate(condition, ())
@@ -177,6 +215,19 @@ class ConditionEvaluator:
             label = StartingPieceRef.from_original(condition.piece).label
             return ConditionResult(
                 value, f"{label} has{' ' if value else ' not '}moved"
+            )
+        if isinstance(condition, UnmovedCondition):
+            runtime = self.tracker.get(condition.piece)
+            value = not runtime.has_moved and not runtime.captured
+            label = StartingPieceRef.from_original(condition.piece).label
+            return ConditionResult(
+                value, f"{label} is{' ' if value else ' not '}unmoved"
+            )
+        if isinstance(condition, CapturedCondition):
+            value = self.tracker.get(condition.piece).captured
+            label = StartingPieceRef.from_original(condition.piece).label
+            return ConditionResult(
+                value, f"{label} is{' ' if value else ' not '}captured"
             )
         if isinstance(condition, AtCondition):
             runtime = self.tracker.get(condition.piece)
@@ -242,14 +293,30 @@ class ConditionEvaluator:
             return ConditionResult(
                 value, f"{condition.color} is{' ' if value else ' not '}in check"
             )
-        if isinstance(condition, StateCondition):
-            if condition.state_id in stack:
-                raise ValueError(f"Recursive named state {condition.state_id!r}.")
+        if isinstance(condition, NamedConditionRef):
+            if condition.condition_id in stack:
+                raise ValueError(
+                    f"Recursive named condition {condition.condition_id!r}."
+                )
             result = self._evaluate(
-                self.states[condition.state_id], stack + (condition.state_id,)
+                self.conditions[condition.condition_id],
+                stack + (condition.condition_id,),
             )
             return ConditionResult(
-                result.value, f"state {condition.state_id}: {result.explanation}"
+                result.value,
+                f"condition {condition.condition_id}: {result.explanation}",
+            )
+        if isinstance(condition, LastMoveCondition):
+            value = (
+                self.last_move is not None
+                and self.last_move.piece == condition.piece
+                and self.last_move.to_square == condition.to_square
+            )
+            label = StartingPieceRef.from_original(condition.piece).label
+            return ConditionResult(
+                value,
+                f"last move was{' ' if value else ' not '}{label} to "
+                f"{condition.to_square}",
             )
         if isinstance(condition, AllCondition):
             results = tuple(

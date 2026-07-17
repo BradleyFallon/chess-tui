@@ -380,10 +380,10 @@ function moveLabel(ply: number, san: string): string {
 
 function DecisionExplanation({ attachment }: { attachment: Extract<ChatAttachment, { kind: "decision-explanation" }> }) {
   return <div className="attachment-details">
-    {attachment.selected && <span><strong>Selected:</strong> {attachment.selected.id}{attachment.selected.priority === null ? "" : ` · ${attachment.selected.priority}`}</span>}
-    <RuleNames label="Higher-priority waiting" items={attachment.higherPriorityWaiting} />
-    <RuleNames label="Shadowed active" items={attachment.shadowedActive} />
-    <RuleNames label="Dormant" items={attachment.dormant} />
+    {attachment.selected && <span><strong>Selected:</strong> {attachment.selected.id}</span>}
+    <RuleNames label="Waiting" items={attachment.waiting} />
+    <RuleNames label="Applicable later" items={attachment.applicableLater} />
+    <RuleNames label="Unavailable" items={attachment.unavailable} />
     {attachment.conditionReasons.map((reason) => <span key={reason}>{reason}</span>)}
     <small>Sources: {attachment.provenance.join(", ")}</small>
   </div>;
@@ -399,9 +399,11 @@ function RuleDetails({ item }: { item: PolicyItemSnapshot }) {
 
 function RuleList({ groups }: { groups: WorkspaceSnapshot["rules"] }) {
   const rows = [
-    ["Selected", groups.selected ? [groups.selected] : []], ["Applies now", groups.appliesNow],
-    ["Waiting", groups.waiting], ["Dormant", groups.dormant], ["Retired", groups.retired],
-    ["Disabled", groups.disabled],
+    ["Selected", groups.selected ? [groups.selected] : []],
+    ["Responses", groups.responses],
+    ["Development", groups.development],
+    ["Continuations", groups.continuations],
+    ["Overrides", groups.overrides],
   ] as const;
   return <div className="attachment-details">{rows.map(([label, items]) => <span key={label}><strong>{label}:</strong> {items.length ? items.map((item) => item.id).join(", ") : "None"}</span>)}</div>;
 }

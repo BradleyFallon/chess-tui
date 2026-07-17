@@ -6,6 +6,7 @@ import type {
   StartingPieceSnapshot,
   WorkspaceSnapshot,
 } from "../types/workspace";
+import type { DevelopmentRuleSnapshot } from "../types/workspace";
 
 interface Props {
   workspace: WorkspaceSnapshot;
@@ -34,33 +35,33 @@ export function PieceDevelopmentPanel({
   onReorder,
   onInspectPiece,
 }: Props) {
-  const [target, setTarget] = useState(piece?.developmentRule?.target ?? "");
-  const [note, setNote] = useState(piece?.developmentRule?.note ?? "");
+  const initialRule = piece?.developmentRules[0] ?? null;
+  const [target, setTarget] = useState(initialRule?.target ?? "");
+  const [note, setNote] = useState(initialRule?.note ?? "");
+  const [structures, setStructures] = useState(initialRule?.structures.join(", ") ?? "");
   const [readyWhen, setReadyWhen] = useState(
-    piece?.developmentRule?.readyWhen
-      ? JSON.stringify(piece.developmentRule.readyWhen.expression, null, 2)
+    initialRule?.readyWhen
+      ? JSON.stringify(initialRule.readyWhen.expression, null, 2)
       : "",
   );
-  const [enabled, setEnabled] = useState(piece?.developmentRule?.enabled ?? true);
   const [editing, setEditing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   const orderedRules = useMemo(
     () => workspace.startingPieces
-      .filter((item) => item.developmentRule)
-      .sort((left, right) =>
-        (left.developmentRule?.order ?? 0) - (right.developmentRule?.order ?? 0)),
+      .flatMap((item) => item.developmentRules.map((rule) => ({ piece: item, rule })))
+      .sort((left, right) => left.rule.order - right.rule.order),
     [workspace.startingPieces],
   );
   const resetDraft = () => {
-    setTarget(piece?.developmentRule?.target ?? "");
-    setNote(piece?.developmentRule?.note ?? "");
+    setTarget(initialRule?.target ?? "");
+    setNote(initialRule?.note ?? "");
+    setStructures(initialRule?.structures.join(", ") ?? "");
     setReadyWhen(
-      piece?.developmentRule?.readyWhen
-        ? JSON.stringify(piece.developmentRule.readyWhen.expression, null, 2)
+      initialRule?.readyWhen
+        ? JSON.stringify(initialRule.readyWhen.expression, null, 2)
         : "",
     );
-    setEnabled(piece?.developmentRule?.enabled ?? true);
     setMessage(null);
     onCancelTargetPick();
   };
@@ -75,13 +76,13 @@ export function PieceDevelopmentPanel({
     );
   }
 
-  const rule = piece.developmentRule;
+  const rule = piece.developmentRules[0] ?? null;
   const effectiveTarget = pickedTarget ?? target;
   const draft = (): DevelopmentRuleDraft => ({
     id: rule?.id ?? null,
     piece: piece.ref,
     target: effectiveTarget.trim(),
-    enabled,
+    structures: structures.split(",").map((value) => value.trim()).filter(Boolean),
     note: note.trim() || null,
     readyWhen: parseCondition(readyWhen),
   });
@@ -94,7 +95,7 @@ export function PieceDevelopmentPanel({
         setMessage(validation.errors.join("\n"));
         return;
       }
-      setMessage(`Valid · priority ${validation.priority}. Applying…`);
+      setMessage(`Valid · development order ${validation.order}. Applying…`);
       await onApply(candidate);
       setMessage("Development rule applied.");
       setEditing(false);
@@ -117,8 +118,8 @@ export function PieceDevelopmentPanel({
       <dl className="piece-facts">
         <div><dt>Starting</dt><dd>{piece.startingSquare}</dd></div>
         <div><dt>Current</dt><dd>{piece.currentSquare ?? "Captured"}</dd></div>
-        <div><dt>Development rule</dt><dd>{rule ? rule.status : "Not assigned"}</dd></div>
-        {rule && <div><dt>Order</dt><dd>{rule.order}</dd></div>}
+        <div><dt>Assignments</dt><dd>{piece.developmentRules.length || "Not assigned"}</dd></div>
+        {rule && <div><dt>First order</dt><dd>{rule.order}</dd></div>}
       </dl>
 
       {!editing ? (
@@ -126,6 +127,7 @@ export function PieceDevelopmentPanel({
           {rule ? (
             <>
               <strong>Target {rule.target}</strong>
+              <p>{rule.structures.length ? `Structures: ${rule.structures.join(", ")}` : "Global assignment"}</p>
               <p>{rule.readyWhen?.explanation ?? "Ready immediately."}</p>
               <p>{rule.note ?? "No note."}</p>
               <p className="muted">{rule.reason}</p>
@@ -156,8 +158,10 @@ export function PieceDevelopmentPanel({
               placeholder='{"moved":"piece:white:pawn:d"}'
             />
           </label>
+          <label>Structure scopes (comma separated)
+            <input value={structures} onChange={(event) => setStructures(event.target.value)} placeholder="traditional, active-c4" />
+          </label>
           <label>Note<textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} /></label>
-          <label className="checkbox-label"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /> Enabled</label>
           {message && <p className={message.startsWith("Valid") || message.endsWith("applied.") ? "validation-ok" : "inline-error"} role="status">{message}</p>}
           <div className="button-row">
             <button className="primary" type="submit" disabled={pending}>Validate & apply</button>
@@ -177,7 +181,7 @@ function DevelopmentOrder({
   onReorder,
   onInspectPiece,
 }: {
-  pieces: StartingPieceSnapshot[];
+  pieces: Array<{ piece: StartingPieceSnapshot; rule: DevelopmentRuleSnapshot }>;
   pending: boolean;
   onReorder: (ids: string[]) => Promise<void>;
   onInspectPiece: (pieceRef: string) => void;
@@ -187,18 +191,18 @@ function DevelopmentOrder({
     const destination = index + direction;
     if (destination < 0 || destination >= next.length) return;
     [next[index], next[destination]] = [next[destination], next[index]];
-    void onReorder(next.flatMap((piece) => piece.developmentRule ? [piece.developmentRule.id] : []));
+    void onReorder(next.map((item) => item.rule.id));
   };
   return (
     <details className="development-order">
       <summary>Development order <span>{pieces.length}</span></summary>
       <ol>
         {pieces.map((item, index) => (
-          <li key={item.ref}>
-            <button className="order-piece-button" onClick={() => onInspectPiece(item.ref)}>{item.label}</button>
+          <li key={item.rule.id}>
+            <button className="order-piece-button" onClick={() => onInspectPiece(item.piece.ref)}>{item.piece.label} → {item.rule.target}</button>
             <span className="order-actions">
-              <button aria-label={`Move ${item.label} earlier`} disabled={pending || index === 0} onClick={() => move(index, -1)}>↑</button>
-              <button aria-label={`Move ${item.label} later`} disabled={pending || index === pieces.length - 1} onClick={() => move(index, 1)}>↓</button>
+              <button aria-label={`Move ${item.piece.label} earlier`} disabled={pending || index === 0} onClick={() => move(index, -1)}>↑</button>
+              <button aria-label={`Move ${item.piece.label} later`} disabled={pending || index === pieces.length - 1} onClick={() => move(index, 1)}>↓</button>
             </span>
           </li>
         ))}

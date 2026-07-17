@@ -1,22 +1,22 @@
 # Web Application and Flow Development Mode
 
-> The implemented always-active piece inspector, undeveloped-piece markers,
-> target picking, draft validation, and development-order editor are specified
-> in [piece-development-authoring.md](piece-development-authoring.md). It
-> supersedes older left-panel sketches in this document.
+> Policy semantics and the current left-panel hierarchy are defined by
+> [rule-policy-v3.md](rule-policy-v3.md). Any priority, `enabled`, named-state,
+> `[[rules]]`, or version 2 material below is historical planning context and
+> does not override the v3 specification.
 
 ## Status
 
-Active design specification. The first local Development Mode slice and the
-deterministic-v2 rule editor are implemented; later analysis and Quiz surfaces
-remain planned.
+Active architecture and product-direction specification. The local
+deterministic-v3 Development Mode slice is implemented; later broad analysis
+and Quiz surfaces remain planned.
 
 This document defines the planned local web application, its relationship to the existing Python core and terminal interface, and the product behavior of Quiz Mode and Flow Development Mode.
 
 The deterministic rule-policy schema is defined separately in:
 
 ```text
-docs/design/rule-policy-v2.md
+docs/design/rule-policy-v3.md
 ```
 
 ---
