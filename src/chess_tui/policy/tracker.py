@@ -16,6 +16,8 @@ class OriginalPieceRuntime:
     current_square: chess.Square | None
     has_moved: bool = False
     captured: bool = False
+    first_moved_ply: int | None = None
+    captured_ply: int | None = None
 
 
 class OriginalPieceTracker:
@@ -45,7 +47,9 @@ class OriginalPieceTracker:
                 f"Original piece {piece_id} is absent from start_fen."
             ) from exc
 
-    def apply_move(self, board_before: chess.Board, move: chess.Move) -> None:
+    def apply_move(
+        self, board_before: chess.Board, move: chess.Move, *, ply: int
+    ) -> None:
         moving_id = self._by_square.get(move.from_square)
         if moving_id is None:
             raise ValueError(
@@ -60,11 +64,14 @@ class OriginalPieceTracker:
             captured = self._pieces[captured_id]
             captured.current_square = None
             captured.captured = True
+            captured.captured_ply = ply
 
         self._by_square.pop(move.from_square)
         moving = self._pieces[moving_id]
         moving.current_square = move.to_square
         moving.has_moved = True
+        if moving.first_moved_ply is None:
+            moving.first_moved_ply = ply
         if move.promotion is not None:
             moving.piece_type = move.promotion
         self._by_square[move.to_square] = moving_id
@@ -81,4 +88,6 @@ class OriginalPieceTracker:
                 rook = self._pieces[rook_id]
                 rook.current_square = rook_to
                 rook.has_moved = True
+                if rook.first_moved_ply is None:
+                    rook.first_moved_ply = ply
                 self._by_square[rook_to] = rook_id

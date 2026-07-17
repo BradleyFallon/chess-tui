@@ -25,6 +25,7 @@ from .models import (
     OccupiedCondition,
     OriginalPieceId,
     RuleLifecycle,
+    StartingPieceRef,
     StateCondition,
 )
 from .tracker import OriginalPieceRuntime, OriginalPieceTracker
@@ -50,6 +51,7 @@ __all__ = [
     "OriginalPieceRuntime",
     "OriginalPieceTracker",
     "RuleLifecycle",
+    "StartingPieceRef",
     "StateCondition",
     "condition_to_data",
     "parse_condition",

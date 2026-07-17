@@ -1,5 +1,10 @@
 # Deterministic Rule Policy — Version 2
 
+> Canonical authored piece references, typed development rules, compilation,
+> statuses, and intrinsic move/capture retirement are defined in
+> [piece-development-authoring.md](piece-development-authoring.md). That
+> specification supersedes older original-square authoring examples.
+
 ## Status
 
 Implemented design specification.
@@ -164,8 +169,8 @@ an explicit authoring action. Generated opening record ids are never persisted.
 Use:
 
 ```text
-white:g1
-black:b8
+piece:white:knight:kingside
+piece:black:knight:queenside
 ```
 
 Do not use:
@@ -184,23 +189,28 @@ Each piece present in `start_fen` receives an identity based on:
 * Its color
 * Its starting square
 
+Authored data names that internal identity with `StartingPieceRef`. For example,
+`piece:white:pawn:d` maps to the internal
+`OriginalPieceId("white", "d2")`; original-square strings are not an authored
+syntax.
+
 Examples from the standard starting position:
 
 ```text
-white:d2
-white:c1
-white:g1
-black:b8
-black:g8
+piece:white:pawn:d
+piece:white:bishop:queenside
+piece:white:knight:kingside
+piece:black:knight:queenside
+piece:black:knight:kingside
 ```
 
 These identify specific original pieces:
 
 ```text
-white:d2  = White’s original d-pawn
-white:c1  = White’s original c1 bishop
-white:g1  = White’s original g1 knight
-black:b8  = Black’s original b8 knight
+piece:white:pawn:d  = White’s original d-pawn
+piece:white:bishop:queenside  = White’s original c1 bishop
+piece:white:knight:kingside  = White’s original g1 knight
+piece:black:knight:queenside  = Black’s original b8 knight
 ```
 
 Original-piece identity is different from current board occupancy.
@@ -234,7 +244,7 @@ Each rule specifies exactly one move using:
 
 ```toml
 move = {
-  piece = "white:c2",
+  piece = "piece:white:pawn:c",
   to = "c4",
 }
 ```
@@ -243,21 +253,21 @@ Other examples:
 
 ```toml
 move = {
-  piece = "white:d2",
+  piece = "piece:white:pawn:d",
   to = "d4",
 }
 ```
 
 ```toml
 move = {
-  piece = "white:c1",
+  piece = "piece:white:bishop:queenside",
   to = "f4",
 }
 ```
 
 ```toml
 move = {
-  piece = "white:g1",
+  piece = "piece:white:knight:kingside",
   to = "f3",
 }
 ```
@@ -277,7 +287,7 @@ For example:
 
 ```toml
 move = {
-  piece = "white:c2",
+  piece = "piece:white:pawn:c",
   to = "c4",
 }
 ```
@@ -324,15 +334,15 @@ id = "london-before-nf3"
 
 when = { all = [
   { at = {
-      piece = "white:d2",
+      piece = "piece:white:pawn:d",
       square = "d4",
   } },
   { at = {
-      piece = "white:c1",
+      piece = "piece:white:bishop:queenside",
       square = "f4",
   } },
   { at = {
-      piece = "white:e2",
+      piece = "piece:white:pawn:e",
       square = "e3",
   } },
 ] }
@@ -347,7 +357,7 @@ id = "london-core"
 when = { all = [
   { state = "london-before-nf3" },
   { at = {
-      piece = "white:g1",
+      piece = "piece:white:knight:kingside",
       square = "f3",
   } },
 ] }
@@ -376,16 +386,16 @@ priority = 700
 note = "Challenge Black's center after ...Nc6."
 
 move = {
-  piece = "white:c2",
+  piece = "piece:white:pawn:c",
   to = "c4",
 }
 
 activate_when = { at = {
-  piece = "black:b8",
+  piece = "piece:black:knight:queenside",
   square = "c6",
 } }
 
-retire_when = { moved = "white:c2" }
+retire_when = { moved = "piece:white:pawn:c" }
 ```
 
 ## Required fields
@@ -472,7 +482,7 @@ Example:
 
 ```toml
 activate_when = { at = {
-  piece = "black:b8",
+  piece = "piece:black:knight:queenside",
   square = "c6",
 } }
 ```
@@ -500,7 +510,7 @@ When the retirement condition becomes true, the rule is permanently retired on t
 Example:
 
 ```toml
-retire_when = { moved = "white:d2" }
+retire_when = { moved = "piece:white:pawn:d" }
 ```
 
 This means the rule is no longer relevant once White’s original d-pawn has moved.
@@ -553,7 +563,7 @@ Arbitrary expressions, scripts, and user-defined code are not supported.
 ## 13.1 `moved`
 
 ```toml
-{ moved = "white:g1" }
+{ moved = "piece:white:knight:kingside" }
 ```
 
 True when the original piece has made at least one move.
@@ -566,7 +576,7 @@ This remains true if the piece later returns to its starting square.
 
 ```toml
 { at = {
-    piece = "black:b8",
+    piece = "piece:black:knight:queenside",
     square = "c6",
 } }
 ```
@@ -617,7 +627,7 @@ This predicate does not identify the original piece.
 ## 13.6 `attacked`
 
 ```toml
-{ attacked = "white:c1" }
+{ attacked = "piece:white:bishop:queenside" }
 ```
 
 True when the specified original piece:
@@ -633,8 +643,8 @@ The piece may be on any current square.
 
 ```toml
 { attacked_by = {
-    target = "white:c1",
-    attacker = "black:g8",
+    target = "piece:white:bishop:queenside",
+    attacker = "piece:black:knight:kingside",
 } }
 ```
 
@@ -670,8 +680,8 @@ True when the named state evaluates true.
 
 ```toml
 activate_when = { all = [
-  { moved = "white:d2" },
-  { moved = "white:c1" },
+  { moved = "piece:white:pawn:d" },
+  { moved = "piece:white:bishop:queenside" },
 ] }
 ```
 
@@ -682,11 +692,11 @@ True when all nested conditions are true.
 ```toml
 activate_when = { any = [
   { at = {
-      piece = "black:b8",
+      piece = "piece:black:knight:queenside",
       square = "c6",
   } },
   { at = {
-      piece = "black:b8",
+      piece = "piece:black:knight:queenside",
       square = "a6",
   } },
 ] }
@@ -882,21 +892,27 @@ class OriginalPieceRuntime:
     current_square: chess.Square | None
     has_moved: bool
     captured: bool
+    first_moved_ply: int | None
+    captured_ply: int | None
 ```
 
 Example:
 
 ```python
 {
-    "white:d2": OriginalPieceRuntime(
+    OriginalPieceId("white", "d2"): OriginalPieceRuntime(
         current_square=chess.D4,
         has_moved=True,
         captured=False,
+        first_moved_ply=1,
+        captured_ply=None,
     ),
-    "white:c1": OriginalPieceRuntime(
+    OriginalPieceId("white", "c1"): OriginalPieceRuntime(
         current_square=chess.F4,
         has_moved=True,
         captured=False,
+        first_moved_ply=3,
+        captured_ply=None,
     ),
 }
 ```
@@ -916,13 +932,13 @@ Once lifecycle behavior works, rules should be indexed by facts that may activat
 Example indexes:
 
 ```text
-at:black:b8:c6
+at:piece:black:knight:queenside:c6
     → play-c4-against-nc6
 
-attacked:white:c1
+attacked:piece:white:bishop:queenside
     → retreat-dark-bishop
 
-moved:white:d2
+moved:piece:white:pawn:d
     → develop-dark-bishop
 
 state:london-before-nf3
@@ -967,15 +983,15 @@ id = "london-before-nf3"
 
 when = { all = [
   { at = {
-      piece = "white:d2",
+      piece = "piece:white:pawn:d",
       square = "d4",
   } },
   { at = {
-      piece = "white:c1",
+      piece = "piece:white:bishop:queenside",
       square = "f4",
   } },
   { at = {
-      piece = "white:e2",
+      piece = "piece:white:pawn:e",
       square = "e3",
   } },
 ] }
@@ -986,12 +1002,12 @@ priority = 1000
 note = "Preserve the London bishop before continuing development."
 
 move = {
-  piece = "white:c1",
+  piece = "piece:white:bishop:queenside",
   to = "g3",
 }
 
 activate_when = {
-  attacked = "white:c1",
+  attacked = "piece:white:bishop:queenside",
 }
 
 [[rules]]
@@ -1000,17 +1016,17 @@ priority = 700
 note = "Challenge Black's center after ...Nc6."
 
 move = {
-  piece = "white:c2",
+  piece = "piece:white:pawn:c",
   to = "c4",
 }
 
 activate_when = { at = {
-  piece = "black:b8",
+  piece = "piece:black:knight:queenside",
   square = "c6",
 } }
 
 retire_when = {
-  moved = "white:c2",
+  moved = "piece:white:pawn:c",
 }
 
 [[rules]]
@@ -1019,12 +1035,12 @@ priority = 400
 note = "Claim the center."
 
 move = {
-  piece = "white:d2",
+  piece = "piece:white:pawn:d",
   to = "d4",
 }
 
 retire_when = {
-  moved = "white:d2",
+  moved = "piece:white:pawn:d",
 }
 
 [[rules]]
@@ -1033,16 +1049,16 @@ priority = 390
 note = "Develop the bishop outside the pawn chain."
 
 move = {
-  piece = "white:c1",
+  piece = "piece:white:bishop:queenside",
   to = "f4",
 }
 
 activate_when = {
-  moved = "white:d2",
+  moved = "piece:white:pawn:d",
 }
 
 retire_when = {
-  moved = "white:c1",
+  moved = "piece:white:bishop:queenside",
 }
 
 [[rules]]
@@ -1051,17 +1067,17 @@ priority = 380
 note = "Support d4 and open the light-squared bishop."
 
 move = {
-  piece = "white:e2",
+  piece = "piece:white:pawn:e",
   to = "e3",
 }
 
 activate_when = { all = [
-  { moved = "white:d2" },
-  { moved = "white:c1" },
+  { moved = "piece:white:pawn:d" },
+  { moved = "piece:white:bishop:queenside" },
 ] }
 
 retire_when = {
-  moved = "white:e2",
+  moved = "piece:white:pawn:e",
 }
 
 [[rules]]
@@ -1070,7 +1086,7 @@ priority = 370
 note = "Complete the basic London development."
 
 move = {
-  piece = "white:g1",
+  piece = "piece:white:knight:kingside",
   to = "f3",
 }
 
@@ -1079,7 +1095,7 @@ activate_when = {
 }
 
 retire_when = {
-  moved = "white:g1",
+  moved = "piece:white:knight:kingside",
 }
 ```
 
@@ -1217,7 +1233,7 @@ used by abstract rules:
 id = "after-d4-e5"
 after = ["d4", "e5"]
 note = "Capture the offered pawn."
-move = { piece = "white:d2", to = "e5" }
+move = { piece = "piece:white:pawn:d", to = "e5" }
 ```
 
 The loader replays `after` from `start_fen` and indexes the override by the
@@ -1520,7 +1536,7 @@ The runtime should track capture immediately.
 An authored predicate such as:
 
 ```toml
-{ captured = "white:c1" }
+{ captured = "piece:white:bishop:queenside" }
 ```
 
 may be added later if real flow designs require it.
@@ -1543,7 +1559,7 @@ Promotion actions may later require:
 
 ```toml
 move = {
-  piece = "white:a2",
+  piece = "piece:white:pawn:a",
   to = "a8",
   promote = "queen",
 }

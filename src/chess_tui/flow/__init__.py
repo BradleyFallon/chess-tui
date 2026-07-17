@@ -3,6 +3,8 @@
 from .author import AuthorBoardController, ConfirmedAuthorMove, FlowAuthor
 from .errors import FlowError, FlowPolicyError, FlowStorageError, FlowValidationError
 from .models import (
+    AuthoredRule,
+    DevelopmentRule,
     ExactOverride,
     Flow,
     NamedState,
@@ -16,8 +18,10 @@ from .workspace import AttemptResult, FlowWorkspace, PolicyMoveAttempt, PolicyTu
 
 __all__ = [
     "AttemptResult",
+    "AuthoredRule",
     "AuthorBoardController",
     "ConfirmedAuthorMove",
+    "DevelopmentRule",
     "ExactOverride",
     "Flow",
     "FlowAuthor",

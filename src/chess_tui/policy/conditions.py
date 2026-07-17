@@ -23,6 +23,7 @@ from .models import (
     OccupiedByCondition,
     OccupiedCondition,
     OriginalPieceId,
+    StartingPieceRef,
     StateCondition,
 )
 from .tracker import OriginalPieceTracker
@@ -92,9 +93,14 @@ def parse_condition(value: object, *, context: str = "condition") -> Condition:
 
 def condition_to_data(condition: Condition) -> dict[str, object]:
     if isinstance(condition, MovedCondition):
-        return {"moved": str(condition.piece)}
+        return {"moved": str(StartingPieceRef.from_original(condition.piece))}
     if isinstance(condition, AtCondition):
-        return {"at": {"piece": str(condition.piece), "square": condition.square}}
+        return {
+            "at": {
+                "piece": str(StartingPieceRef.from_original(condition.piece)),
+                "square": condition.square,
+            }
+        }
     if isinstance(condition, OccupiedCondition):
         return {"occupied": condition.square}
     if isinstance(condition, EmptyCondition):
@@ -108,12 +114,12 @@ def condition_to_data(condition: Condition) -> dict[str, object]:
             }
         }
     if isinstance(condition, AttackedCondition):
-        return {"attacked": str(condition.piece)}
+        return {"attacked": str(StartingPieceRef.from_original(condition.piece))}
     if isinstance(condition, AttackedByCondition):
         return {
             "attacked_by": {
-                "target": str(condition.target),
-                "attacker": str(condition.attacker),
+                "target": str(StartingPieceRef.from_original(condition.target)),
+                "attacker": str(StartingPieceRef.from_original(condition.attacker)),
             }
         }
     if isinstance(condition, InCheckCondition):
@@ -168,15 +174,17 @@ class ConditionEvaluator:
     ) -> ConditionResult:
         if isinstance(condition, MovedCondition):
             value = self.tracker.get(condition.piece).has_moved
+            label = StartingPieceRef.from_original(condition.piece).label
             return ConditionResult(
-                value, f"{condition.piece} has{' ' if value else ' not '}moved"
+                value, f"{label} has{' ' if value else ' not '}moved"
             )
         if isinstance(condition, AtCondition):
             runtime = self.tracker.get(condition.piece)
             value = runtime.current_square == chess.parse_square(condition.square)
+            label = StartingPieceRef.from_original(condition.piece).label
             return ConditionResult(
                 value,
-                f"{condition.piece} is{' ' if value else ' not '}on {condition.square}",
+                f"{label} is{' ' if value else ' not '}on {condition.square}",
             )
         if isinstance(condition, OccupiedCondition):
             value = (
@@ -208,8 +216,9 @@ class ConditionEvaluator:
             value = runtime.current_square is not None and self.board.is_attacked_by(
                 not color, runtime.current_square
             )
+            label = StartingPieceRef.from_original(condition.piece).label
             return ConditionResult(
-                value, f"{condition.piece} is{' ' if value else ' not '}attacked"
+                value, f"{label} is{' ' if value else ' not '}attacked"
             )
         if isinstance(condition, AttackedByCondition):
             target = self.tracker.get(condition.target).current_square
@@ -219,9 +228,12 @@ class ConditionEvaluator:
                 and attacker is not None
                 and target in self.board.attacks(attacker)
             )
+            target_label = StartingPieceRef.from_original(condition.target).label
+            attacker_label = StartingPieceRef.from_original(condition.attacker).label
             return ConditionResult(
                 value,
-                f"{condition.target} is{' ' if value else ' not '}attacked by {condition.attacker}",
+                f"{target_label} is{' ' if value else ' not '}attacked by "
+                f"{attacker_label}",
             )
         if isinstance(condition, InCheckCondition):
             color = chess.WHITE if condition.color == "white" else chess.BLACK
@@ -274,8 +286,8 @@ def _exact_mapping(value: object, fields: set[str], context: str) -> dict[str, A
 
 def _piece_id(value: object, context: str) -> OriginalPieceId:
     if not isinstance(value, str):
-        raise TypeError(f"{context} original-piece id must be a string.")
-    return OriginalPieceId.parse(value)
+        raise TypeError(f"{context} starting-piece reference must be a string.")
+    return StartingPieceRef.parse(value).original_piece_id
 
 
 def _square(value: object, context: str) -> str:

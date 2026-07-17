@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from ..policy.models import Condition, MoveAction
+from ..policy.models import Condition, MoveAction, MovedCondition, StartingPieceRef
 
 FlowSide: TypeAlias = Literal["white", "black"]
 
@@ -31,6 +31,36 @@ class PolicyRule:
     note: str | None = None
     activate_when: Condition | None = None
     retire_when: Condition | None = None
+    kind: Literal["generic", "development"] = "generic"
+    development_ref: StartingPieceRef | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class DevelopmentRule:
+    id: str
+    piece: StartingPieceRef
+    target: str
+    priority: int
+    enabled: bool = True
+    note: str | None = None
+    ready_when: Condition | None = None
+
+    def compile(self) -> PolicyRule:
+        piece_id = self.piece.original_piece_id
+        return PolicyRule(
+            id=self.id,
+            priority=self.priority,
+            move=MoveAction(piece_id, self.target),
+            enabled=self.enabled,
+            note=self.note,
+            activate_when=self.ready_when,
+            retire_when=MovedCondition(piece_id),
+            kind="development",
+            development_ref=self.piece,
+        )
+
+
+AuthoredRule: TypeAlias = PolicyRule | DevelopmentRule
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,6 +88,13 @@ class Flow:
     side: FlowSide
     opening_tags: tuple[OpeningTag, ...] = ()
     states: tuple[NamedState, ...] = ()
-    rules: tuple[PolicyRule, ...] = ()
+    rules: tuple[AuthoredRule, ...] = ()
     overrides: tuple[ExactOverride, ...] = ()
     opponent_replies: tuple[OpponentReply, ...] = ()
+
+    @property
+    def compiled_rules(self) -> tuple[PolicyRule, ...]:
+        return tuple(
+            rule.compile() if isinstance(rule, DevelopmentRule) else rule
+            for rule in self.rules
+        )

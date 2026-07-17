@@ -1,5 +1,8 @@
 # Documentation
 
+Piece-centered Development Mode authoring is specified in
+[`design/piece-development-authoring.md`](design/piece-development-authoring.md).
+
 ## Quiz demo architecture
 
 `chess-tui --mode quiz-demo` exercises the future external-provider boundary

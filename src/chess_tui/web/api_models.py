@@ -100,6 +100,28 @@ class UpdateOverrideRequest(ApiModel):
     move: MoveActionRequest
 
 
+class DevelopmentRuleDraftRequest(ApiModel):
+    id: str | None = Field(default=None, min_length=1, max_length=100)
+    piece: str = Field(min_length=3, max_length=80)
+    target: str = Field(min_length=2, max_length=2)
+    enabled: bool = True
+    note: str | None = None
+    ready_when: dict[str, object] | None = None
+
+
+class DevelopmentOrderRequest(ApiModel):
+    rule_ids: list[str] = Field(min_length=1)
+
+
+class DevelopmentRuleValidationResponse(ApiModel):
+    valid: bool
+    rule_id: str
+    piece: str
+    target: str
+    priority: int
+    errors: list[str] = Field(default_factory=list)
+
+
 class OpeningTagRequest(ApiModel):
     record_id: int = Field(ge=0)
 
@@ -167,6 +189,7 @@ class ConditionSnapshot(ApiModel):
 
 class RuleRuntimeSnapshot(ApiModel):
     kind: Literal["rule"] = "rule"
+    authored_kind: Literal["generic", "development"] = "generic"
     id: str
     priority: int
     enabled: bool
@@ -185,6 +208,38 @@ class RuleRuntimeSnapshot(ApiModel):
     activated_at_ply: int | None
     retired_at_ply: int | None
     reason: str
+
+
+class DevelopmentRuleSnapshot(ApiModel):
+    id: str
+    target: str
+    priority: int
+    order: int
+    status: Literal["dormant", "ready", "waiting", "selected", "retired", "disabled"]
+    ready_when: ConditionSnapshot | None
+    note: str | None
+    enabled: bool
+    reason: str
+
+
+class StartingPieceSnapshot(ApiModel):
+    ref: str
+    original_piece_id: str
+    color: Literal["white", "black"]
+    piece_type: Literal["pawn", "rook", "knight", "bishop", "queen", "king"]
+    qualifier: str | None
+    label: str
+    starting_square: str
+    current_square: str | None
+    state: Literal[
+        "undeveloped",
+        "developed",
+        "captured-undeveloped",
+        "captured-developed",
+    ]
+    first_moved_ply: int | None
+    captured_ply: int | None
+    development_rule: DevelopmentRuleSnapshot | None
 
 
 class OverrideRuntimeSnapshot(ApiModel):
@@ -491,6 +546,7 @@ class WorkspaceSnapshot(ApiModel):
     decision: DecisionSnapshot | None
     attempt: AttemptSnapshot | None
     rules: RuleGroupsSnapshot
+    starting_pieces: list[StartingPieceSnapshot] = Field(default_factory=list)
     opening: OpeningContextSnapshot
     opening_history: list[OpeningHistoryItemSnapshot] = Field(default_factory=list)
     evaluation: EvaluationSnapshot

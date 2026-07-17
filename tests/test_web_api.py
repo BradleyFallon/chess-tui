@@ -9,7 +9,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from chess_tui.engine import EngineProcessError, FixtureEngineService
-from chess_tui.flow import FlowStore
+from chess_tui.flow import DevelopmentRule, FlowStore
 from chess_tui.web.app import WebAppSettings, create_app
 
 FIXTURE = Path(__file__).parent / "fixtures" / "london-flow.toml"
@@ -73,6 +73,120 @@ def test_health_and_initial_v2_snapshot(tmp_path: Path) -> None:
             "inspect_book_history",
         } <= command_ids
         assert "restart" not in command_ids
+
+
+def test_starting_piece_snapshots_and_development_draft_operations(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        pieces = {item["ref"]: item for item in created["startingPieces"]}
+        d_pawn = pieces["piece:white:pawn:d"]
+        assert d_pawn["state"] == "undeveloped"
+        assert d_pawn["currentSquare"] == "d2"
+        assert d_pawn["developmentRule"]["status"] == "selected"
+        assert d_pawn["developmentRule"]["order"] == 1
+
+        draft = {
+            "id": None,
+            "piece": "piece:white:pawn:a",
+            "target": "a3",
+            "enabled": True,
+            "note": "Give the rook luft.",
+            "readyWhen": {"moved": "piece:white:pawn:d"},
+        }
+        validation = client.post(
+            f"/api/sessions/{session_id}/development-rules/validate",
+            json=draft,
+        )
+        assert validation.status_code == 200
+        assert validation.json()["valid"]
+        assert "piece:white:pawn:a" not in path.read_text(encoding="utf-8")
+
+        applied = client.post(
+            f"/api/sessions/{session_id}/development-rules", json=draft
+        )
+        assert applied.status_code == 200
+        a_pawn = next(
+            item
+            for item in applied.json()["startingPieces"]
+            if item["ref"] == "piece:white:pawn:a"
+        )
+        assert a_pawn["developmentRule"]["target"] == "a3"
+
+        development_ids = [
+            item["developmentRule"]["id"]
+            for item in applied.json()["startingPieces"]
+            if item["developmentRule"] is not None
+        ]
+        reordered = client.put(
+            f"/api/sessions/{session_id}/development-rules/order",
+            json={"ruleIds": list(reversed(development_ids))},
+        )
+        assert reordered.status_code == 200
+        orders = sorted(
+            (
+                item["developmentRule"]["order"],
+                item["developmentRule"]["id"],
+            )
+            for item in reordered.json()["startingPieces"]
+            if item["developmentRule"] is not None
+        )
+        assert [item[1] for item in orders] == list(reversed(development_ids))
+
+        deleted = client.delete(
+            f"/api/sessions/{session_id}/development-rules/develop-white-pawn-a"
+        )
+        assert deleted.status_code == 200
+        a_pawn = next(
+            item
+            for item in deleted.json()["startingPieces"]
+            if item["ref"] == "piece:white:pawn:a"
+        )
+        assert a_pawn["developmentRule"] is None
+
+
+def test_invalid_development_preview_and_apply_preserve_valid_state(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        original = path.read_text(encoding="utf-8")
+        invalid = {
+            "id": None,
+            "piece": "piece:white:pawn:queenside",
+            "target": "z9",
+            "enabled": True,
+            "readyWhen": None,
+        }
+        preview = client.post(
+            f"/api/sessions/{session_id}/development-rules/validate",
+            json=invalid,
+        )
+        assert preview.status_code == 200
+        assert not preview.json()["valid"]
+        assert path.read_text(encoding="utf-8") == original
+
+        applied = client.post(
+            f"/api/sessions/{session_id}/development-rules", json=invalid
+        )
+        assert applied.status_code == 422
+        assert path.read_text(encoding="utf-8") == original
+
+        generic_edit = client.put(
+            f"/api/sessions/{session_id}/rules/develop-d-pawn",
+            json={
+                "priority": 1000,
+                "enabled": True,
+                "move": {"piece": "piece:white:pawn:d", "to": "d3"},
+                "activateWhen": None,
+                "retireWhen": None,
+            },
+        )
+        assert generic_edit.status_code == 422
+        assert path.read_text(encoding="utf-8") == original
 
 
 def test_typed_commands_drive_moves_hints_and_phase_availability(
@@ -279,7 +393,7 @@ def test_deterministic_chat_answers_cover_decision_rules_trace_and_position(
             f"/api/sessions/{session_id}/chat", json={"text": "/why"}
         ).json()["workspace"]["chat"][-1]["attachment"]
         assert why["selected"]["id"] == "develop-d-pawn"
-        assert why["selected"]["priority"] == 400
+        assert why["selected"]["priority"] == 1000
         assert "user-authored-note" in why["provenance"]
 
         position = client.post(
@@ -308,7 +422,7 @@ def test_exact_override_explanations_and_inspection(tmp_path: Path) -> None:
             json={"text": "/rule after-d4-e5"},
         ).json()["workspace"]["chat"][-1]["attachment"]
         assert details["rule"]["kind"] == "exact-override"
-        assert details["rule"]["piece"] == "white:d2"
+        assert details["rule"]["piece"] == "piece:white:pawn:d"
         assert details["rule"]["selected"] is True
 
 
@@ -526,27 +640,29 @@ def test_rule_edit_is_atomic_and_reassesses_pending_attempt(tmp_path: Path) -> N
     with web_client(tmp_path) as (client, path):
         created = session(client)
         session_id = created["sessionId"]
-        move(client, session_id, "e2e4")
+        move(client, session_id, "d2d3")
         payload = {
-            "priority": 400,
+            "id": "develop-d-pawn",
+            "piece": "piece:white:pawn:d",
+            "target": "d3",
             "enabled": True,
-            "note": "Claim with e4.",
-            "move": {"piece": "white:e2", "to": "e4"},
-            "activateWhen": None,
-            "retireWhen": {"moved": "white:e2"},
+            "note": "Claim with d3.",
+            "readyWhen": None,
         }
-        response = client.put(
-            f"/api/sessions/{session_id}/rules/develop-d-pawn", json=payload
+        response = client.post(
+            f"/api/sessions/{session_id}/development-rules", json=payload
         )
         assert response.status_code == 200
         assert response.json()["phase"] == "opponent-ready"
-        assert response.json()["position"]["historySan"] == ["e4"]
-        assert FlowStore().load(path).rules[0].move.to_square == "e4"
+        assert response.json()["position"]["historySan"] == ["d3"]
+        saved = FlowStore().load(path).rules[0]
+        assert isinstance(saved, DevelopmentRule)
+        assert saved.target == "d3"
 
         original = path.read_text(encoding="utf-8")
-        payload["priority"] = 390
-        failed = client.put(
-            f"/api/sessions/{session_id}/rules/develop-d-pawn", json=payload
+        payload["target"] = "zz"
+        failed = client.post(
+            f"/api/sessions/{session_id}/development-rules", json=payload
         )
         assert failed.status_code == 422
         assert path.read_text(encoding="utf-8") == original
@@ -560,7 +676,7 @@ def test_override_edit_and_validation(tmp_path: Path) -> None:
             "afterSan": ["d4", "e5"],
             "enabled": False,
             "note": "Temporarily disabled",
-            "move": {"piece": "white:d2", "to": "e5"},
+            "move": {"piece": "piece:white:pawn:d", "to": "e5"},
         }
         response = client.put(
             f"/api/sessions/{session_id}/overrides/after-d4-e5", json=payload

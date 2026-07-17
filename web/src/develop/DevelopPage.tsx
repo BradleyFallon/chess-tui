@@ -3,6 +3,7 @@ import { Link } from "react-router-dom";
 
 import { BoardPanel } from "../components/BoardPanel";
 import { EvaluationBar } from "../components/EvaluationBar";
+import { PieceDevelopmentPanel } from "../components/PieceDevelopmentPanel";
 import { RuleStatusPanel } from "../components/RuleStatusPanel";
 import { StatusFeed } from "../components/StatusFeed";
 import { useWorkspace } from "./WorkspaceContext";
@@ -21,6 +22,10 @@ export function DevelopPage() {
     executeCommand,
     updateRule,
     updateOverride,
+    validateDevelopmentRule,
+    applyDevelopmentRule,
+    deleteDevelopmentRule,
+    reorderDevelopmentRules,
     addOpeningTag,
     removeOpeningTag,
   } = useWorkspace();
@@ -28,6 +33,9 @@ export function DevelopPage() {
     () => localStorage.getItem(AUTO_RESPOND_KEY) === "true",
   );
   const autoRespondedPosition = useRef<string | null>(null);
+  const [selectedPieceRef, setSelectedPieceRef] = useState<string | null>(null);
+  const [targetPicking, setTargetPicking] = useState(false);
+  const [pickedTarget, setPickedTarget] = useState<string | null>(null);
 
   useEffect(() => {
     localStorage.setItem(AUTO_RESPOND_KEY, String(autoRespond));
@@ -88,6 +96,9 @@ export function DevelopPage() {
   }
   const hintMoveUci = effects.find((effect) => effect.kind === "highlight-move")?.uci ?? null;
   const hintVisible = hintMoveUci !== null;
+  const selectedPiece = workspace.startingPieces.find(
+    (piece) => piece.ref === selectedPieceRef,
+  ) ?? null;
   return (
     <main className="develop-page">
       <header className="app-header">
@@ -134,6 +145,28 @@ export function DevelopPage() {
           onUpdateOverride={(overrideId, update) => void updateOverride(overrideId, update)}
           onBack={() => void executeCommand({ command: "go_back", source: "ui" })}
           onRestart={() => void executeCommand({ command: "restart", source: "ui" })}
+          inspector={
+            <PieceDevelopmentPanel
+              key={`${selectedPiece?.ref ?? "none"}:${selectedPiece?.developmentRule?.id ?? "none"}:${selectedPiece?.developmentRule?.target ?? "none"}`}
+              workspace={workspace}
+              piece={selectedPiece}
+              pending={pending}
+              pickedTarget={pickedTarget}
+              onBeginTargetPick={() => {
+                setPickedTarget(null);
+                setTargetPicking(true);
+              }}
+              onCancelTargetPick={() => {
+                setTargetPicking(false);
+                setPickedTarget(null);
+              }}
+              onValidate={validateDevelopmentRule}
+              onApply={applyDevelopmentRule}
+              onDelete={deleteDevelopmentRule}
+              onReorder={reorderDevelopmentRules}
+              onInspectPiece={(pieceRef) => setSelectedPieceRef(pieceRef)}
+            />
+          }
         />
         <div className="board-region">
           <EvaluationBar
@@ -144,6 +177,18 @@ export function DevelopPage() {
             workspace={workspace}
             pending={pending}
             hintMoveUci={hintMoveUci}
+            selectedPieceRef={selectedPieceRef}
+            onInspectPiece={(pieceRef) => {
+              setSelectedPieceRef(pieceRef);
+              setTargetPicking(false);
+              setPickedTarget(null);
+            }}
+            targetPicking={targetPicking}
+            pickedTarget={pickedTarget}
+            onPickTarget={(square) => {
+              setPickedTarget(square);
+              setTargetPicking(false);
+            }}
             onMove={(uci) => {
               void executeCommand({ command: "play_move", source: "ui", notation: "uci", move: uci });
             }}

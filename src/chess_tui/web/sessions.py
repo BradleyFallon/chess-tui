@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 import secrets
 from typing import Literal, cast
@@ -30,7 +30,9 @@ from ..engine import (
 )
 from ..flow import (
     AttemptResult,
+    DevelopmentRule,
     ExactOverride,
+    Flow,
     FlowError,
     FlowStorageError,
     FlowStore,
@@ -49,7 +51,12 @@ from ..opening import (
     OpeningDataError,
     OpeningSourceError,
 )
-from ..policy import MoveAction, OriginalPieceId, condition_to_data, parse_condition
+from ..policy import (
+    MoveAction,
+    StartingPieceRef,
+    condition_to_data,
+    parse_condition,
+)
 from ..policy.conditions import ConditionEvaluator
 from ..policy.models import EffectiveRuleStatus
 from ..policy.runtime import (
@@ -75,6 +82,10 @@ from .api_models import (
     DecisionSnapshot,
     DecisionExplanationAttachment,
     DecisionTraceAttachment,
+    DevelopmentOrderRequest,
+    DevelopmentRuleDraftRequest,
+    DevelopmentRuleSnapshot,
+    DevelopmentRuleValidationResponse,
     EngineHealth,
     EngineMoveSnapshot,
     EngineReviewSnapshot,
@@ -101,6 +112,7 @@ from .api_models import (
     RuleGroupsSnapshot,
     RuleListAttachment,
     RuleRuntimeSnapshot,
+    StartingPieceSnapshot,
     UpdateOverrideRequest,
     UpdateRuleRequest,
     ValidationErrorAttachment,
@@ -823,9 +835,20 @@ class SessionManager:
         async with session.lock:
             workspace = session.workspace
             opening_ply_before = len(workspace.opening_history)
-            if all(rule.id != rule_id for rule in workspace.author.flow.rules):
+            existing_rule = next(
+                (rule for rule in workspace.author.flow.rules if rule.id == rule_id),
+                None,
+            )
+            if existing_rule is None:
                 raise WebApiError(
                     ApiErrorCode.INVALID_REQUEST, f"Unknown rule id {rule_id!r}."
+                )
+            if isinstance(existing_rule, DevelopmentRule):
+                raise WebApiError(
+                    ApiErrorCode.INVALID_REQUEST,
+                    "Development rules must be edited through the "
+                    "piece-development draft endpoint.",
+                    status_code=422,
                 )
             try:
                 replacement = PolicyRule(
@@ -834,7 +857,8 @@ class SessionManager:
                     enabled=payload.enabled,
                     note=_clean_note(payload.note),
                     move=MoveAction(
-                        OriginalPieceId.parse(payload.move.piece), payload.move.to
+                        StartingPieceRef.parse(payload.move.piece).original_piece_id,
+                        payload.move.to,
                     ),
                     activate_when=(
                         parse_condition(payload.activate_when, context="activateWhen")
@@ -867,6 +891,114 @@ class SessionManager:
             )
             return await self._snapshot(session)
 
+    async def validate_development_rule(
+        self, session_id: str, payload: DevelopmentRuleDraftRequest
+    ) -> DevelopmentRuleValidationResponse:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            try:
+                rule, candidate = _development_candidate(workspace, payload)
+                source = workspace.author.store.encode(candidate)
+                reparsed = workspace.author.store.decode(
+                    source, context="development rule preview"
+                )
+                history = (
+                    workspace.attempt.history_before
+                    if workspace.attempt is not None
+                    else tuple(workspace.history)
+                )
+                from ..policy.runtime import PolicyRuntime
+
+                PolicyRuntime.replay(reparsed, history)
+            except (TypeError, ValueError, FlowError) as error:
+                return DevelopmentRuleValidationResponse(
+                    valid=False,
+                    rule_id=payload.id or _development_rule_id(payload.piece),
+                    piece=payload.piece,
+                    target=payload.target,
+                    priority=0,
+                    errors=[str(error)],
+                )
+            return DevelopmentRuleValidationResponse(
+                valid=True,
+                rule_id=rule.id,
+                piece=str(rule.piece),
+                target=rule.target,
+                priority=rule.priority,
+            )
+
+    async def apply_development_rule(
+        self, session_id: str, payload: DevelopmentRuleDraftRequest
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            try:
+                rule, _candidate = _development_candidate(workspace, payload)
+                workspace.save_development_rule(rule)
+            except (TypeError, ValueError, FlowError) as error:
+                if isinstance(error, FlowError):
+                    raise
+                raise WebApiError(
+                    ApiErrorCode.FLOW_VALIDATION_ERROR,
+                    str(error),
+                    status_code=422,
+                ) from error
+            self._append_activity(
+                session,
+                "info",
+                f"Applied development rule {rule.id}",
+                "The flow was validated, saved atomically, and replayed.",
+            )
+            return await self._snapshot(session)
+
+    async def delete_development_rule(
+        self, session_id: str, rule_id: str
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            try:
+                session.workspace.delete_development_rule(rule_id)
+            except (ValueError, FlowError) as error:
+                if isinstance(error, FlowError):
+                    raise
+                raise WebApiError(
+                    ApiErrorCode.FLOW_VALIDATION_ERROR,
+                    str(error),
+                    status_code=422,
+                ) from error
+            self._append_activity(
+                session,
+                "info",
+                f"Deleted development rule {rule_id}",
+                "The flow was validated, saved atomically, and replayed.",
+            )
+            return await self._snapshot(session)
+
+    async def reorder_development_rules(
+        self, session_id: str, payload: DevelopmentOrderRequest
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            try:
+                session.workspace.reorder_development_rules(tuple(payload.rule_ids))
+            except (ValueError, FlowError) as error:
+                if isinstance(error, FlowError):
+                    raise
+                raise WebApiError(
+                    ApiErrorCode.FLOW_VALIDATION_ERROR,
+                    str(error),
+                    status_code=422,
+                ) from error
+            self._append_activity(
+                session,
+                "info",
+                "Updated development order",
+                "Unique priorities were generated, saved atomically, and replayed.",
+            )
+            return await self._snapshot(session)
+
     async def update_override(
         self, session_id: str, override_id: str, payload: UpdateOverrideRequest
     ) -> WorkspaceSnapshot:
@@ -886,7 +1018,8 @@ class SessionManager:
                     enabled=payload.enabled,
                     note=_clean_note(payload.note),
                     move=MoveAction(
-                        OriginalPieceId.parse(payload.move.piece), payload.move.to
+                        StartingPieceRef.parse(payload.move.piece).original_piece_id,
+                        payload.move.to,
                     ),
                 )
                 workspace.update_override(replacement)
@@ -1064,6 +1197,7 @@ class SessionManager:
         visible_history = list(workspace.history)
         if workspace.attempt is not None:
             visible_history.append(workspace.attempt.selected_move.san)
+        rule_groups = _rule_groups(workspace, decision)
         return WorkspaceSnapshot(
             session_id=session.id,
             phase=phase,  # type: ignore[arg-type]
@@ -1109,7 +1243,8 @@ class SessionManager:
             ),
             decision=_decision_snapshot(decision),
             attempt=attempt,
-            rules=_rule_groups(workspace, decision),
+            rules=rule_groups,
+            starting_pieces=_starting_piece_snapshots(workspace, rule_groups),
             opening=_opening_context_snapshot(workspace.get_current_opening_context()),
             opening_history=[
                 _opening_history_item(entry)
@@ -1363,6 +1498,71 @@ class SessionManager:
             return path.name
 
 
+def _development_candidate(
+    workspace: FlowWorkspace, payload: DevelopmentRuleDraftRequest
+) -> tuple[DevelopmentRule, Flow]:
+    piece = StartingPieceRef.parse(payload.piece)
+    ready_when = (
+        parse_condition(payload.ready_when, context="readyWhen")
+        if payload.ready_when is not None
+        else None
+    )
+    existing = None
+    if payload.id is not None:
+        existing = next(
+            (rule for rule in workspace.author.flow.rules if rule.id == payload.id),
+            None,
+        )
+        if not isinstance(existing, DevelopmentRule):
+            raise ValueError(f"Unknown development rule id {payload.id!r}.")
+    else:
+        existing = next(
+            (
+                rule
+                for rule in workspace.author.flow.rules
+                if isinstance(rule, DevelopmentRule) and rule.piece == piece
+            ),
+            None,
+        )
+    if existing is not None:
+        rule = replace(
+            existing,
+            piece=piece,
+            target=payload.target,
+            enabled=payload.enabled,
+            note=_clean_note(payload.note),
+            ready_when=ready_when,
+        )
+        return rule, workspace.author.candidate_with_rule(rule)
+
+    priorities = {rule.priority for rule in workspace.author.flow.rules}
+    priority = 1000
+    development_priorities = [
+        rule.priority
+        for rule in workspace.author.flow.rules
+        if isinstance(rule, DevelopmentRule)
+    ]
+    if development_priorities:
+        priority = min(development_priorities) - 100
+    while priority in priorities:
+        priority -= 1
+    rule = DevelopmentRule(
+        id=payload.id or _development_rule_id(str(piece)),
+        piece=piece,
+        target=payload.target,
+        priority=priority,
+        enabled=payload.enabled,
+        note=_clean_note(payload.note),
+        ready_when=ready_when,
+    )
+    return rule, workspace.author.candidate_with_added_development_rule(rule)
+
+
+def _development_rule_id(piece: str) -> str:
+    normalized = piece.removeprefix("piece:").replace(":", "-")
+    return f"develop-{normalized}"
+
+
 def _phase(workspace: FlowWorkspace) -> str:
     if workspace.outcome is not None:
         return "game-over"
@@ -1542,7 +1742,7 @@ def _rule_groups(
                 id=item.id,
                 enabled=item.enabled,
                 after_san=list(item.after_san),
-                piece=str(item.move.piece),
+                piece=str(StartingPieceRef.from_original(item.move.piece)),
                 destination=item.move.to_square,
                 move_uci=None,
                 move_san=None,
@@ -1567,12 +1767,105 @@ def _rule_groups(
     )
 
 
+def _starting_piece_snapshots(
+    workspace: FlowWorkspace, groups: RuleGroupsSnapshot
+) -> list[StartingPieceSnapshot]:
+    rule_snapshots: dict[str, RuleRuntimeSnapshot] = {}
+    if isinstance(groups.selected, RuleRuntimeSnapshot):
+        rule_snapshots[groups.selected.id] = groups.selected
+    for group in (
+        groups.applies_now,
+        groups.waiting,
+        groups.dormant,
+        groups.retired,
+        groups.disabled,
+    ):
+        rule_snapshots.update((item.id, item) for item in group)
+
+    development_rules = sorted(
+        (
+            rule
+            for rule in workspace.author.flow.rules
+            if isinstance(rule, DevelopmentRule)
+        ),
+        key=lambda item: item.priority,
+        reverse=True,
+    )
+    order_by_id = {
+        rule.id: order for order, rule in enumerate(development_rules, start=1)
+    }
+    development_by_piece = {rule.piece: rule for rule in development_rules}
+    controlled_color = workspace.author.flow.side
+    result: list[StartingPieceSnapshot] = []
+    for tracked in sorted(
+        workspace.runtime.tracker.pieces,
+        key=lambda item: item.id.start_square,
+    ):
+        if tracked.id.color != controlled_color:
+            continue
+        try:
+            ref = StartingPieceRef.from_original(tracked.id)
+        except ValueError:
+            continue
+        development_rule = development_by_piece.get(ref)
+        development_snapshot = None
+        if development_rule is not None:
+            runtime = rule_snapshots[development_rule.id]
+            status_map = {
+                "active": "ready",
+                "selected": "selected",
+                "waiting": "waiting",
+                "dormant": "dormant",
+                "retired": "retired",
+                "disabled": "disabled",
+            }
+            development_snapshot = DevelopmentRuleSnapshot(
+                id=development_rule.id,
+                target=development_rule.target,
+                priority=development_rule.priority,
+                order=order_by_id[development_rule.id],
+                status=status_map[runtime.status],  # type: ignore[arg-type]
+                ready_when=runtime.activate_when,
+                note=development_rule.note,
+                enabled=development_rule.enabled,
+                reason=runtime.reason,
+            )
+        if tracked.captured:
+            state = (
+                "captured-developed" if tracked.has_moved else "captured-undeveloped"
+            )
+        else:
+            state = "developed" if tracked.has_moved else "undeveloped"
+        result.append(
+            StartingPieceSnapshot(
+                ref=str(ref),
+                original_piece_id=str(tracked.id),
+                color=ref.color,
+                piece_type=ref.piece_type,
+                qualifier=ref.qualifier,
+                label=ref.label,
+                starting_square=tracked.id.start_square,
+                current_square=(
+                    chess.square_name(tracked.current_square)
+                    if tracked.current_square is not None
+                    else None
+                ),
+                state=state,  # type: ignore[arg-type]
+                first_moved_ply=tracked.first_moved_ply,
+                captured_ply=tracked.captured_ply,
+                development_rule=development_snapshot,
+            )
+        )
+    return result
+
+
 def _rule_snapshot(item: RuleResolution) -> RuleRuntimeSnapshot:
     return RuleRuntimeSnapshot(
         id=item.rule.id,
+        authored_kind=item.rule.kind,
         priority=item.rule.priority,
         enabled=item.rule.enabled,
-        piece=str(item.rule.move.piece),
+        piece=str(StartingPieceRef.from_original(item.rule.move.piece)),
         destination=item.rule.move.to_square,
         move_uci=item.move.uci() if item.move else None,
         move_san=item.move_san,
@@ -1595,7 +1888,7 @@ def _override_snapshot(item: OverrideResolution) -> OverrideRuntimeSnapshot:
         id=item.override.id,
         enabled=item.override.enabled,
         after_san=list(item.override.after_san),
-        piece=str(item.override.move.piece),
+        piece=str(StartingPieceRef.from_original(item.override.move.piece)),
         destination=item.override.move.to_square,
         move_uci=item.move.uci() if item.move else None,
         move_san=item.move_san,
@@ -1613,7 +1906,9 @@ def _passive_rule_snapshots(workspace: FlowWorkspace) -> list[RuleRuntimeSnapsho
     )
     snapshots: list[RuleRuntimeSnapshot] = []
     for rule in sorted(
-        workspace.author.flow.rules, key=lambda item: item.priority, reverse=True
+        workspace.author.flow.compiled_rules,
+        key=lambda item: item.priority,
+        reverse=True,
     ):
         state = workspace.runtime.rule_states[rule.id]
         if not rule.enabled:
@@ -1635,9 +1930,10 @@ def _passive_rule_snapshots(workspace: FlowWorkspace) -> list[RuleRuntimeSnapsho
         snapshots.append(
             RuleRuntimeSnapshot(
                 id=rule.id,
+                authored_kind=rule.kind,
                 priority=rule.priority,
                 enabled=rule.enabled,
-                piece=str(rule.move.piece),
+                piece=str(StartingPieceRef.from_original(rule.move.piece)),
                 destination=rule.move.to_square,
                 move_uci=None,
                 move_san=None,

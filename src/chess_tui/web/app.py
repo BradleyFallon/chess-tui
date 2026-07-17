@@ -21,6 +21,9 @@ from .api_models import (
     ChatRequest,
     CommandResponse,
     CreateSessionRequest,
+    DevelopmentOrderRequest,
+    DevelopmentRuleDraftRequest,
+    DevelopmentRuleValidationResponse,
     FlowSourceResponse,
     HealthResponse,
     MoveRequest,
@@ -289,6 +292,48 @@ def _register_api_routes(application: FastAPI) -> None:
         payload: UpdateRuleRequest,
     ) -> WorkspaceSnapshot:
         return await _manager(request).update_rule(session_id, rule_id, payload)
+
+    @application.post(
+        "/api/sessions/{session_id}/development-rules/validate",
+        response_model=DevelopmentRuleValidationResponse,
+    )
+    async def validate_development_rule(
+        request: Request,
+        session_id: str,
+        payload: DevelopmentRuleDraftRequest,
+    ) -> DevelopmentRuleValidationResponse:
+        return await _manager(request).validate_development_rule(session_id, payload)
+
+    @application.post(
+        "/api/sessions/{session_id}/development-rules",
+        response_model=WorkspaceSnapshot,
+    )
+    async def apply_development_rule(
+        request: Request,
+        session_id: str,
+        payload: DevelopmentRuleDraftRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).apply_development_rule(session_id, payload)
+
+    @application.delete(
+        "/api/sessions/{session_id}/development-rules/{rule_id}",
+        response_model=WorkspaceSnapshot,
+    )
+    async def delete_development_rule(
+        request: Request, session_id: str, rule_id: str
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).delete_development_rule(session_id, rule_id)
+
+    @application.put(
+        "/api/sessions/{session_id}/development-rules/order",
+        response_model=WorkspaceSnapshot,
+    )
+    async def reorder_development_rules(
+        request: Request,
+        session_id: str,
+        payload: DevelopmentOrderRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).reorder_development_rules(session_id, payload)
 
     @application.put(
         "/api/sessions/{session_id}/overrides/{override_id}",

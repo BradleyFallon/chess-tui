@@ -94,15 +94,34 @@ Screens, routes, and React components should coordinate and display state. They 
 
 ## Product invariants
 
+### Piece development authoring
+
+* Authored TOML, conditions, and mutation APIs use
+  `piece:<color>:<type>[:<qualifier>]`.
+* Pawns use file qualifiers `a` through `h`; rooks, knights, and bishops use
+  `queenside` or `kingside`; queens and kings have no qualifier.
+* `StartingPieceRef` maps this syntax to internal original-square identity.
+  Do not accept original-square strings in authored data.
+* `undeveloped` means the original piece exists and has never moved. Track
+  developed, captured-undeveloped, and captured-developed separately.
+* A `kind = "development"` rule is a typed authored variant compiled into the
+  existing `PolicyRule` runtime. Do not create a separate development resolver.
+* A development rule retires intrinsically when its assigned piece moves
+  anywhere or is captured. Only one development rule may assign a starting
+  piece.
+* Web Development Mode piece inspection is always active and coexists with move
+  selection. Python owns starting-piece identity, mechanical state, rule
+  status, and order priorities; React renders the returned snapshot.
+
 ### Deterministic flow policy
 
 * A flow controls White or Black explicitly.
 * Current persisted opening flows primarily control White.
 * Piece identifiers use explicit colors:
 
-  * `white:g1`
-  * `white:c1`
-  * `black:b8`
+  * `piece:white:knight:kingside`
+  * `piece:white:bishop:queenside`
+  * `piece:black:knight:queenside`
 * Do not use relative identifiers such as `us` and `them`.
 * A broad rule may match many board states.
 * Every individual rule specifies exactly one concrete move.
@@ -117,7 +136,7 @@ Abstract rule moves should use original-piece identity and a destination square.
 Example:
 
 ```toml
-move = { piece = "white:c2", to = "c4" }
+move = { piece = "piece:white:pawn:c", to = "c4" }
 ```
 
 SAN should normally be derived from the current board for display.

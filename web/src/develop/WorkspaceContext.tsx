@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { ApiError, workspaceApi } from "../api/client";
-import type { ClientEffect, OverrideUpdate, RuleUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
+import type { ClientEffect, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
 
 const SESSION_KEY = "chess-flow-development-session";
 
@@ -25,6 +25,10 @@ interface WorkspaceContextValue {
   executeCommand: (command: TypedCommand) => Promise<void>;
   updateRule: (ruleId: string, update: RuleUpdate) => Promise<void>;
   updateOverride: (overrideId: string, update: OverrideUpdate) => Promise<void>;
+  validateDevelopmentRule: (draft: DevelopmentRuleDraft) => Promise<DevelopmentRuleValidation>;
+  applyDevelopmentRule: (draft: DevelopmentRuleDraft) => Promise<void>;
+  deleteDevelopmentRule: (ruleId: string) => Promise<void>;
+  reorderDevelopmentRules: (ruleIds: string[]) => Promise<void>;
   addOpeningTag: (recordId: number) => Promise<void>;
   removeOpeningTag: (recordId: number) => Promise<void>;
 }
@@ -126,6 +130,13 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       executeCommand: (command) => operateCommand((id) => workspaceApi.executeCommand(id, command)),
       updateRule: (ruleId, update) => operate((id) => workspaceApi.updateRule(id, ruleId, update)),
       updateOverride: (overrideId, update) => operate((id) => workspaceApi.updateOverride(id, overrideId, update)),
+      validateDevelopmentRule: (draft) => {
+        if (!workspace) return Promise.reject(new Error("No active workspace."));
+        return workspaceApi.validateDevelopmentRule(workspace.sessionId, draft);
+      },
+      applyDevelopmentRule: (draft) => operate((id) => workspaceApi.applyDevelopmentRule(id, draft)),
+      deleteDevelopmentRule: (ruleId) => operate((id) => workspaceApi.deleteDevelopmentRule(id, ruleId)),
+      reorderDevelopmentRules: (ruleIds) => operate((id) => workspaceApi.reorderDevelopmentRules(id, ruleIds)),
       addOpeningTag: (recordId) => operate((id) => workspaceApi.addOpeningTag(id, recordId)),
       removeOpeningTag: (recordId) => operate((id) => workspaceApi.removeOpeningTag(id, recordId)),
     }),

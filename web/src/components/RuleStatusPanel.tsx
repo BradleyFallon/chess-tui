@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from "react";
+import { type FormEvent, type ReactNode, useState } from "react";
 
 import { workspaceApi, type FlowSourceResponse } from "../api/client";
 import type {
@@ -16,9 +16,10 @@ interface Props {
   onUpdateOverride: (id: string, update: OverrideUpdate) => void;
   onBack: () => void;
   onRestart: () => void;
+  inspector: ReactNode;
 }
 
-export function RuleStatusPanel({ workspace, pending, onUpdateRule, onUpdateOverride, onBack, onRestart }: Props) {
+export function RuleStatusPanel({ workspace, pending, onUpdateRule, onUpdateOverride, onBack, onRestart, inspector }: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"status" | "toml">("status");
   const [flowSource, setFlowSource] = useState<FlowSourceResponse | null>(null);
@@ -46,6 +47,18 @@ export function RuleStatusPanel({ workspace, pending, onUpdateRule, onUpdateOver
 
   return (
     <aside className="workspace-panel rules-panel" aria-labelledby="rules-heading">
+      <div className="rule-status-scroll development-left-scroll">
+        {inspector}
+        <section className="current-decision-compact" aria-labelledby="current-decision-heading">
+          <span className="eyebrow" id="current-decision-heading">Current decision</span>
+          {workspace.decision ? (
+            <>
+              <strong>{workspace.decision.moveSan ?? "Flow frontier"}</strong>
+              <span>{workspace.decision.sourceId ?? workspace.decision.source}</span>
+              {workspace.decision.note && <p>{workspace.decision.note}</p>}
+            </>
+          ) : <p className="muted">No controlled-side decision on this turn.</p>}
+        </section>
       <div className="section-heading-row">
         <h2 id="rules-heading">Rule status</h2>
         <span className="status-chip">{workspace.flow.policyModel}</span>
@@ -55,7 +68,7 @@ export function RuleStatusPanel({ workspace, pending, onUpdateRule, onUpdateOver
         <button id="rule-toml-tab" role="tab" aria-selected={activeTab === "toml"} aria-controls="rule-toml-panel" className={activeTab === "toml" ? "active" : ""} onClick={() => void loadToml()}>TOML</button>
       </div>
       {activeTab === "status" ? (
-        <div id="rule-status-panel" role="tabpanel" aria-labelledby="rule-status-tab" className="rule-status-scroll">
+        <div id="rule-status-panel" role="tabpanel" aria-labelledby="rule-status-tab">
           <RuleGroup title="Selected" count={selected ? 1 : 0} open>
             {selected ? <PolicyCard item={selected} pending={pending} editing={editing === keyFor(selected)} onEdit={() => setEditing(keyFor(selected))} onCancel={() => setEditing(null)} onUpdateRule={onUpdateRule} onUpdateOverride={onUpdateOverride} /> : <p className="muted">No policy action is selected.</p>}
           </RuleGroup>
@@ -77,6 +90,7 @@ export function RuleStatusPanel({ workspace, pending, onUpdateRule, onUpdateOver
           {flowSource && <pre aria-label="Flow TOML source"><code>{flowSource.content}</code></pre>}
         </div>
       )}
+      </div>
       <div className="button-row rules-navigation">
         <button onClick={onBack} disabled={pending || !workspace.navigation.canBack}>Back</button>
         <button onClick={onRestart} disabled={pending || !workspace.navigation.canRestart}>Restart</button>
@@ -103,7 +117,9 @@ function PolicyCard({ item, pending, editing, onEdit, onCancel, onUpdateRule, on
         <p className="rule-after">{item.reason}</p>
         {item.kind === "exact-override" && <p className="rule-after">After: {item.afterSan.join(" ") || "starting position"}</p>}
         {item.kind === "rule" && <RuleDiagnostics item={item} />}
-        <button className="rule-edit-button" onClick={onEdit} disabled={pending}>Edit {item.kind === "rule" ? "rule" : "override"}</button>
+        {item.kind !== "rule" || item.authoredKind === "generic" ? (
+          <button className="rule-edit-button" onClick={onEdit} disabled={pending}>Edit {item.kind === "rule" ? "rule" : "override"}</button>
+        ) : <span className="rule-edit-disabled">Edit this development rule from its piece inspector.</span>}
       </>}
     </section>
   );
@@ -157,8 +173,8 @@ function PolicyEditor({ item, pending, onCancel, onUpdateRule, onUpdateOverride 
     <label>Destination<input value={destination} onChange={(event) => setDestination(event.target.value)} minLength={2} maxLength={2} required /></label>
     <label>Reason / note<textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} /></label>
     {item.kind === "rule" ? <>
-      <label>Activation condition (JSON)<textarea value={activate} onChange={(event) => setActivate(event.target.value)} rows={4} placeholder='{"moved":"white:d2"}' /></label>
-      <label>Retirement condition (JSON)<textarea value={retire} onChange={(event) => setRetire(event.target.value)} rows={4} placeholder='{"moved":"white:c1"}' /></label>
+      <label>Activation condition (JSON)<textarea value={activate} onChange={(event) => setActivate(event.target.value)} rows={4} placeholder='{"moved":"piece:white:pawn:d"}' /></label>
+      <label>Retirement condition (JSON)<textarea value={retire} onChange={(event) => setRetire(event.target.value)} rows={4} placeholder='{"moved":"piece:white:bishop:queenside"}' /></label>
     </> : <label>Exact SAN prefix (JSON)<textarea value={after} onChange={(event) => setAfter(event.target.value)} rows={4} required /></label>}
     {error && <p className="inline-error" role="alert">{error}</p>}
     <div className="button-row"><button className="primary" type="submit" disabled={pending}>Save</button><button type="button" onClick={onCancel} disabled={pending}>Cancel</button></div>

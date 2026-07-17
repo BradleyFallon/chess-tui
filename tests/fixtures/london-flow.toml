@@ -5,42 +5,46 @@ side = "white"
 
 [[states]]
 id = "before-nf3"
-when = { all = [{ at = { piece = "white:d2", square = "d4" } }, { at = { piece = "white:c1", square = "f4" } }, { at = { piece = "white:e2", square = "e3" } }] }
+when = { all = [{ at = { piece = "piece:white:pawn:d", square = "d4" } }, { at = { piece = "piece:white:bishop:queenside", square = "f4" } }, { at = { piece = "piece:white:pawn:e", square = "e3" } }] }
 
 [[rules]]
 id = "develop-d-pawn"
-priority = 400
+priority = 1000
+kind = "development"
+piece = "piece:white:pawn:d"
+target = "d4"
 note = "Control the center."
-move = { piece = "white:d2", to = "d4" }
-retire_when = { moved = "white:d2" }
 
 [[rules]]
 id = "develop-dark-bishop"
-priority = 390
+priority = 900
+kind = "development"
+piece = "piece:white:bishop:queenside"
+target = "f4"
 note = "Develop outside the pawn chain."
-move = { piece = "white:c1", to = "f4" }
-activate_when = { moved = "white:d2" }
-retire_when = { moved = "white:c1" }
+ready_when = { moved = "piece:white:pawn:d" }
 
 [[rules]]
 id = "develop-e-pawn"
-priority = 380
-move = { piece = "white:e2", to = "e3" }
-activate_when = { all = [{ moved = "white:d2" }, { moved = "white:c1" }] }
-retire_when = { moved = "white:e2" }
+priority = 800
+kind = "development"
+piece = "piece:white:pawn:e"
+target = "e3"
+ready_when = { all = [{ moved = "piece:white:pawn:d" }, { moved = "piece:white:bishop:queenside" }] }
 
 [[rules]]
 id = "develop-knight"
-priority = 370
-move = { piece = "white:g1", to = "f3" }
-activate_when = { state = "before-nf3" }
-retire_when = { moved = "white:g1" }
+priority = 700
+kind = "development"
+piece = "piece:white:knight:kingside"
+target = "f3"
+ready_when = { state = "before-nf3" }
 
 [[overrides]]
 id = "after-d4-e5"
 after = ["d4", "e5"]
 note = "Capture the offered pawn."
-move = { piece = "white:d2", to = "e5" }
+move = { piece = "piece:white:pawn:d", to = "e5" }
 
 [[opponent_replies]]
 id = "after-d4-d5"

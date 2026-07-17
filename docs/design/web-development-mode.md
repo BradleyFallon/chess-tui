@@ -1,5 +1,10 @@
 # Web Application and Flow Development Mode
 
+> The implemented always-active piece inspector, undeveloped-piece markers,
+> target picking, draft validation, and development-order editor are specified
+> in [piece-development-authoring.md](piece-development-authoring.md). It
+> supersedes older left-panel sketches in this document.
+
 ## Status
 
 Active design specification. The first local Development Mode slice and the
@@ -612,7 +617,7 @@ Example:
 
 ```text
 Move:
-white:c2 → c4
+piece:white:pawn:c → c4
 ```
 
 The user then defines:
@@ -644,7 +649,7 @@ The underlying schema remains visible.
 
 ```toml
 activate_when = { at = {
-  piece = "black:b8",
+  piece = "piece:black:knight:queenside",
   square = "c6",
 } }
 ```
@@ -658,14 +663,14 @@ The application should suggest retirement based on the moving piece.
 For:
 
 ```text
-white:c2 → c4
+piece:white:pawn:c → c4
 ```
 
 the suggested retirement is:
 
 ```toml
 retire_when = {
-  moved = "white:c2",
+  moved = "piece:white:pawn:c",
 }
 ```
 
@@ -718,8 +723,8 @@ Compound conditions can be represented as a tree.
 
 ```text
 ALL
-├── black:b8 is on c6
-├── white:g1 has moved
+├── piece:black:knight:queenside is on c6
+├── piece:white:knight:kingside has moved
 └── NOT
     └── White is in check
 ```

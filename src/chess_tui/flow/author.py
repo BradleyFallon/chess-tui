@@ -11,7 +11,14 @@ import chess
 from ..board import ParsedFen, parse_fen
 from ..game import BoardInteraction, ChessMove
 from .errors import FlowValidationError
-from .models import ExactOverride, Flow, OpeningTag, OpponentReply, PolicyRule
+from .models import (
+    AuthoredRule,
+    DevelopmentRule,
+    ExactOverride,
+    Flow,
+    OpeningTag,
+    OpponentReply,
+)
 from .position import normalized_position_key, parse_legal_san, replay_san
 from .store import FlowStore
 
@@ -31,13 +38,75 @@ class FlowAuthor:
         self.flow = candidate
         return candidate
 
-    def candidate_with_rule(self, replacement: PolicyRule) -> Flow:
+    def candidate_with_rule(self, replacement: AuthoredRule) -> Flow:
         if all(rule.id != replacement.id for rule in self.flow.rules):
             raise FlowValidationError(f"Unknown rule id: {replacement.id!r}.")
         return replace(
             self.flow,
             rules=tuple(
                 replacement if rule.id == replacement.id else rule
+                for rule in self.flow.rules
+            ),
+        )
+
+    def candidate_with_added_development_rule(
+        self, development_rule: DevelopmentRule
+    ) -> Flow:
+        if any(rule.id == development_rule.id for rule in self.flow.rules):
+            raise FlowValidationError(f"Duplicate rule id: {development_rule.id!r}.")
+        if any(
+            isinstance(rule, DevelopmentRule) and rule.piece == development_rule.piece
+            for rule in self.flow.rules
+        ):
+            raise FlowValidationError(
+                f"{development_rule.piece} already has a development rule."
+            )
+        return replace(self.flow, rules=(*self.flow.rules, development_rule))
+
+    def candidate_without_development_rule(self, rule_id: str) -> Flow:
+        existing = next((rule for rule in self.flow.rules if rule.id == rule_id), None)
+        if not isinstance(existing, DevelopmentRule):
+            raise FlowValidationError(f"Unknown development rule id: {rule_id!r}.")
+        return replace(
+            self.flow,
+            rules=tuple(rule for rule in self.flow.rules if rule.id != rule_id),
+        )
+
+    def candidate_with_development_order(
+        self, ordered_rule_ids: tuple[str, ...]
+    ) -> Flow:
+        development_rules = [
+            rule for rule in self.flow.rules if isinstance(rule, DevelopmentRule)
+        ]
+        expected_ids = {rule.id for rule in development_rules}
+        if (
+            len(ordered_rule_ids) != len(expected_ids)
+            or set(ordered_rule_ids) != expected_ids
+        ):
+            raise FlowValidationError(
+                "Development order must contain every development rule exactly once."
+            )
+        generic_priorities = {
+            rule.priority
+            for rule in self.flow.rules
+            if not isinstance(rule, DevelopmentRule)
+        }
+        priorities: list[int] = []
+        candidate = 1000
+        for _rule_id in ordered_rule_ids:
+            while candidate in generic_priorities:
+                candidate -= 1
+            priorities.append(candidate)
+            candidate -= 100
+        by_id = dict(zip(ordered_rule_ids, priorities, strict=True))
+        return replace(
+            self.flow,
+            rules=tuple(
+                (
+                    replace(rule, priority=by_id[rule.id])
+                    if isinstance(rule, DevelopmentRule)
+                    else rule
+                )
                 for rule in self.flow.rules
             ),
         )

@@ -20,8 +20,8 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.10 compatibility
 
 from ..policy import (
     MoveAction,
-    OriginalPieceId,
     OriginalPieceTracker,
+    StartingPieceRef,
     condition_to_data,
     parse_condition,
     referenced_pieces,
@@ -29,6 +29,8 @@ from ..policy import (
 )
 from .errors import FlowStorageError, FlowValidationError
 from .models import (
+    AuthoredRule,
+    DevelopmentRule,
     ExactOverride,
     Flow,
     NamedState,
@@ -96,7 +98,7 @@ class FlowStore:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
 
-    def replace_rule(self, path: Path, replacement: PolicyRule) -> Flow:
+    def replace_rule(self, path: Path, replacement: AuthoredRule) -> Flow:
         flow = self.load(path)
         if all(rule.id != replacement.id for rule in flow.rules):
             raise FlowValidationError(f"Unknown rule id: {replacement.id!r}.")
@@ -194,6 +196,7 @@ class FlowStore:
 
         _unique_ids((rule.id for rule in flow.rules), "rule")
         priorities: set[int] = set()
+        development_pieces: set[StartingPieceRef] = set()
         for rule in flow.rules:
             if isinstance(rule.priority, bool) or rule.priority in priorities:
                 raise FlowValidationError(
@@ -201,11 +204,37 @@ class FlowStore:
                 )
             priorities.add(rule.priority)
             _validate_note(rule.note, f"Rule {rule.id!r}")
-            _validate_action(rule.move, tracker, flow.side, f"Rule {rule.id!r}")
-            for label, condition in (
-                ("activation", rule.activate_when),
-                ("retirement", rule.retire_when),
-            ):
+            if isinstance(rule, DevelopmentRule):
+                if rule.piece in development_pieces:
+                    raise FlowValidationError(
+                        "Development rules must assign each starting piece at most "
+                        f"once; duplicate {rule.piece}."
+                    )
+                development_pieces.add(rule.piece)
+                if rule.piece.color != flow.side:
+                    raise FlowValidationError(
+                        f"Rule {rule.id!r}: development rules may only assign the "
+                        f"controlled {flow.side} side."
+                    )
+                if rule.target not in chess.SQUARE_NAMES:
+                    raise FlowValidationError(
+                        f"Rule {rule.id!r}: invalid target {rule.target!r}."
+                    )
+                compiled = rule.compile()
+                condition_pairs = (("readiness", rule.ready_when),)
+            else:
+                if rule.kind != "generic" or rule.development_ref is not None:
+                    raise FlowValidationError(
+                        f"Rule {rule.id!r}: persisted development rules must use "
+                        "the DevelopmentRule authored variant."
+                    )
+                compiled = rule
+                condition_pairs = (
+                    ("activation", rule.activate_when),
+                    ("retirement", rule.retire_when),
+                )
+            _validate_action(compiled.move, tracker, flow.side, f"Rule {rule.id!r}")
+            for label, condition in condition_pairs:
                 if condition is not None:
                     _validate_condition_references(
                         condition,
@@ -324,12 +353,49 @@ class FlowStore:
             _string(item, "id"), parse_condition(item.get("when"), context="state.when")
         )
 
-    def _decode_rule(self, value: object) -> PolicyRule:
+    def _decode_rule(self, value: object) -> AuthoredRule:
         item = _mapping(value, "rule")
+        kind = item.get("kind", "generic")
+        if kind == "development":
+            _require_keys(
+                item,
+                {
+                    "id",
+                    "kind",
+                    "piece",
+                    "target",
+                    "priority",
+                    "enabled",
+                    "note",
+                    "ready_when",
+                },
+            )
+            piece = StartingPieceRef.parse(_string(item, "piece"))
+            target = _string(item, "target")
+            if target not in chess.SQUARE_NAMES:
+                raise ValueError(f"rule.target has invalid square {target!r}.")
+            return DevelopmentRule(
+                id=_string(item, "id"),
+                piece=piece,
+                target=target,
+                priority=_integer(item, "priority"),
+                enabled=_boolean(item, "enabled", True),
+                note=_optional_string(item, "note"),
+                ready_when=(
+                    parse_condition(item["ready_when"], context="rule.ready_when")
+                    if "ready_when" in item
+                    else None
+                ),
+            )
+        if kind != "generic":
+            raise ValueError(
+                f"Unknown rule kind {kind!r}; expected 'generic' or 'development'."
+            )
         _require_keys(
             item,
             {
                 "id",
+                "kind",
                 "priority",
                 "enabled",
                 "note",
@@ -412,19 +478,38 @@ def _encode(flow: Flow) -> str:
                 f"priority = {rule.priority}",
             )
         )
-        if not rule.enabled:
-            lines.append("enabled = false")
-        if rule.note is not None:
-            lines.append(f"note = {json.dumps(rule.note)}")
-        lines.append(f"move = {_encode_action(rule.move)}")
-        if rule.activate_when is not None:
-            lines.append(
-                f"activate_when = {_toml_value(condition_to_data(rule.activate_when))}"
+        if isinstance(rule, DevelopmentRule):
+            lines.extend(
+                (
+                    'kind = "development"',
+                    f"piece = {json.dumps(str(rule.piece))}",
+                    f"target = {json.dumps(rule.target)}",
+                )
             )
-        if rule.retire_when is not None:
-            lines.append(
-                f"retire_when = {_toml_value(condition_to_data(rule.retire_when))}"
-            )
+            if not rule.enabled:
+                lines.append("enabled = false")
+            if rule.note is not None:
+                lines.append(f"note = {json.dumps(rule.note)}")
+            if rule.ready_when is not None:
+                lines.append(
+                    f"ready_when = {_toml_value(condition_to_data(rule.ready_when))}"
+                )
+        else:
+            if not rule.enabled:
+                lines.append("enabled = false")
+            if rule.note is not None:
+                lines.append(f"note = {json.dumps(rule.note)}")
+            lines.append(f"move = {_encode_action(rule.move)}")
+            if rule.activate_when is not None:
+                lines.append(
+                    "activate_when = "
+                    f"{_toml_value(condition_to_data(rule.activate_when))}"
+                )
+            if rule.retire_when is not None:
+                lines.append(
+                    "retire_when = "
+                    f"{_toml_value(condition_to_data(rule.retire_when))}"
+                )
     for override in flow.overrides:
         lines.extend(
             (
@@ -473,7 +558,12 @@ def _toml_value(value: object) -> str:
 
 
 def _encode_action(action: MoveAction) -> str:
-    return _toml_value({"piece": str(action.piece), "to": action.to_square})
+    return _toml_value(
+        {
+            "piece": str(StartingPieceRef.from_original(action.piece)),
+            "to": action.to_square,
+        }
+    )
 
 
 def _decode_action(value: object, context: str) -> MoveAction:
@@ -484,7 +574,10 @@ def _decode_action(value: object, context: str) -> MoveAction:
     destination = _string(item, "to")
     if destination not in chess.SQUARE_NAMES:
         raise ValueError(f"{context} has invalid destination {destination!r}.")
-    return MoveAction(OriginalPieceId.parse(piece), destination)
+    return MoveAction(
+        StartingPieceRef.parse(piece).original_piece_id,
+        destination,
+    )
 
 
 def _validate_action(
@@ -498,10 +591,27 @@ def _validate_action(
         raise FlowValidationError(
             f"{context}: rules may only move the controlled {side} side."
         )
+    reference = StartingPieceRef.from_original(action.piece)
+    if tracker.get(action.piece).piece_type != _expected_piece_type(reference):
+        raise FlowValidationError(
+            f"{context}: {reference} does not identify the expected "
+            f"{reference.piece_type} in start_fen."
+        )
     if action.to_square not in chess.SQUARE_NAMES:
         raise FlowValidationError(
             f"{context}: invalid destination {action.to_square!r}."
         )
+
+
+def _expected_piece_type(reference: StartingPieceRef) -> chess.PieceType:
+    return {
+        "pawn": chess.PAWN,
+        "knight": chess.KNIGHT,
+        "bishop": chess.BISHOP,
+        "rook": chess.ROOK,
+        "queen": chess.QUEEN,
+        "king": chess.KING,
+    }[reference.piece_type]
 
 
 def _validate_action_legal(
@@ -534,6 +644,13 @@ def _validate_condition_references(
         raise FlowValidationError(
             f"{context}: original pieces absent from start_fen: {sorted(missing_pieces)}."
         )
+    for piece_id in referenced_pieces(condition):
+        reference = StartingPieceRef.from_original(piece_id)
+        if tracker.get(piece_id).piece_type != _expected_piece_type(reference):
+            raise FlowValidationError(
+                f"{context}: {reference} does not identify the expected "
+                f"{reference.piece_type} in start_fen."
+            )
 
 
 def _validate_state_cycles(states: Mapping[str, object]) -> None:
@@ -568,7 +685,7 @@ def _replay_with_tracker(
             raise FlowValidationError(
                 f"{context}: {san!r} is illegal at ply {ply}."
             ) from exc
-        tracker.apply_move(before, move)
+        tracker.apply_move(before, move, ply=ply)
         board.push(move)
     return board, tracker
 

@@ -21,7 +21,7 @@ from ..policy import MoveAction
 from ..policy.runtime import DecisionSource, PolicyDecision, PolicyRuntime
 from .author import AuthorBoardController, ConfirmedAuthorMove, FlowAuthor
 from .errors import FlowError, FlowValidationError
-from .models import ExactOverride, Flow, OpeningTag, PolicyRule
+from .models import AuthoredRule, DevelopmentRule, ExactOverride, Flow, OpeningTag
 from .position import normalized_position_key
 
 
@@ -235,8 +235,38 @@ class FlowWorkspace:
         assert confirmed is not None
         return confirmed
 
-    def update_rule(self, replacement: PolicyRule) -> PolicyMoveAttempt | None:
+    def update_rule(self, replacement: AuthoredRule) -> PolicyMoveAttempt | None:
         return self._apply_candidate(self.author.candidate_with_rule(replacement))
+
+    def add_development_rule(
+        self, development_rule: DevelopmentRule
+    ) -> PolicyMoveAttempt | None:
+        return self._apply_candidate(
+            self.author.candidate_with_added_development_rule(development_rule)
+        )
+
+    def save_development_rule(
+        self, development_rule: DevelopmentRule
+    ) -> PolicyMoveAttempt | None:
+        if any(rule.id == development_rule.id for rule in self.author.flow.rules):
+            candidate = self.author.candidate_with_rule(development_rule)
+        else:
+            candidate = self.author.candidate_with_added_development_rule(
+                development_rule
+            )
+        return self._apply_candidate(candidate)
+
+    def delete_development_rule(self, rule_id: str) -> PolicyMoveAttempt | None:
+        return self._apply_candidate(
+            self.author.candidate_without_development_rule(rule_id)
+        )
+
+    def reorder_development_rules(
+        self, ordered_rule_ids: tuple[str, ...]
+    ) -> PolicyMoveAttempt | None:
+        return self._apply_candidate(
+            self.author.candidate_with_development_order(ordered_rule_ids)
+        )
 
     def update_override(self, replacement: ExactOverride) -> PolicyMoveAttempt | None:
         return self._apply_candidate(self.author.candidate_with_override(replacement))

@@ -78,6 +78,7 @@ class PolicyDecision:
 class PolicyRuntime:
     def __init__(self, flow: Flow) -> None:
         self.flow = flow
+        self.rules = flow.compiled_rules
         self.start_board = _board_from_fen(flow.start_fen)
         self.tracker = OriginalPieceTracker(self.start_board)
         self.states = {state.id: state.when for state in flow.states}
@@ -94,7 +95,7 @@ class PolicyRuntime:
 
     def _initialize_lifecycle(self) -> None:
         evaluator = ConditionEvaluator(self.start_board, self.tracker, self.states)
-        for rule in self.flow.rules:
+        for rule in self.rules:
             if not rule.enabled:
                 self.rule_states[rule.id] = RuleRuntimeState(RuleLifecycle.DORMANT)
             elif rule.activate_when is None:
@@ -148,9 +149,7 @@ class PolicyRuntime:
 
         selected_rule_id: str | None = None
         candidates: dict[str, tuple[chess.Move | None, str | None, str]] = {}
-        for rule in sorted(
-            self.flow.rules, key=lambda item: item.priority, reverse=True
-        ):
+        for rule in sorted(self.rules, key=lambda item: item.priority, reverse=True):
             state = self.rule_states[rule.id]
             if rule.enabled and state.lifecycle is RuleLifecycle.ACTIVE:
                 move, san, reason = _resolve_action(board, self.tracker, rule.move)
@@ -170,9 +169,7 @@ class PolicyRuntime:
                     trace.append(f"Rule {rule.id} is shadowed by {selected_rule_id}.")
 
         rule_results: list[RuleResolution] = []
-        for rule in sorted(
-            self.flow.rules, key=lambda item: item.priority, reverse=True
-        ):
+        for rule in sorted(self.rules, key=lambda item: item.priority, reverse=True):
             state = self.rule_states[rule.id]
             activation = (
                 evaluator.evaluate(rule.activate_when) if rule.activate_when else None
@@ -279,22 +276,42 @@ class PolicyRuntime:
         selected_rule_id: str | None = None,
         ply: int,
     ) -> None:
-        self.tracker.apply_move(board_before, move)
+        self.tracker.apply_move(board_before, move, ply=ply)
         evaluator = ConditionEvaluator(board_after, self.tracker, self.states)
-        for rule in self.flow.rules:
+        for rule in self.rules:
             state = self.rule_states[rule.id]
             if not rule.enabled or state.lifecycle is RuleLifecycle.RETIRED:
                 continue
             result = evaluator.evaluate(rule.retire_when) if rule.retire_when else None
-            if rule.id == selected_rule_id or (result is not None and result.value):
+            development_piece = (
+                self.tracker.get(rule.development_ref.original_piece_id)
+                if rule.development_ref is not None
+                else None
+            )
+            development_label = (
+                rule.development_ref.label if rule.development_ref is not None else None
+            )
+            development_retired = development_piece is not None and (
+                development_piece.has_moved or development_piece.captured
+            )
+            if (
+                rule.id == selected_rule_id
+                or development_retired
+                or (result is not None and result.value)
+            ):
                 state.lifecycle = RuleLifecycle.RETIRED
                 state.retired_at_ply = ply
-                state.retirement_reason = (
-                    "Selected rule was executed."
-                    if rule.id == selected_rule_id
-                    else (result.explanation if result is not None else "Retired.")
-                )
-        for rule in self.flow.rules:
+                if development_piece is not None and development_piece.captured:
+                    state.retirement_reason = f"{development_label} was captured."
+                elif development_piece is not None and development_piece.has_moved:
+                    state.retirement_reason = f"{development_label} moved."
+                elif rule.id == selected_rule_id:
+                    state.retirement_reason = "Selected rule was executed."
+                else:
+                    state.retirement_reason = (
+                        result.explanation if result is not None else "Retired."
+                    )
+        for rule in self.rules:
             state = self.rule_states[rule.id]
             if not rule.enabled or state.lifecycle is not RuleLifecycle.DORMANT:
                 continue

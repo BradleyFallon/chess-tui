@@ -4,12 +4,25 @@ import { MemoryRouter } from "react-router-dom";
 
 import App from "../App";
 import { WorkspaceProvider } from "../develop/WorkspaceContext";
-import { commandResponse, jsonResponse, workspaceFixture } from "./fixtures";
+import { commandResponse, jsonResponse, ruleFixture, workspaceFixture } from "./fixtures";
 
 vi.mock("react-chessboard", () => ({
-  Chessboard: ({ options }: { options: { position?: string; squareStyles?: Record<string, { background?: string }>; onPieceDrop?: (args: { sourceSquare: string; targetSquare: string }) => boolean } }) => (
-    <div data-testid="chessboard" data-position={options.position} data-hint={Object.entries(options.squareStyles ?? {}).find(([, style]) => style.background === "#e2ad55")?.[0]}>
+  Chessboard: ({ options }: { options: {
+    position?: string;
+    boardOrientation?: string;
+    squareStyles?: Record<string, { background?: string }>;
+    onPieceDrop?: (args: { sourceSquare: string; targetSquare: string }) => boolean;
+    onSquareClick?: (args: { square: string }) => void;
+    squareRenderer?: (args: { square: string; children: React.ReactNode }) => React.ReactNode;
+  } }) => (
+    <div data-testid="chessboard" data-position={options.position} data-orientation={options.boardOrientation} data-hint={Object.entries(options.squareStyles ?? {}).find(([, style]) => style.background === "#e2ad55")?.[0]}>
+      <button onClick={() => options.onSquareClick?.({ square: "d2" })}>Click d2</button>
+      <button onClick={() => options.onSquareClick?.({ square: "c1" })}>Click c1</button>
+      <button onClick={() => options.onSquareClick?.({ square: "a2" })}>Click a2</button>
+      <button onClick={() => options.onSquareClick?.({ square: "f4" })}>Click f4</button>
       <button onClick={() => options.onPieceDrop?.({ sourceSquare: "d2", targetSquare: "d4" })}>Play d4</button>
+      {options.squareRenderer?.({ square: "d2", children: <span>White pawn</span> })}
+      {options.squareRenderer?.({ square: "c1", children: <span>White bishop</span> })}
     </div>
   ),
 }));
@@ -32,12 +45,169 @@ test("workspace renders board, grouped rule status, lifecycle, and activity", as
   expect(await screen.findByTestId("chessboard")).toBeInTheDocument();
   const panel = screen.getByRole("heading", { name: "Rule status" }).closest("aside");
   expect(panel).not.toBeNull();
-  expect(within(panel!).getByText("develop-d-pawn")).toBeInTheDocument();
+  expect(within(panel!).getAllByText("develop-d-pawn").length).toBeGreaterThan(0);
   expect(within(panel!).getByText("Dormant")).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Options" })).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: /Auto-respond/ })).not.toBeChecked();
   expect(screen.getByRole("log")).toHaveTextContent("Development session ready");
   expect(screen.queryByText(/legacy/i)).not.toBeInTheDocument();
+});
+
+test("piece inspection coexists with move entry and renders status markers", async () => {
+  const snapshot = workspaceFixture();
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(snapshot))
+    .mockResolvedValueOnce(jsonResponse(commandResponse(snapshot)));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+
+  const board = await screen.findByTestId("chessboard");
+  expect(board).toHaveAttribute("data-orientation", "white");
+  expect(screen.getByRole("img", { name: /White d-pawn.*selected/i })).toHaveTextContent("★");
+  expect(screen.getByRole("img", { name: /White queenside bishop.*dormant/i })).toHaveTextContent("○");
+
+  await userEvent.click(screen.getByRole("button", { name: "Click d2" }));
+  expect(screen.getByRole("heading", { name: "White d-pawn" })).toBeInTheDocument();
+  expect(screen.getByText("piece:white:pawn:d")).toBeInTheDocument();
+  expect(screen.getByText("Target d4")).toBeInTheDocument();
+
+  await userEvent.click(screen.getByRole("button", { name: "Play d4" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/commands",
+    expect.objectContaining({
+      body: JSON.stringify({ command: "play_move", source: "ui", notation: "uci", move: "d2d4" }),
+    }),
+  ));
+});
+
+test("unassigned piece can choose, cancel, validate, and apply a board target", async () => {
+  const initial = workspaceFixture({
+    startingPieces: [
+      ...workspaceFixture().startingPieces,
+      {
+        ref: "piece:white:pawn:a", originalPieceId: "white:a2", color: "white",
+        pieceType: "pawn", qualifier: "a", label: "White a-pawn",
+        startingSquare: "a2", currentSquare: "a2", state: "undeveloped",
+        firstMovedPly: null, capturedPly: null, developmentRule: null,
+      },
+    ],
+  });
+  const applied = workspaceFixture({
+    startingPieces: initial.startingPieces.map((piece) => piece.ref === "piece:white:pawn:a"
+      ? {
+        ...piece,
+        developmentRule: {
+          id: "develop-white-pawn-a", target: "f4", priority: 700, order: 3,
+          status: "waiting" as const, readyWhen: null, note: "Test target.",
+          enabled: true, reason: "a2f4 is not legal.",
+        },
+      }
+      : piece),
+  });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(initial))
+    .mockResolvedValueOnce(jsonResponse({
+      valid: true, ruleId: "develop-white-pawn-a",
+      piece: "piece:white:pawn:a", target: "f4", priority: 700, errors: [],
+    }))
+    .mockResolvedValueOnce(jsonResponse(applied))
+    .mockResolvedValueOnce(jsonResponse(initial));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+
+  await userEvent.click(await screen.findByRole("button", { name: "Click a2" }));
+  expect(screen.getByText("Not assigned")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Add development rule" }));
+  await userEvent.click(screen.getByRole("button", { name: "Choose target" }));
+  await userEvent.click(screen.getByRole("button", { name: "Click f4" }));
+  expect(screen.getByLabelText("Target")).toHaveValue("f4");
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+  await userEvent.click(screen.getByRole("button", { name: "Add development rule" }));
+  expect(screen.getByLabelText("Target")).toHaveValue("");
+  await userEvent.click(screen.getByRole("button", { name: "Choose target" }));
+  await userEvent.click(screen.getByRole("button", { name: "Click f4" }));
+
+  await userEvent.type(screen.getByLabelText("Note"), "Test target.");
+  fireEvent.change(screen.getByLabelText(/Ready when/), {
+    target: { value: '{"moved":"piece:white:pawn:d"}' },
+  });
+  await userEvent.click(screen.getByRole("button", { name: "Validate & apply" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    "/api/sessions/session-1/development-rules/validate",
+    expect.objectContaining({
+      method: "POST",
+      body: expect.stringContaining('"readyWhen":{"moved":"piece:white:pawn:d"}'),
+    }),
+  ));
+  await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    "/api/sessions/session-1/development-rules",
+    expect.objectContaining({ method: "POST" }),
+  ));
+  expect(await screen.findByText("Target f4")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Edit development rule" }));
+  await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
+    4,
+    "/api/sessions/session-1/development-rules/develop-white-pawn-a",
+    expect.objectContaining({ method: "DELETE" }),
+  ));
+  expect(await screen.findByText("Not assigned")).toBeInTheDocument();
+});
+
+test("black-controlled flows flip the board and keep markers square-local", async () => {
+  const initial = workspaceFixture();
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture({
+    flow: { ...initial.flow, side: "black" },
+  }))));
+  renderRoute("/develop");
+  expect(await screen.findByTestId("chessboard")).toHaveAttribute("data-orientation", "black");
+  expect(screen.getByRole("img", { name: /White d-pawn.*selected/i })).toBeInTheDocument();
+});
+
+test("development order controls call the deterministic reorder endpoint", async () => {
+  const initial = workspaceFixture();
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(initial))
+    .mockResolvedValueOnce(jsonResponse(initial));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+  await userEvent.click(await screen.findByText(/Development order/));
+  await userEvent.click(screen.getByRole("button", { name: "Move White d-pawn later" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/development-rules/order",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ ruleIds: ["develop-dark-bishop", "develop-d-pawn"] }),
+    }),
+  ));
+});
+
+test("captured development pieces remain inspectable from the order list", async () => {
+  const initial = workspaceFixture();
+  const captured = workspaceFixture({
+    startingPieces: initial.startingPieces.map((piece) =>
+      piece.ref === "piece:white:bishop:queenside"
+        ? {
+          ...piece,
+          currentSquare: null,
+          state: "captured-undeveloped" as const,
+          capturedPly: 4,
+          developmentRule: {
+            ...piece.developmentRule!,
+            status: "retired" as const,
+            reason: "White queenside bishop was captured.",
+          },
+        }
+        : piece),
+  });
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(captured)));
+  renderRoute("/develop");
+  await userEvent.click(await screen.findByText(/Development order/));
+  await userEvent.click(screen.getByRole("button", { name: "White queenside bishop" }));
+  expect(screen.getByText("Captured undeveloped · ply 4")).toBeInTheDocument();
+  expect(screen.getByText("Captured")).toBeInTheDocument();
 });
 
 test("activity and deterministic chat attachments render in sequence order", async () => {
@@ -440,20 +610,28 @@ test("hint highlights the expected original piece square", async () => {
 });
 
 test("full v2 rule editor sends conditions and original-piece action", async () => {
-  const fetchMock = vi.fn().mockResolvedValue(jsonResponse(workspaceFixture()));
+  const initial = workspaceFixture();
+  const generic = ruleFixture({
+    id: "generic-center-rule",
+    authoredKind: "generic",
+  });
+  const snapshot = workspaceFixture({
+    rules: { ...initial.rules, selected: generic },
+  });
+  const fetchMock = vi.fn().mockResolvedValue(jsonResponse(snapshot));
   vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
-  await userEvent.click((await screen.findAllByRole("button", { name: "Edit rule" }))[0]);
+  await userEvent.click(await screen.findByRole("button", { name: "Edit rule" }));
   const destination = screen.getByRole("textbox", { name: "Destination" });
   await userEvent.clear(destination); await userEvent.type(destination, "e4");
   await userEvent.click(screen.getByRole("button", { name: "Save" }));
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
-    "/api/sessions/session-1/rules/develop-d-pawn",
-    expect.objectContaining({ method: "PUT", body: expect.stringContaining('"piece":"white:d2"') }),
+    "/api/sessions/session-1/rules/generic-center-rule",
+    expect.objectContaining({ method: "PUT", body: expect.stringContaining('"piece":"piece:white:pawn:d"') }),
   ));
 });
 
 test("exact override editor uses its dedicated endpoint", async () => {
-  const override = { kind: "exact-override" as const, id: "after-d4-e5", enabled: true, afterSan: ["d4", "e5"], piece: "white:d2", destination: "e5", moveUci: "d4e5", moveSan: "dxe5", matched: true, legal: true, selected: true, note: "Capture.", reason: "Exact position matched." };
+  const override = { kind: "exact-override" as const, id: "after-d4-e5", enabled: true, afterSan: ["d4", "e5"], piece: "piece:white:pawn:d", destination: "e5", moveUci: "d4e5", moveSan: "dxe5", matched: true, legal: true, selected: true, note: "Capture.", reason: "Exact position matched." };
   const snapshot = workspaceFixture({ rules: { ...workspaceFixture().rules, selected: override, overrides: [override] } });
   const fetchMock = vi.fn().mockResolvedValue(jsonResponse(snapshot)); vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
   await userEvent.click(await screen.findByRole("button", { name: "Edit override" }));
@@ -475,5 +653,5 @@ test("TOML tab, Back, Restart, and failed API preserve the last snapshot", async
     expect.objectContaining({ method: "POST", body: JSON.stringify({ command: "go_back", source: "ui" }) }),
   ));
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not save flow");
-  expect(screen.getByText("develop-d-pawn")).toBeInTheDocument();
+  expect(screen.getAllByText("develop-d-pawn").length).toBeGreaterThan(0);
 });

@@ -78,13 +78,21 @@ def test_rejects_version_one_without_fallback() -> None:
 @pytest.mark.parametrize(
     "condition, expected",
     [
-        ({"moved": "white:d2"}, False),
-        ({"at": {"piece": "white:d2", "square": "d2"}}, True),
+        ({"moved": "piece:white:pawn:d"}, False),
+        ({"at": {"piece": "piece:white:pawn:d", "square": "d2"}}, True),
         ({"occupied": "d2"}, True),
         ({"empty": "e4"}, True),
         ({"occupied_by": {"square": "d2", "color": "white", "type": "pawn"}}, True),
-        ({"attacked": "white:e1"}, False),
-        ({"attacked_by": {"target": "white:d2", "attacker": "black:d7"}}, False),
+        ({"attacked": "piece:white:king"}, False),
+        (
+            {
+                "attacked_by": {
+                    "target": "piece:white:pawn:d",
+                    "attacker": "piece:black:pawn:d",
+                }
+            },
+            False,
+        ),
         ({"in_check": "white"}, False),
         ({"all": [{"occupied": "d2"}, {"empty": "d4"}]}, True),
         ({"any": [{"empty": "d2"}, {"occupied": "e2"}]}, True),
@@ -102,7 +110,11 @@ def test_evaluates_complete_condition_language(condition: dict, expected: bool) 
 def test_named_state_reference_evaluates() -> None:
     board = chess.Board()
     tracker = OriginalPieceTracker(board)
-    states = {"ready": parse_condition({"at": {"piece": "white:d2", "square": "d2"}})}
+    states = {
+        "ready": parse_condition(
+            {"at": {"piece": "piece:white:pawn:d", "square": "d2"}}
+        )
+    }
     result = ConditionEvaluator(board, tracker, states).evaluate(
         parse_condition({"state": "ready"})
     )
@@ -133,17 +145,21 @@ side="white"
 [[rules]]
 id="one"
 priority=1
-move={piece="white:d2",to="d4"}
+move={piece="piece:white:pawn:d",to="d4"}
 [[rules]]
 id="two"
 priority=1
-move={piece="white:e2",to="e4"}
+move={piece="piece:white:pawn:e",to="e4"}
 """
     with pytest.raises(FlowValidationError, match="duplicate 1"):
         FlowStore().decode(duplicate)
 
-    missing = duplicate.replace('piece="white:d2"', 'piece="white:d3"').replace(
-        'priority=1\nmove={piece="white:e2"', 'priority=2\nmove={piece="white:e2"'
+    missing = duplicate.replace(
+        'start_fen="startpos"',
+        'start_fen="rnbqkbnr/pppppppp/8/8/8/8/PPP1PPPP/RNBQKBNR w KQkq - 0 1"',
+    ).replace(
+        'priority=1\nmove={piece="piece:white:pawn:e"',
+        'priority=2\nmove={piece="piece:white:pawn:e"',
     )
     with pytest.raises(FlowValidationError, match="absent from start_fen"):
         FlowStore().decode(missing)
@@ -177,11 +193,11 @@ side="white"
 [[rules]]
 id="blocked-bishop"
 priority=20
-move={piece="white:c1",to="f4"}
+move={piece="piece:white:bishop:queenside",to="f4"}
 [[rules]]
 id="pawn"
 priority=10
-move={piece="white:d2",to="d4"}
+move={piece="piece:white:pawn:d",to="d4"}
 """)
     decision = PolicyRuntime(flow).resolve(chess.Board())
     assert decision.source_id == "pawn"
@@ -201,15 +217,15 @@ side="white"
 [[rules]]
 id="c4-after-nc6"
 priority=20
-move={piece="white:c2",to="c4"}
-activate_when={at={piece="black:b8",square="c6"}}
-retire_when={moved="white:c2"}
+move={piece="piece:white:pawn:c",to="c4"}
+activate_when={at={piece="piece:black:knight:queenside",square="c6"}}
+retire_when={moved="piece:white:pawn:c"}
 [[rules]]
 id="retirement-wins"
 priority=10
-move={piece="white:c2",to="c3"}
-activate_when={moved="white:c2"}
-retire_when={moved="white:c2"}
+move={piece="piece:white:pawn:c",to="c3"}
+activate_when={moved="piece:white:pawn:c"}
+retire_when={moved="piece:white:pawn:c"}
 """)
     runtime, _ = PolicyRuntime.replay(flow, ("d4", "Nc6", "Nf3", "Nb8"))
     assert runtime.rule_states["c4-after-nc6"].lifecycle.value == "active"
@@ -228,11 +244,11 @@ side="white"
 id="disabled"
 priority=20
 enabled=false
-move={piece="white:e2",to="e4"}
+move={piece="piece:white:pawn:e",to="e4"}
 [[rules]]
 id="selected"
 priority=10
-move={piece="white:d2",to="d4"}
+move={piece="piece:white:pawn:d",to="d4"}
 """)
     decision = PolicyRuntime(flow).resolve(chess.Board())
     assert decision.source_id == "selected"

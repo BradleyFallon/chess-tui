@@ -1,4 +1,4 @@
-import type { ApiErrorItem, CommandResponse, OverrideUpdate, RuleUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
+import type { ApiErrorItem, CommandResponse, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
 
 interface ErrorEnvelope {
   error: ApiErrorItem;
@@ -101,6 +101,17 @@ export const workspaceApi = {
     put(`/api/sessions/${sessionId}/rules/${encodeURIComponent(ruleId)}`, update),
   updateOverride: (sessionId: string, overrideId: string, update: OverrideUpdate) =>
     put(`/api/sessions/${sessionId}/overrides/${encodeURIComponent(overrideId)}`, update),
+  validateDevelopmentRule: (sessionId: string, draft: DevelopmentRuleDraft) =>
+    request<DevelopmentRuleValidation>(
+      `/api/sessions/${sessionId}/development-rules/validate`,
+      { method: "POST", body: JSON.stringify(draft) },
+    ),
+  applyDevelopmentRule: (sessionId: string, draft: DevelopmentRuleDraft) =>
+    post(`/api/sessions/${sessionId}/development-rules`, draft),
+  deleteDevelopmentRule: (sessionId: string, ruleId: string) =>
+    remove(`/api/sessions/${sessionId}/development-rules/${encodeURIComponent(ruleId)}`),
+  reorderDevelopmentRules: (sessionId: string, ruleIds: string[]) =>
+    put(`/api/sessions/${sessionId}/development-rules/order`, { ruleIds }),
   addOpeningTag: (sessionId: string, recordId: number) =>
     post(`/api/sessions/${sessionId}/opening-tags`, { recordId }),
   removeOpeningTag: (sessionId: string, recordId: number) =>

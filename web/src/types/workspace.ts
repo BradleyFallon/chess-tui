@@ -24,13 +24,31 @@ export type ConditionExpression = Record<string, unknown>;
 export interface ConditionSnapshot { expression: ConditionExpression; value: boolean; explanation: string; }
 
 export interface RuleRuntimeSnapshot {
-  kind: "rule"; id: string; priority: number; enabled: boolean; piece: string;
+  kind: "rule"; authoredKind: "generic" | "development";
+  id: string; priority: number; enabled: boolean; piece: string;
   destination: string; moveUci: string | null; moveSan: string | null; legal: boolean;
   lifecycle: "dormant" | "active" | "retired";
   status: "selected" | "active" | "waiting" | "dormant" | "retired" | "disabled";
   selected: boolean; shadowed: boolean; note: string | null;
   activateWhen: ConditionSnapshot | null; retireWhen: ConditionSnapshot | null;
   activatedAtPly: number | null; retiredAtPly: number | null; reason: string;
+}
+
+export type DevelopmentStatus =
+  | "dormant" | "ready" | "waiting" | "selected" | "retired" | "disabled";
+export interface DevelopmentRuleSnapshot {
+  id: string; target: string; priority: number; order: number;
+  status: DevelopmentStatus; readyWhen: ConditionSnapshot | null;
+  note: string | null; enabled: boolean; reason: string;
+}
+export interface StartingPieceSnapshot {
+  ref: string; originalPieceId: string; color: "white" | "black";
+  pieceType: "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
+  qualifier: string | null; label: string; startingSquare: string;
+  currentSquare: string | null;
+  state: "undeveloped" | "developed" | "captured-undeveloped" | "captured-developed";
+  firstMovedPly: number | null; capturedPly: number | null;
+  developmentRule: DevelopmentRuleSnapshot | null;
 }
 
 export interface OverrideRuntimeSnapshot {
@@ -152,6 +170,7 @@ export interface WorkspaceSnapshot {
   phase: "policy-ready" | "policy-result" | "opponent-ready" | "game-over";
   flow: FlowSnapshot; position: PositionSnapshot; decision: DecisionSnapshot | null;
   attempt: AttemptSnapshot | null; rules: RuleGroupsSnapshot;
+  startingPieces: StartingPieceSnapshot[];
   opening: OpeningContextSnapshot; openingHistory: OpeningHistoryItemSnapshot[];
   evaluation: EvaluationSnapshot;
   navigation: { canBack: boolean; canRestart: boolean }; activity: ActivitySnapshot[];
@@ -183,4 +202,13 @@ export interface RuleUpdate {
 export interface OverrideUpdate {
   afterSan: string[]; enabled: boolean; note: string | null;
   move: { piece: string; to: string };
+}
+
+export interface DevelopmentRuleDraft {
+  id: string | null; piece: string; target: string; enabled: boolean;
+  note: string | null; readyWhen: ConditionExpression | null;
+}
+export interface DevelopmentRuleValidation {
+  valid: boolean; ruleId: string; piece: string; target: string;
+  priority: number; errors: string[];
 }

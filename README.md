@@ -1,5 +1,16 @@
 # Chess TUI
 
+In Web Development Mode, click any board piece to inspect its original
+starting-piece identity. Undeveloped pieces show a compact development-status
+marker. From the left panel you can add or edit a typed development rule,
+choose its target on the board, edit `ready_when` JSON, enable or disable it,
+delete it, and reorder the development sequence. Changes are preview-validated,
+saved atomically, and replayed through the deterministic Python policy runtime.
+
+Authored piece references use readable identifiers such as
+`piece:white:pawn:d`, `piece:white:bishop:queenside`, and
+`piece:black:king`; original-square strings are internal only.
+
 An interactive Textual chess board that loads FEN positions, highlights legal
 moves, and renders chess pieces on a responsive checkerboard.
 
@@ -63,7 +74,7 @@ shows `engine-off` and never substitutes fixture analysis.
 Development Mode displays the Python-owned board, SAN history, deterministic-v2
 decision and trace, grouped rule lifecycle, Back/Restart navigation, and
 optional Stockfish evaluation. Rules and exact-position overrides can be edited
-in the left panel using original-piece actions and JSON condition expressions;
+in the left panel using canonical starting-piece references and JSON conditions;
 the complete flow is validated, saved atomically, and replayed after each edit.
 The right-side timeline keeps application activity separate from user/assistant
 conversation while displaying both in deterministic sequence order. Python

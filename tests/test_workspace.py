@@ -6,9 +6,14 @@ import shutil
 
 import pytest
 
-from chess_tui.flow import AttemptResult, FlowStore, FlowValidationError, FlowWorkspace
+from chess_tui.flow import (
+    AttemptResult,
+    DevelopmentRule,
+    FlowStore,
+    FlowValidationError,
+    FlowWorkspace,
+)
 from chess_tui.opening import OpeningMoveProvenance
-from chess_tui.policy import MoveAction, OriginalPieceId
 
 FIXTURE = Path(__file__).parent / "fixtures" / "london-flow.toml"
 
@@ -142,15 +147,16 @@ def test_opening_history_replays_and_preserves_alternate_branch_nodes(
 
 def test_edit_revalidates_replays_and_reassesses_pending_move(tmp_path: Path) -> None:
     work = workspace(tmp_path)
-    attempt = work.submit_policy_san("e4")
+    attempt = work.submit_policy_san("d3")
     assert attempt.result is AttemptResult.MISMATCH
     rule = work.author.flow.rules[0]
-    work.update_rule(
-        replace(rule, move=MoveAction(OriginalPieceId.parse("white:e2"), "e4"))
-    )
+    assert isinstance(rule, DevelopmentRule)
+    work.update_rule(replace(rule, target="d3"))
     assert work.attempt is None
-    assert work.history == ["e4"]
-    assert FlowStore().load(work.author.path).rules[0].move.to_square == "e4"
+    assert work.history == ["d3"]
+    saved = FlowStore().load(work.author.path).rules[0]
+    assert isinstance(saved, DevelopmentRule)
+    assert saved.target == "d3"
 
 
 def test_mismatch_can_be_added_as_an_exact_rule_and_committed(tmp_path: Path) -> None:
@@ -220,7 +226,7 @@ side="black"
 [[rules]]
 id="reply-e5"
 priority=10
-move={piece="black:e7",to="e5"}
+move={piece="piece:black:pawn:e",to="e5"}
 """,
         encoding="utf-8",
     )
