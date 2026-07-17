@@ -84,7 +84,11 @@ uses one deterministic primary match so ordinary commentary stays concise;
 `/openings`, `/defenses`, and `/book` retain the fuller diagnostic views. A
 current match can be promoted from its card to a durable flow label. Those
 authored `{ ECO, name }` labels appear in the workspace header and are saved in
-the flow TOML. The browser does not classify positions.
+the flow TOML. The on-screen Development Options area includes a locally
+remembered **Auto-respond** toggle; when enabled, the browser invokes the same
+Python-owned Next Opponent command immediately after the controlled move, so no
+Enter press is required. The browser does not classify positions or choose the
+reply itself.
 
 ## Bundled opening data
 

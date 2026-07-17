@@ -95,6 +95,14 @@ dd { margin: 0; font-weight: 700; text-transform: capitalize; }
 .status-panel { height: calc(100dvh - 96px); min-height: 360px; padding: 0; display: flex; flex-direction: column; overflow: hidden; }
 .status-heading-row { flex: 0 0 auto; padding: 0.75rem 0.9rem; border-bottom: 1px solid var(--line); }
 .status-heading-row h2 { margin: 0; }
+.development-options { flex: 0 0 auto; padding: 0.65rem 0.9rem; border-bottom: 1px solid var(--line); background: #121611; }
+.development-options h3 { margin: 0 0 0.45rem; color: var(--accent); font-size: 0.65rem; letter-spacing: 0.08em; text-transform: uppercase; }
+.option-toggle { display: flex; align-items: center; gap: 0.6rem; cursor: pointer; }
+.option-toggle input { width: 1rem; height: 1rem; margin: 0; accent-color: var(--accent); }
+.option-toggle > span { min-width: 0; display: grid; gap: 0.08rem; }
+.option-toggle strong { font-size: 0.78rem; }
+.option-toggle small { color: var(--muted); font-size: 0.67rem; line-height: 1.3; }
+.option-toggle:has(input:disabled) { opacity: 0.62; cursor: not-allowed; }
 .status-feed { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.65rem; scroll-behavior: smooth; }
 .status-note { display: grid; grid-template-columns: 0.55rem minmax(0, 1fr); gap: 0.65rem; padding: 0.7rem; border: 1px solid #30392e; border-radius: 7px; background: #181d17; }
 .status-note-marker { width: 0.5rem; height: 0.5rem; margin-top: 0.28rem; border-radius: 50%; background: var(--muted); }

@@ -193,6 +193,13 @@ Development Mode should expose:
 
 Development Mode is the primary authoring environment.
 
+Presentation-only development preferences live in a visible Options area. The
+initial option is `Auto-respond`. It is remembered in browser-local storage and,
+when enabled, invokes the ordinary `next_opponent` command as soon as the
+workspace reaches `opponent-ready`. Python still selects, validates, commits,
+and reports the opponent move. The client guards each session-position pair so
+React development effects cannot submit the command twice.
+
 ---
 
 # 4. Development Mode workspace

@@ -26,6 +26,8 @@ interface Props {
   workspace: WorkspaceSnapshot;
   pending: boolean;
   hintVisible: boolean;
+  autoRespond: boolean;
+  onAutoRespondChange: (enabled: boolean) => void;
   onSubmit: (text: string) => void;
   onExecute: (command: TypedCommand) => void;
   onAddOpeningTag: (recordId: number) => void;
@@ -40,6 +42,8 @@ export function StatusFeed({
   workspace,
   pending,
   hintVisible,
+  autoRespond,
+  onAutoRespondChange,
   onSubmit,
   onExecute,
   onAddOpeningTag,
@@ -133,6 +137,21 @@ export function StatusFeed({
       <div className="section-heading-row status-heading-row">
         <h2 id="status-heading">Game status</h2><span className="status-chip">live</span>
       </div>
+      <section className="development-options" aria-labelledby="development-options-heading">
+        <h3 id="development-options-heading">Options</h3>
+        <label className="option-toggle">
+          <input
+            type="checkbox"
+            checked={autoRespond}
+            disabled={pending}
+            onChange={(event) => onAutoRespondChange(event.target.checked)}
+          />
+          <span>
+            <strong>Auto-respond</strong>
+            <small>Play the opponent reply as soon as the flow hands over the turn.</small>
+          </span>
+        </label>
+      </section>
       <div className="status-feed" role="log" aria-live="polite" ref={feedRef}>
         {timeline.map((item) => item.type === "activity"
           ? <ActivityEntry
@@ -148,6 +167,7 @@ export function StatusFeed({
           workspace={workspace}
           pending={pending}
           hintVisible={hintVisible}
+          autoRespond={autoRespond}
           onExecute={onExecute}
         />
       </div>
@@ -386,7 +406,13 @@ function RuleList({ groups }: { groups: WorkspaceSnapshot["rules"] }) {
   return <div className="attachment-details">{rows.map(([label, items]) => <span key={label}><strong>{label}:</strong> {items.length ? items.map((item) => item.id).join(", ") : "None"}</span>)}</div>;
 }
 
-function CurrentStatus({ workspace, pending, hintVisible, onExecute }: Pick<Props, "workspace" | "pending" | "hintVisible" | "onExecute">) {
+function CurrentStatus({
+  workspace,
+  pending,
+  hintVisible,
+  autoRespond,
+  onExecute,
+}: Pick<Props, "workspace" | "pending" | "hintVisible" | "autoRespond" | "onExecute">) {
   if (workspace.phase === "policy-ready") {
     const side = capitalize(workspace.flow.side);
     return <article className="status-note status-note-prompt status-note-current"><span className="status-note-marker" aria-hidden="true" /><div>
@@ -397,7 +423,7 @@ function CurrentStatus({ workspace, pending, hintVisible, onExecute }: Pick<Prop
   }
   if (workspace.phase === "opponent-ready") {
     const side = workspace.position.turn === "white" ? "White" : "Black";
-    return <article className="status-note status-note-prompt status-note-current"><span className="status-note-marker" aria-hidden="true" /><div><strong>{side} to move</strong><p>Pick a reply on the board, or press Enter / choose Next and let the engine play it.</p><button className="primary status-next-button" onClick={() => onExecute({ command: "next_opponent", source: "ui" })} disabled={pending} aria-keyshortcuts="Enter">Next</button></div></article>;
+    return <article className="status-note status-note-prompt status-note-current"><span className="status-note-marker" aria-hidden="true" /><div><strong>{side} to move</strong><p>{autoRespond ? "Auto-respond is choosing the opponent reply." : "Pick a reply on the board, or press Enter / choose Next and let the engine play it."}</p><button className="primary status-next-button" onClick={() => onExecute({ command: "next_opponent", source: "ui" })} disabled={pending} aria-keyshortcuts="Enter">Next</button></div></article>;
   }
   if (workspace.phase === "policy-result" && workspace.attempt) return <ResultActions attempt={workspace.attempt} pending={pending} onExecute={onExecute} />;
   return <article className="status-note status-note-current"><span className="status-note-marker" aria-hidden="true" /><div><strong>Game over</strong><p>{workspace.position.gameOver?.termination ?? "The line has ended."} {workspace.position.gameOver?.result}</p></div></article>;

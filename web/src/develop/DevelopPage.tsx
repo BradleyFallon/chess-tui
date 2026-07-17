@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { BoardPanel } from "../components/BoardPanel";
@@ -6,6 +6,8 @@ import { EvaluationBar } from "../components/EvaluationBar";
 import { RuleStatusPanel } from "../components/RuleStatusPanel";
 import { StatusFeed } from "../components/StatusFeed";
 import { useWorkspace } from "./WorkspaceContext";
+
+const AUTO_RESPOND_KEY = "chess-flow-development-auto-respond";
 
 export function DevelopPage() {
   const {
@@ -22,6 +24,33 @@ export function DevelopPage() {
     addOpeningTag,
     removeOpeningTag,
   } = useWorkspace();
+  const [autoRespond, setAutoRespond] = useState(
+    () => localStorage.getItem(AUTO_RESPOND_KEY) === "true",
+  );
+  const autoRespondedPosition = useRef<string | null>(null);
+
+  useEffect(() => {
+    localStorage.setItem(AUTO_RESPOND_KEY, String(autoRespond));
+  }, [autoRespond]);
+
+  useEffect(() => {
+    if (!autoRespond || workspace?.phase !== "opponent-ready") {
+      autoRespondedPosition.current = null;
+      return;
+    }
+    if (pending) return;
+    const position = `${workspace.sessionId}:${workspace.position.fen}`;
+    if (autoRespondedPosition.current === position) return;
+    autoRespondedPosition.current = position;
+    void executeCommand({ command: "next_opponent", source: "ui" });
+  }, [
+    autoRespond,
+    executeCommand,
+    pending,
+    workspace?.phase,
+    workspace?.position.fen,
+    workspace?.sessionId,
+  ]);
 
   useEffect(() => {
     if (workspace?.phase !== "opponent-ready" || pending) return;
@@ -125,6 +154,8 @@ export function DevelopPage() {
             workspace={workspace}
             pending={pending}
             hintVisible={hintVisible}
+            autoRespond={autoRespond}
+            onAutoRespondChange={setAutoRespond}
             onSubmit={(text) => void sendChat(text)}
             onExecute={(command) => void executeCommand(command)}
             onAddOpeningTag={(recordId) => void addOpeningTag(recordId)}

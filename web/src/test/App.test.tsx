@@ -34,6 +34,8 @@ test("workspace renders board, grouped rule status, lifecycle, and activity", as
   expect(panel).not.toBeNull();
   expect(within(panel!).getByText("develop-d-pawn")).toBeInTheDocument();
   expect(within(panel!).getByText("Dormant")).toBeInTheDocument();
+  expect(screen.getByRole("heading", { name: "Options" })).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: /Auto-respond/ })).not.toBeChecked();
   expect(screen.getByRole("log")).toHaveTextContent("Development session ready");
   expect(screen.queryByText(/legacy/i)).not.toBeInTheDocument();
 });
@@ -211,6 +213,52 @@ test("correct move advances directly to opponent and Enter calls Next", async ()
   const composer = screen.getByRole("combobox", { name: "Enter move in SAN" });
   composer.focus(); fireEvent.keyDown(composer, { key: "Enter" });
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions/session-1/commands", expect.objectContaining({ method: "POST", body: JSON.stringify({ command: "next_opponent", source: "ui" }) })));
+});
+
+test("Auto-respond persists and plays the opponent move without Enter", async () => {
+  const initial = workspaceFixture();
+  const opponent = workspaceFixture({
+    phase: "opponent-ready",
+    decision: null,
+    position: {
+      ...initial.position,
+      turn: "black",
+      historySan: ["d4"],
+      ply: 1,
+      lastMoveUci: "d2d4",
+      legalMovesUci: ["d7d5"],
+    },
+  });
+  const advanced = workspaceFixture({
+    position: {
+      ...initial.position,
+      historySan: ["d4", "d5"],
+      ply: 2,
+      lastMoveUci: "d7d5",
+    },
+  });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(initial))
+    .mockResolvedValueOnce(jsonResponse(commandResponse(opponent)))
+    .mockResolvedValueOnce(jsonResponse(commandResponse(advanced)));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+
+  const autoRespond = await screen.findByRole("checkbox", { name: /Auto-respond/ });
+  await userEvent.click(autoRespond);
+  expect(autoRespond).toBeChecked();
+  expect(localStorage.getItem("chess-flow-development-auto-respond")).toBe("true");
+
+  await userEvent.click(screen.getByRole("button", { name: "Play d4" }));
+
+  await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    "/api/sessions/session-1/commands",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ command: "next_opponent", source: "ui" }),
+    }),
+  ));
 });
 
 test("SAN composer submits moves", async () => {
