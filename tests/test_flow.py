@@ -5,7 +5,7 @@ from pathlib import Path
 import chess
 import pytest
 
-from chess_tui.flow import FlowStore, FlowValidationError
+from chess_tui.flow import FlowStore, FlowValidationError, OpeningTag
 from chess_tui.policy import ConditionEvaluator, OriginalPieceTracker, parse_condition
 from chess_tui.policy.runtime import DecisionSource, PolicyRuntime
 
@@ -25,6 +25,47 @@ def test_loads_strict_v2_flow_and_round_trips() -> None:
     ]
     assert flow.overrides[0].after_san == ("d4", "e5")
     assert store.decode(store.encode(flow)) == flow
+
+
+def test_opening_tags_round_trip_and_validate() -> None:
+    store = FlowStore()
+    flow = store.decode("""
+version=2
+name="Tagged"
+start_fen="startpos"
+side="white"
+opening_tags=[
+  {eco="A40", name="Queen's Pawn Game"},
+  {eco="D00", name="Queen's Pawn Game: Accelerated London System"},
+]
+""")
+
+    assert flow.opening_tags == (
+        OpeningTag("A40", "Queen's Pawn Game"),
+        OpeningTag("D00", "Queen's Pawn Game: Accelerated London System"),
+    )
+    assert store.decode(store.encode(flow)) == flow
+
+    with pytest.raises(FlowValidationError, match="must be unique"):
+        store.decode("""
+version=2
+name="Duplicate"
+start_fen="startpos"
+side="white"
+opening_tags=[
+  {eco="D00", name="Queen's Pawn Game"},
+  {eco="D00", name="Queen's Pawn Game"},
+]
+""")
+
+    with pytest.raises(FlowValidationError, match="invalid ECO"):
+        store.decode("""
+version=2
+name="Bad ECO"
+start_fen="startpos"
+side="white"
+opening_tags=[{eco="D0", name="Queen's Pawn Game"}]
+""")
 
 
 def test_rejects_version_one_without_fallback() -> None:

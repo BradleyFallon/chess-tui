@@ -5,24 +5,25 @@ from __future__ import annotations
 import chess
 
 from .errors import OpponentPlannerError
-from .models import MoveSuggestion, OpeningMove, SuggestionKind
-from .source import BotMoveSource, OpeningMoveSource
+from .classification import BookContinuation, OpeningClassifier
+from .models import MoveSuggestion, SuggestionKind
+from .source import BotMoveSource
 
 
 class OpponentMovePlanner:
     def __init__(
         self,
-        book_source: OpeningMoveSource,
+        opening_classifier: OpeningClassifier,
         bot_source: BotMoveSource,
     ) -> None:
-        self.book_source = book_source
+        self.opening_classifier = opening_classifier
         self.bot_source = bot_source
 
     async def suggestions_for(
         self,
         board: chess.Board,
     ) -> tuple[MoveSuggestion, ...]:
-        book_moves = await self.book_source.moves_for(board)
+        book_moves = self.opening_classifier.book_continuations(board)
         if book_moves:
             suggestions = tuple(_book_suggestion(move) for move in book_moves)
         else:
@@ -34,14 +35,12 @@ class OpponentMovePlanner:
         await self.bot_source.close()
 
 
-def _book_suggestion(move: OpeningMove) -> MoveSuggestion:
+def _book_suggestion(move: BookContinuation) -> MoveSuggestion:
     return MoveSuggestion(
         uci=move.uci,
         san=move.san,
         kind=SuggestionKind.BOOK,
         label="BOOK",
-        games=move.games,
-        frequency=move.frequency,
     )
 
 
@@ -74,11 +73,6 @@ def _validate_suggestions(
             )
         seen_uci.add(suggestion.uci)
 
-        if suggestion.kind is SuggestionKind.BOOK:
-            if suggestion.games is None or suggestion.games < 0:
-                raise OpponentPlannerError(f"{context} has an invalid BOOK game count.")
-            if suggestion.frequency is None or not 0 <= suggestion.frequency <= 1:
-                raise OpponentPlannerError(f"{context} has an invalid BOOK frequency.")
-        elif suggestion.kind is SuggestionKind.BOT:
+        if suggestion.kind is SuggestionKind.BOT:
             if suggestion.profile_id is None or not suggestion.profile_id.strip():
                 raise OpponentPlannerError(f"{context} has an empty BOT profile_id.")

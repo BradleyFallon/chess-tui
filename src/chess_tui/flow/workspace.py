@@ -10,11 +10,18 @@ from typing import Callable
 import chess
 
 from ..game import ChessMove
+from ..opening.classification import (
+    BookContinuation,
+    OpeningClassifier,
+    OpeningContext,
+    OpeningHistoryEntry,
+    OpeningMoveProvenance,
+)
 from ..policy import MoveAction
 from ..policy.runtime import DecisionSource, PolicyDecision, PolicyRuntime
 from .author import AuthorBoardController, ConfirmedAuthorMove, FlowAuthor
 from .errors import FlowError, FlowValidationError
-from .models import ExactOverride, Flow, PolicyRule
+from .models import ExactOverride, Flow, OpeningTag, PolicyRule
 from .position import normalized_position_key
 
 
@@ -39,11 +46,22 @@ class PolicyMoveAttempt:
 
 
 class FlowWorkspace:
-    def __init__(self, flow_path: Path) -> None:
+    def __init__(
+        self,
+        flow_path: Path,
+        *,
+        opening_classifier: OpeningClassifier | None = None,
+    ) -> None:
         self.author = FlowAuthor(flow_path)
         self.runtime = PolicyRuntime(self.author.flow)
         self.controller = AuthorBoardController(_start_board(self.author.flow))
+        self.opening_classifier = opening_classifier or OpeningClassifier.bundled()
         self.history: list[str] = []
+        self.opening_history: list[OpeningHistoryEntry] = []
+        self.explored_opening_nodes: dict[tuple[str, ...], OpeningHistoryEntry] = {}
+        self._opponent_provenance: dict[
+            tuple[str, ...], tuple[OpeningMoveProvenance, str | None]
+        ] = {}
         self.policy_turn: PolicyTurn | None = None
         self.attempt: PolicyMoveAttempt | None = None
 
@@ -83,8 +101,43 @@ class FlowWorkspace:
         self.runtime = PolicyRuntime(self.author.flow)
         self.controller.reset(_start_board(self.author.flow))
         self.history.clear()
+        self.opening_history.clear()
         self.attempt = None
         self.policy_turn = None
+
+    def get_current_opening_context(self) -> OpeningContext:
+        if self.opening_history:
+            return self.opening_history[-1].context
+        return self.opening_classifier.initial_context(self._committed_board())
+
+    def get_opening_history(self) -> tuple[OpeningHistoryEntry, ...]:
+        return tuple(self.opening_history)
+
+    def get_book_continuations(self) -> tuple[BookContinuation, ...]:
+        return self.opening_classifier.book_continuations(self._committed_board())
+
+    def get_reachable_defenses(self) -> tuple[str, ...]:
+        return self.opening_classifier.reachable_defenses(self._committed_board())
+
+    def compare_move_to_book(self, move: chess.Move) -> bool:
+        return self.opening_classifier.compare_move_to_book(
+            self._committed_board(), move
+        )
+
+    def find_book_policy_transition(self) -> OpeningHistoryEntry | None:
+        return next(
+            (
+                entry
+                for entry in self.opening_history
+                if entry.context.move_source
+                in {
+                    OpeningMoveProvenance.POLICY_ONLY,
+                    OpeningMoveProvenance.EXACT_OVERRIDE,
+                }
+                and entry.context.played_move_in_book is False
+            ),
+            None,
+        )
 
     def go_back_to_previous_decision(self) -> PolicyTurn:
         if not self.can_go_back:
@@ -158,13 +211,27 @@ class FlowWorkspace:
     def submit_pending_opponent_move(self) -> ConfirmedAuthorMove | None:
         return self._submit_opponent(self.controller.confirm_move)
 
-    def submit_opponent_san(self, san: str) -> ConfirmedAuthorMove:
-        confirmed = self._submit_opponent(lambda: self.controller.confirm_san(san))
+    def submit_opponent_san(
+        self,
+        san: str,
+        *,
+        move_source: OpeningMoveProvenance = OpeningMoveProvenance.MANUAL,
+    ) -> ConfirmedAuthorMove:
+        confirmed = self._submit_opponent(
+            lambda: self.controller.confirm_san(san), move_source=move_source
+        )
         assert confirmed is not None
         return confirmed
 
-    def submit_opponent_uci(self, uci: str) -> ConfirmedAuthorMove:
-        confirmed = self._submit_opponent(lambda: self.controller.confirm_uci(uci))
+    def submit_opponent_uci(
+        self,
+        uci: str,
+        *,
+        move_source: OpeningMoveProvenance = OpeningMoveProvenance.MANUAL,
+    ) -> ConfirmedAuthorMove:
+        confirmed = self._submit_opponent(
+            lambda: self.controller.confirm_uci(uci), move_source=move_source
+        )
         assert confirmed is not None
         return confirmed
 
@@ -173,6 +240,12 @@ class FlowWorkspace:
 
     def update_override(self, replacement: ExactOverride) -> PolicyMoveAttempt | None:
         return self._apply_candidate(self.author.candidate_with_override(replacement))
+
+    def add_opening_tag(self, tag: OpeningTag) -> None:
+        self._apply_candidate(self.author.candidate_with_added_opening_tag(tag))
+
+    def remove_opening_tag(self, tag: OpeningTag) -> None:
+        self._apply_candidate(self.author.candidate_without_opening_tag(tag))
 
     def allow_mismatch_as_override(self) -> ExactOverride:
         attempt = self._require_attempt()
@@ -272,7 +345,10 @@ class FlowWorkspace:
         return self.attempt
 
     def _submit_opponent(
-        self, commit: Callable[[], ConfirmedAuthorMove | None]
+        self,
+        commit: Callable[[], ConfirmedAuthorMove | None],
+        *,
+        move_source: OpeningMoveProvenance = OpeningMoveProvenance.MANUAL,
     ) -> ConfirmedAuthorMove | None:
         if self.is_policy_turn:
             raise FlowValidationError("Expected an opponent move.")
@@ -296,6 +372,16 @@ class FlowWorkspace:
             board_before, move, self.board, ply=len(self.history) + 1
         )
         self.history.append(confirmed.san)
+        path = tuple(self.history)
+        recorded_reply_id = self._recorded_reply_id(history_before, confirmed.san)
+        self._opponent_provenance[path] = (move_source, recorded_reply_id)
+        self._append_opening_entry(
+            board_before,
+            move,
+            confirmed.san,
+            move_source=move_source,
+            recorded_reply_id=recorded_reply_id,
+        )
         self.policy_turn = None
         self.attempt = None
         return confirmed
@@ -318,6 +404,31 @@ class FlowWorkspace:
             ply=len(self.history) + 1,
         )
         self.history.append(confirmed.san)
+        in_book = self.opening_classifier.compare_move_to_book(board_before, move)
+        if decision.source is DecisionSource.RULE:
+            move_source = (
+                OpeningMoveProvenance.BOOK_AND_POLICY
+                if in_book
+                else OpeningMoveProvenance.POLICY_ONLY
+            )
+            policy_rule_id = decision.source_id
+            exact_override_id = None
+        elif decision.source is DecisionSource.EXACT_OVERRIDE:
+            move_source = OpeningMoveProvenance.EXACT_OVERRIDE
+            policy_rule_id = None
+            exact_override_id = decision.source_id
+        else:
+            move_source = OpeningMoveProvenance.FRONTIER
+            policy_rule_id = None
+            exact_override_id = None
+        self._append_opening_entry(
+            board_before,
+            move,
+            confirmed.san,
+            move_source=move_source,
+            policy_rule_id=policy_rule_id,
+            exact_override_id=exact_override_id,
+        )
         self.attempt = None
         self.policy_turn = None
 
@@ -328,8 +439,141 @@ class FlowWorkspace:
         if last_move is not None:
             self.controller.interaction.last_move = ChessMove.from_uci(last_move)
         self.history[:] = history
+        self._rebuild_opening_history(history)
         self.attempt = None
         self.policy_turn = None
+
+    def _append_opening_entry(
+        self,
+        board_before: chess.Board,
+        move: chess.Move,
+        san: str,
+        *,
+        move_source: OpeningMoveProvenance,
+        policy_rule_id: str | None = None,
+        exact_override_id: str | None = None,
+        recorded_reply_id: str | None = None,
+    ) -> None:
+        previous = (
+            self.opening_history[-1].context
+            if self.opening_history
+            else self.opening_classifier.initial_context(board_before)
+        )
+        context = self.opening_classifier.context_after_move(
+            board_before,
+            move,
+            self.board,
+            previous,
+            move_source=move_source,
+            policy_rule_id=policy_rule_id,
+            exact_override_id=exact_override_id,
+            recorded_reply_id=recorded_reply_id,
+        )
+        entry = OpeningHistoryEntry(
+            ply=len(self.history),
+            san=san,
+            uci=move.uci(),
+            position_key=normalized_position_key(self.board),
+            context=context,
+        )
+        self.opening_history.append(entry)
+        self.explored_opening_nodes[tuple(self.history)] = entry
+
+    def _rebuild_opening_history(self, history: tuple[str, ...]) -> None:
+        board = _start_board(self.author.flow)
+        runtime = PolicyRuntime(self.author.flow)
+        rebuilt: list[OpeningHistoryEntry] = []
+        previous = self.opening_classifier.initial_context(board)
+        prefix: list[str] = []
+        for ply, san in enumerate(history, start=1):
+            board_before = board.copy(stack=False)
+            move = board.parse_san(san)
+            controlled = board.turn == self.controlled_color
+            decision = runtime.resolve(board) if controlled else None
+            in_book = self.opening_classifier.compare_move_to_book(board, move)
+            prefix.append(san)
+            path = tuple(prefix)
+            recorded_reply_id: str | None = None
+            if decision is not None and decision.source is DecisionSource.RULE:
+                source = (
+                    OpeningMoveProvenance.BOOK_AND_POLICY
+                    if in_book
+                    else OpeningMoveProvenance.POLICY_ONLY
+                )
+                policy_rule_id = decision.source_id
+                exact_override_id = None
+            elif (
+                decision is not None
+                and decision.source is DecisionSource.EXACT_OVERRIDE
+            ):
+                source = OpeningMoveProvenance.EXACT_OVERRIDE
+                policy_rule_id = None
+                exact_override_id = decision.source_id
+            elif controlled:
+                source = OpeningMoveProvenance.FRONTIER
+                policy_rule_id = None
+                exact_override_id = None
+            else:
+                stored = self._opponent_provenance.get(path)
+                if stored is not None:
+                    source, recorded_reply_id = stored
+                else:
+                    recorded_reply_id = self._recorded_reply_id(tuple(prefix[:-1]), san)
+                    source = (
+                        OpeningMoveProvenance.RECORDED_BRANCH
+                        if recorded_reply_id is not None
+                        else OpeningMoveProvenance.MANUAL
+                    )
+                policy_rule_id = None
+                exact_override_id = None
+            board.push(move)
+            context = self.opening_classifier.context_after_move(
+                board_before,
+                move,
+                board,
+                previous,
+                move_source=source,
+                policy_rule_id=policy_rule_id,
+                exact_override_id=exact_override_id,
+                recorded_reply_id=recorded_reply_id,
+            )
+            entry = OpeningHistoryEntry(
+                ply=ply,
+                san=san,
+                uci=move.uci(),
+                position_key=normalized_position_key(board),
+                context=context,
+            )
+            rebuilt.append(entry)
+            self.explored_opening_nodes[path] = entry
+            runtime.commit_move(
+                board_before,
+                move,
+                board,
+                selected_rule_id=(
+                    decision.source_id
+                    if decision is not None and decision.source is DecisionSource.RULE
+                    else None
+                ),
+                ply=ply,
+            )
+            previous = context
+        self.opening_history[:] = rebuilt
+
+    def _recorded_reply_id(
+        self, history_before: tuple[str, ...], move_san: str
+    ) -> str | None:
+        return next(
+            (
+                reply.id
+                for reply in self.author.flow.opponent_replies
+                if reply.after_san == history_before and reply.move_san == move_san
+            ),
+            None,
+        )
+
+    def _committed_board(self) -> chess.Board:
+        return self.attempt.board_before if self.attempt is not None else self.board
 
     def _require_attempt(self) -> PolicyMoveAttempt:
         if self.attempt is None:

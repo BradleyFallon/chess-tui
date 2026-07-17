@@ -41,7 +41,7 @@ from .view import BoardInputMode, BoardViewState
 
 if TYPE_CHECKING:
     from .engine import ChessEngineService, QualityThresholds
-    from .opening import OpeningMoveSource, OpponentMovePlanner
+    from .opening import OpponentMovePlanner
 
 BOARD_LEFT_MARGIN = 3
 SQUARE_PRESETS = ((7, 3), (5, 2), (3, 1))
@@ -394,7 +394,6 @@ class ChessTui(App[None]):
         auto_play_black: bool = False,
         focus_san_on_white_turn: bool = False,
         opponent_planner: OpponentMovePlanner | None = None,
-        opening_source: OpeningMoveSource | None = None,
     ) -> None:
         super().__init__()
         from .screens.local_game import LocalGameScreen
@@ -431,14 +430,10 @@ class ChessTui(App[None]):
                 raise ValueError("Pass engine_path or opponent_planner, not both.")
             if engine_path is not None and analysis_engine is not None:
                 raise ValueError("Pass engine_path or analysis_engine, not both.")
-            if engine_path is not None and opening_source is not None:
-                raise ValueError("Pass engine_path or opening_source, not both.")
-            if opponent_planner is not None and opening_source is not None:
-                raise ValueError("Pass opponent_planner or opening_source, not both.")
             if opponent_planner is None:
                 from .opening import (
                     FixtureBotMoveSource,
-                    FixtureOpeningMoveSource,
+                    OpeningClassifier,
                     OpponentMovePlanner,
                     StockfishBotMoveSource,
                 )
@@ -453,7 +448,7 @@ class ChessTui(App[None]):
                     bot_source = FixtureBotMoveSource()
                     analysis_engine_owned_by_planner = False
                 opponent_planner = OpponentMovePlanner(
-                    opening_source or FixtureOpeningMoveSource(),
+                    OpeningClassifier.bundled(),
                     bot_source,
                 )
             else:
@@ -523,7 +518,6 @@ def run_chess_app(
     auto_play_black: bool = False,
     focus_san_on_white_turn: bool = False,
     opponent_planner: OpponentMovePlanner | None = None,
-    opening_source: OpeningMoveSource | None = None,
 ) -> None:
     """Run the selected application mode."""
 
@@ -538,6 +532,5 @@ def run_chess_app(
         auto_play_black=auto_play_black,
         focus_san_on_white_turn=focus_san_on_white_turn,
         opponent_planner=opponent_planner,
-        opening_source=opening_source,
     )
     app.run()

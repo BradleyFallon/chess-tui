@@ -12,6 +12,10 @@ import type {
   AttemptSnapshot,
   ChatAttachment,
   ChatMessageSnapshot,
+  OpeningContextAttachment,
+  OpeningContextSnapshot,
+  OpeningMatchSnapshot,
+  OpeningTagSnapshot,
   PolicyItemSnapshot,
   PositionAnalysisSnapshot,
   TypedCommand,
@@ -24,13 +28,23 @@ interface Props {
   hintVisible: boolean;
   onSubmit: (text: string) => void;
   onExecute: (command: TypedCommand) => void;
+  onAddOpeningTag: (recordId: number) => void;
+  onRemoveOpeningTag: (recordId: number) => void;
 }
 
 type TimelineItem =
   | { type: "activity"; sequence: number; value: ActivitySnapshot }
   | { type: "chat"; sequence: number; value: ChatMessageSnapshot };
 
-export function StatusFeed({ workspace, pending, hintVisible, onSubmit, onExecute }: Props) {
+export function StatusFeed({
+  workspace,
+  pending,
+  hintVisible,
+  onSubmit,
+  onExecute,
+  onAddOpeningTag,
+  onRemoveOpeningTag,
+}: Props) {
   const feedRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLInputElement>(null);
   const [text, setText] = useState("");
@@ -121,7 +135,14 @@ export function StatusFeed({ workspace, pending, hintVisible, onSubmit, onExecut
       </div>
       <div className="status-feed" role="log" aria-live="polite" ref={feedRef}>
         {timeline.map((item) => item.type === "activity"
-          ? <ActivityEntry key={`activity-${item.value.id}-${item.sequence}`} item={item.value} />
+          ? <ActivityEntry
+              key={`activity-${item.value.id}-${item.sequence}`}
+              item={item.value}
+              openingTags={workspace.flow.openingTags}
+              pending={pending}
+              onAddOpeningTag={onAddOpeningTag}
+              onRemoveOpeningTag={onRemoveOpeningTag}
+            />
           : <ChatEntry key={item.value.id} message={item.value} />)}
         <CurrentStatus
           workspace={workspace}
@@ -180,10 +201,30 @@ export function StatusFeed({ workspace, pending, hintVisible, onSubmit, onExecut
   );
 }
 
-function ActivityEntry({ item }: { item: ActivitySnapshot }) {
+function ActivityEntry({
+  item,
+  openingTags,
+  pending,
+  onAddOpeningTag,
+  onRemoveOpeningTag,
+}: {
+  item: ActivitySnapshot;
+  openingTags: OpeningTagSnapshot[];
+  pending: boolean;
+  onAddOpeningTag: Props["onAddOpeningTag"];
+  onRemoveOpeningTag: Props["onRemoveOpeningTag"];
+}) {
   return <article className={`status-note status-note-${item.kind}`}>
     <span className="status-note-marker" aria-hidden="true" />
-    <div><strong>{item.title}</strong><p>{item.message}</p></div>
+    <div><strong>{item.title}</strong><p>{item.message}</p>
+      {item.attachment && <Attachment
+        attachment={item.attachment}
+        openingTags={openingTags}
+        pending={pending}
+        onAddOpeningTag={onAddOpeningTag}
+        onRemoveOpeningTag={onRemoveOpeningTag}
+      />}
+    </div>
   </article>;
 }
 
@@ -195,8 +236,46 @@ function ChatEntry({ message }: { message: ChatMessageSnapshot }) {
   </article>;
 }
 
-function Attachment({ attachment }: { attachment: ChatAttachment }) {
+function Attachment({
+  attachment,
+  openingTags,
+  pending = false,
+  onAddOpeningTag,
+  onRemoveOpeningTag,
+}: {
+  attachment: ChatAttachment;
+  openingTags?: OpeningTagSnapshot[];
+  pending?: boolean;
+  onAddOpeningTag?: Props["onAddOpeningTag"];
+  onRemoveOpeningTag?: Props["onRemoveOpeningTag"];
+}) {
   switch (attachment.kind) {
+    case "opening-context": return <OpeningContext
+      attachment={attachment}
+      openingTags={openingTags}
+      pending={pending}
+      onAddOpeningTag={onAddOpeningTag}
+      onRemoveOpeningTag={onRemoveOpeningTag}
+    />;
+    case "opening-list": return <div className="attachment-details">
+      <span><strong>Primary:</strong> {attachment.primaryMatch?.name ?? "No exact named position"}</span>
+      {attachment.matches.map((match) => <span key={match.recordId}>{match.eco} · {match.name}</span>)}
+    </div>;
+    case "defense-list": return <div className="attachment-details">
+      <NameList label="Entered defenses" values={attachment.entered} />
+      <NameList label="Book defenses still reachable" values={attachment.reachable} />
+    </div>;
+    case "book-details": return <div className="attachment-details">
+      <span><strong>Last move in book:</strong> {bookAnswer(attachment.playedMoveInBook)}</span>
+      <NameList label="Continuations" values={attachment.continuations.map((move) => move.san)} />
+    </div>;
+    case "book-history": return <div className="attachment-details">
+      {attachment.entries.map((entry) => <span key={`${entry.ply}-${entry.uci}`}>
+        <strong>{moveLabel(entry.ply, entry.san)}</strong> · {openingLabel(entry.context)}
+        {entry.context.playedMoveInBook === null ? "" : ` · book ${entry.context.playedMoveInBook ? "yes" : "no"}`}
+      </span>)}
+      {attachment.firstPolicyWithoutBookPly !== null && <small>Policy first operated without book support at ply {attachment.firstPolicyWithoutBookPly}.</small>}
+    </div>;
     case "position-analysis": return <PositionAnalysis analysis={attachment.analysis} />;
     case "decision-explanation": return <DecisionExplanation attachment={attachment} />;
     case "rule-details": return <RuleDetails item={attachment.rule} />;
@@ -206,6 +285,77 @@ function Attachment({ attachment }: { attachment: ChatAttachment }) {
     case "command-list": return <ul className="attachment-list">{attachment.commands.map((command) => <li key={command.id}><strong>{command.usage}</strong> — {command.description}</li>)}</ul>;
     case "validation-error": return <p className="inline-error">{attachment.code}</p>;
   }
+}
+
+function OpeningContext({
+  attachment,
+  openingTags = [],
+  pending,
+  onAddOpeningTag,
+  onRemoveOpeningTag,
+}: {
+  attachment: OpeningContextAttachment;
+  openingTags?: OpeningTagSnapshot[];
+  pending: boolean;
+  onAddOpeningTag?: Props["onAddOpeningTag"];
+  onRemoveOpeningTag?: Props["onRemoveOpeningTag"];
+}) {
+  const { context, entry, presentation } = attachment;
+  const match = context.primaryMatch ?? context.lastKnownMatch;
+  const currentMatch = context.primaryMatch;
+  const tagged = currentMatch
+    ? openingTags.some((tag) => tag.eco === currentMatch.eco && tag.name === currentMatch.name)
+    : false;
+  return <div className={`opening-attachment opening-attachment-${presentation}`}>
+    {match
+      ? <span><strong>{context.primaryMatch ? "Opening" : "Last known"}:</strong> {displayOpeningName(match)}</span>
+      : <span><strong>No exact named opening position</strong></span>}
+    {entry && <span><strong>Book move:</strong> {bookAnswer(context.playedMoveInBook)}</span>}
+    {context.moveSource && <span><strong>Move source:</strong> {sourceLabel(context)}</span>}
+    {currentMatch && onAddOpeningTag && onRemoveOpeningTag && (
+      <button
+        className="opening-tag-button"
+        type="button"
+        disabled={pending}
+        onClick={() => tagged
+          ? onRemoveOpeningTag(currentMatch.recordId)
+          : onAddOpeningTag(currentMatch.recordId)}
+      >
+        {tagged ? "Remove flow label" : "Label this flow"}
+      </button>
+    )}
+  </div>;
+}
+
+function displayOpeningName(match: OpeningMatchSnapshot): string {
+  return match.variation ?? match.name;
+}
+
+function NameList({ label, values }: { label: string; values: string[] }) {
+  const visible = values.slice(0, 8);
+  const remaining = values.length - visible.length;
+  return <span><strong>{label}:</strong> {visible.length ? visible.join(", ") : "None"}{remaining > 0 ? `, +${remaining} more` : ""}</span>;
+}
+
+function sourceLabel(context: OpeningContextSnapshot): string {
+  if (context.moveSource === "book-and-policy") return `Policy rule ${context.policyRuleId ?? "unknown"}, supported by book`;
+  if (context.moveSource === "policy-only") return `Policy rule ${context.policyRuleId ?? "unknown"}, without book support`;
+  if (context.moveSource === "exact-override") return `Exact override ${context.exactOverrideId ?? "unknown"}`;
+  if (context.moveSource === "recorded-branch") return `Recorded branch ${context.recordedReplyId ?? ""}`.trim();
+  return context.moveSource?.replaceAll("-", " ") ?? "unknown";
+}
+
+function openingLabel(context: OpeningContextSnapshot): string {
+  return context.primaryMatch?.name ?? (context.lastKnownMatch ? `last known ${context.lastKnownMatch.name}` : "no named opening");
+}
+
+function bookAnswer(value: boolean | null): string {
+  return value === null ? "Not applicable" : value ? "yes" : "no";
+}
+
+function moveLabel(ply: number, san: string): string {
+  const moveNumber = Math.ceil(ply / 2);
+  return ply % 2 ? `${moveNumber}.${san}` : `${moveNumber}...${san}`;
 }
 
 function DecisionExplanation({ attachment }: { attachment: Extract<ChatAttachment, { kind: "decision-explanation" }> }) {
@@ -274,7 +424,7 @@ function EngineReview({ attempt }: { attempt: AttemptSnapshot }) {
 
 function PositionAnalysis({ analysis }: { analysis: PositionAnalysisSnapshot }) {
   return <div className="position-analysis">
-    <AnalysisGroup title="Book moves" empty="No local book moves found.">{analysis.bookMoves.map((move) => <li key={move.uci}><strong>{move.san}</strong><span>{bookMoveLabel(move.source, move.frequency)}</span></li>)}</AnalysisGroup>
+    <AnalysisGroup title="Book moves" empty="No opening-index moves found.">{analysis.bookMoves.map((move) => <li key={move.uci}><strong>{move.san}</strong><span>{bookMoveLabel(move.source)}</span></li>)}</AnalysisGroup>
     <AnalysisGroup title="Engine best" empty="No engine candidates returned.">{analysis.engineMoves.map((move, index) => <li key={move.uci}><strong>{index + 1}. {move.san}</strong><span>{analysisScore(move.evaluationCp, move.mateIn)}</span></li>)}</AnalysisGroup>
   </div>;
 }
@@ -284,8 +434,9 @@ function AnalysisGroup({ title, empty, children }: { title: string; empty: strin
   return <section><h3>{title}</h3>{items.length ? <ol>{children}</ol> : <p>{empty}</p>}</section>;
 }
 
-function bookMoveLabel(source: string, frequency: number | null): string {
-  if (frequency !== null) return `${Math.round(frequency * 100)}% · local book`;
+function bookMoveLabel(source: string): string {
+  if (source === "book-and-policy") return "opening index · selected policy";
+  if (source === "opening-index") return "opening index";
   if (source === "policy") return "selected policy";
   return "authored branch";
 }

@@ -70,6 +70,9 @@ const post = (path: string, body?: unknown) =>
 const put = (path: string, body: unknown) =>
   request<WorkspaceSnapshot>(path, { method: "PUT", body: JSON.stringify(body) });
 
+const remove = (path: string) =>
+  request<WorkspaceSnapshot>(path, { method: "DELETE" });
+
 export const workspaceApi = {
   createSession: (flowPath?: string) =>
     post("/api/sessions", flowPath ? { flowPath } : {}),
@@ -98,6 +101,10 @@ export const workspaceApi = {
     put(`/api/sessions/${sessionId}/rules/${encodeURIComponent(ruleId)}`, update),
   updateOverride: (sessionId: string, overrideId: string, update: OverrideUpdate) =>
     put(`/api/sessions/${sessionId}/overrides/${encodeURIComponent(overrideId)}`, update),
+  addOpeningTag: (sessionId: string, recordId: number) =>
+    post(`/api/sessions/${sessionId}/opening-tags`, { recordId }),
+  removeOpeningTag: (sessionId: string, recordId: number) =>
+    remove(`/api/sessions/${sessionId}/opening-tags/${recordId}`),
   back: (sessionId: string) => post(`/api/sessions/${sessionId}/back`),
   restart: (sessionId: string) => post(`/api/sessions/${sessionId}/restart`),
 };

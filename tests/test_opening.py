@@ -7,11 +7,10 @@ import pytest
 
 from chess_tui.opening import (
     FixtureBotMoveSource,
-    FixtureOpeningMoveSource,
+    MoveSuggestion,
+    OpeningClassifier,
     OpponentMovePlanner,
     OpponentPlannerError,
-    MoveSuggestion,
-    OpeningMove,
     SuggestionKind,
 )
 from chess_tui.widgets import MoveSuggestionPanel
@@ -24,54 +23,34 @@ def _board_after(*moves: str) -> chess.Board:
     return board
 
 
-def test_fixture_source_returns_ranked_london_responses() -> None:
-    source = FixtureOpeningMoveSource()
+def test_bundled_classifier_supplies_deterministic_book_responses() -> None:
+    classifier = OpeningClassifier.bundled()
+    after_d4 = classifier.book_continuations(_board_after("d4"))
+    primary = classifier.primary_match_for(_board_after("d4"))
 
-    after_d4 = asyncio.run(source.moves_for(_board_after("d4")))
-    assert [(move.san, move.uci) for move in after_d4] == [
-        ("d5", "d7d5"),
-        ("Nf6", "g8f6"),
-        ("e5", "e7e5"),
-        ("e6", "e7e6"),
-    ]
-    assert after_d4[0].games == 800_000
-    assert after_d4[0].frequency == 0.46
-
-    after_bf4 = asyncio.run(source.moves_for(_board_after("d4", "d5", "Bf4")))
-    assert [move.san for move in after_bf4] == ["Nf6", "e6", "c5"]
-
-    after_e3 = asyncio.run(
-        source.moves_for(_board_after("d4", "d5", "Bf4", "Nf6", "e3"))
-    )
-    assert [move.san for move in after_e3] == ["e6", "c5", "g6"]
-
-    after_nf3 = asyncio.run(
-        source.moves_for(_board_after("d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3"))
-    )
-    assert [move.san for move in after_nf3] == ["c5", "Be7", "Bd6"]
-
-    unknown = asyncio.run(source.moves_for(_board_after("e4")))
-    assert unknown == ()
+    assert {"d5", "Nf6", "e5", "e6"} <= {move.san for move in after_d4}
+    assert all(move.opening_names for move in after_d4)
+    assert primary is not None
+    assert primary.name == "Queen's Pawn Game"
 
 
-def test_planner_uses_book_then_falls_back_to_bot() -> None:
+def test_planner_uses_opening_index_then_falls_back_to_bot() -> None:
     planner = OpponentMovePlanner(
-        FixtureOpeningMoveSource(),
+        OpeningClassifier.bundled(),
         FixtureBotMoveSource(),
     )
 
     book = asyncio.run(planner.suggestions_for(_board_after("d4")))
-    assert [suggestion.san for suggestion in book] == ["d5", "Nf6", "e5", "e6"]
+    assert len(book) == 4
     assert all(suggestion.kind is SuggestionKind.BOOK for suggestion in book)
-    assert book[0].games == 800_000
-    assert book[0].frequency == 0.46
+    assert all(suggestion.kind is SuggestionKind.BOOK for suggestion in book)
 
-    bot = asyncio.run(planner.suggestions_for(_board_after("e4")))
+    unknown = _board_after("a3", "a6", "h3", "h6")
+    bot = asyncio.run(planner.suggestions_for(unknown))
     assert len(bot) == 4
     assert all(suggestion.kind is SuggestionKind.BOT for suggestion in bot)
     assert all(
-        chess.Move.from_uci(suggestion.uci) in _board_after("e4").legal_moves
-        for suggestion in bot
+        chess.Move.from_uci(suggestion.uci) in unknown.legal_moves for suggestion in bot
     )
 
 
@@ -93,7 +72,7 @@ def test_fixture_bot_is_deterministic_by_position_profile_and_seed() -> None:
 
 def test_move_suggestion_panel_has_one_authoritative_highlight() -> None:
     planner = OpponentMovePlanner(
-        FixtureOpeningMoveSource(),
+        OpeningClassifier.bundled(),
         FixtureBotMoveSource(),
     )
     suggestions = asyncio.run(planner.suggestions_for(_board_after("d4")))
@@ -109,9 +88,9 @@ def test_move_suggestion_panel_has_one_authoritative_highlight() -> None:
     assert panel.highlighted_suggestion == suggestions[3]
 
 
-def test_move_suggestion_panel_shows_source_and_explored_state() -> None:
+def test_move_suggestion_panel_shows_factual_source_without_statistics() -> None:
     planner = OpponentMovePlanner(
-        FixtureOpeningMoveSource(),
+        OpeningClassifier.bundled(),
         FixtureBotMoveSource(),
     )
     suggestions = asyncio.run(planner.suggestions_for(_board_after("d4")))
@@ -120,24 +99,17 @@ def test_move_suggestion_panel_shows_source_and_explored_state() -> None:
     panel.set_suggestions(
         suggestions,
         context="After 1. d4:",
-        explored_sans=frozenset({"d5"}),
+        explored_sans=frozenset({suggestions[0].san}),
     )
 
     rendered = panel.render().plain
-    assert "d5    BOOK · 46% · 800,000 games · explored" in rendered
+    assert "BOOK" in rendered
+    assert "games" not in rendered
     assert rendered.count("explored") == 1
 
-    bot = asyncio.run(planner.suggestions_for(_board_after("e4")))
-    panel.set_suggestions(bot, context="After 1. e4:")
+    bot = asyncio.run(planner.suggestions_for(_board_after("a3", "a6", "h3", "h6")))
+    panel.set_suggestions(bot, context="Unknown position:")
     assert "BOT · DETERMINISTIC PROTOTYPE" in panel.render().plain
-
-
-class StubBookSource:
-    def __init__(self, moves: tuple[OpeningMove, ...] = ()) -> None:
-        self.moves = moves
-
-    async def moves_for(self, board: chess.Board) -> tuple[OpeningMove, ...]:
-        return self.moves
 
 
 class StubBotSource:
@@ -153,8 +125,8 @@ class StubBotSource:
 
 def _bot_suggestion(
     *,
-    uci: str = "e7e5",
-    san: str = "e5",
+    uci: str = "b2b4",
+    san: str = "b4",
     profile_id: str | None = "prototype",
 ) -> MoveSuggestion:
     return MoveSuggestion(
@@ -170,7 +142,7 @@ def _bot_suggestion(
     ("suggestions", "message"),
     [
         ((_bot_suggestion(uci="bad"),), "invalid UCI"),
-        ((_bot_suggestion(uci="e2e4", san="e4"),), "not legal"),
+        ((_bot_suggestion(uci="e7e5", san="e5"),), "not legal"),
         ((_bot_suggestion(san="wrong"),), "canonical SAN"),
         ((_bot_suggestion(), _bot_suggestion()), "duplicates UCI"),
         ((_bot_suggestion(profile_id=""),), "empty BOT profile_id"),
@@ -180,24 +152,9 @@ def test_planner_rejects_malformed_bot_suggestions(
     suggestions: tuple[MoveSuggestion, ...],
     message: str,
 ) -> None:
-    planner = OpponentMovePlanner(StubBookSource(), StubBotSource(suggestions))
-
-    with pytest.raises(OpponentPlannerError, match=message):
-        asyncio.run(planner.suggestions_for(_board_after("e4")))
-
-
-@pytest.mark.parametrize(
-    "move",
-    [
-        OpeningMove("e7e5", "e5", -1, 0.2),
-        OpeningMove("e7e5", "e5", 10, 1.1),
-    ],
-)
-def test_planner_rejects_invalid_book_metadata(move: OpeningMove) -> None:
     planner = OpponentMovePlanner(
-        StubBookSource((move,)),
-        StubBotSource(()),
+        OpeningClassifier.bundled(), StubBotSource(suggestions)
     )
 
-    with pytest.raises(OpponentPlannerError, match="invalid BOOK"):
-        asyncio.run(planner.suggestions_for(_board_after("e4")))
+    with pytest.raises(OpponentPlannerError, match=message):
+        asyncio.run(planner.suggestions_for(_board_after("a3", "a6", "h3", "h6")))

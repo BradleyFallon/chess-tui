@@ -188,6 +188,8 @@ Development Mode should expose:
 * Move grading
 * Rule creation and editing
 * Flow coverage and effectiveness analysis
+* Deterministic opening classification, book alignment, and opening history
+* Explicit authored opening, system, gambit, and attack labels
 
 Development Mode is the primary authoring environment.
 
@@ -1126,7 +1128,14 @@ Example:
   "flow": {
     "name": "London System",
     "version": 2,
-    "path": "flows/london.toml"
+    "path": "flows/london.toml",
+    "openingTags": [
+      {
+        "recordId": 536,
+        "eco": "A40",
+        "name": "Queen's Pawn Game"
+      }
+    ]
   },
   "position": {
     "fen": "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
@@ -1295,6 +1304,17 @@ After every successful rule edit, Python should:
 5. Return the complete updated workspace.
 
 The frontend must not directly edit TOML structures without backend validation.
+
+Opening labels use the same persistence boundary:
+
+```http
+POST   /api/sessions/{session_id}/opening-tags
+DELETE /api/sessions/{session_id}/opening-tags/{record_id}
+```
+
+The record id selects a deterministic bundled-data match for that request.
+Python persists only its ECO code and exact name, validates the complete flow,
+saves atomically, replays the current line, and returns a complete snapshot.
 
 ---
 

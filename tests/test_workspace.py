@@ -7,6 +7,7 @@ import shutil
 import pytest
 
 from chess_tui.flow import AttemptResult, FlowStore, FlowValidationError, FlowWorkspace
+from chess_tui.opening import OpeningMoveProvenance
 from chess_tui.policy import MoveAction, OriginalPieceId
 
 FIXTURE = Path(__file__).parent / "fixtures" / "london-flow.toml"
@@ -26,6 +27,8 @@ def test_correct_mismatch_retry_and_continue(tmp_path: Path) -> None:
     mismatch = work.submit_policy_uci("e2e4")
     assert mismatch.result is AttemptResult.MISMATCH
     assert work.history == []
+    assert work.get_opening_history() == ()
+    assert work.get_current_opening_context().primary_match is None
     work.retry_policy_move()
     assert work.board.fen() == mismatch.board_before.fen()
 
@@ -85,6 +88,56 @@ def test_restart_and_replay_are_deterministic_and_non_destructive(
     work.restart()
     assert work.history == [] and not work.can_restart
     assert work.author.path.read_text(encoding="utf-8") == before_file
+
+
+def test_opening_history_records_policy_book_and_opponent_provenance(
+    tmp_path: Path,
+) -> None:
+    work = workspace(tmp_path)
+    work.submit_policy_san("d4")
+    work.complete_correct_move()
+    work.submit_opponent_san("d5")
+
+    policy, opponent = work.get_opening_history()
+    assert policy.context.primary_match
+    assert policy.context.primary_match.name == "Queen's Pawn Game"
+    assert policy.context.move_source is OpeningMoveProvenance.BOOK_AND_POLICY
+    assert policy.context.policy_rule_id == "develop-d-pawn"
+    assert policy.context.played_move_in_book is True
+    assert opponent.context.move_source is OpeningMoveProvenance.MANUAL
+    assert opponent.context.played_move_in_book is True
+
+
+def test_opening_history_replays_and_preserves_alternate_branch_nodes(
+    tmp_path: Path,
+) -> None:
+    work = workspace(tmp_path)
+    work.submit_policy_san("d4")
+    work.complete_correct_move()
+    work.submit_opponent_san("a5")
+    first_branch = tuple(work.history)
+    first_context = work.get_current_opening_context()
+    assert first_context.primary_match is None
+    assert first_context.last_known_match
+    assert first_context.last_known_match.name == "Queen's Pawn Game"
+
+    work.go_back_to_previous_decision()
+    assert work.history == []
+    assert first_branch in work.explored_opening_nodes
+
+    work.submit_policy_san("d4")
+    work.complete_correct_move()
+    work.submit_opponent_san("d5")
+    second_branch = tuple(work.history)
+    assert second_branch in work.explored_opening_nodes
+    assert first_branch in work.explored_opening_nodes
+
+    expected = work.get_opening_history()
+    work.reload()
+    assert work.get_opening_history() == expected
+    work.restart()
+    assert work.get_opening_history() == ()
+    assert {first_branch, second_branch} <= work.explored_opening_nodes.keys()
 
 
 def test_edit_revalidates_replays_and_reassesses_pending_move(tmp_path: Path) -> None:

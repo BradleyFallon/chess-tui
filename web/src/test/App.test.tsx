@@ -43,7 +43,7 @@ test("activity and deterministic chat attachments render in sequence order", asy
   const snapshot = workspaceFixture({
     activity: [
       initial.activity[0],
-      { id: 2, sequence: 3, kind: "info", title: "Middle activity", message: "A state update." },
+      { id: 2, sequence: 3, kind: "info", title: "Middle activity", message: "A state update.", attachment: null },
     ],
     chat: [
       { id: "message-1", sequence: 2, role: "user", text: "What changed?", attachment: null },
@@ -75,12 +75,128 @@ test("activity and deterministic chat attachments render in sequence order", asy
   expect(within(feed).getByText("UNKNOWN_RULE")).toBeInTheDocument();
 });
 
+test("opening timeline renders only the primary match with label controls", async () => {
+  const initial = workspaceFixture();
+  const london = {
+    recordId: 42, eco: "D00", name: "Queen's Pawn Game: Accelerated London System",
+    family: "Queen's Pawn Game", variation: "Accelerated London System", lineDepth: 3,
+  };
+  const context = {
+    ...initial.opening,
+    primaryMatch: london,
+    currentMatches: [london],
+    entered: [london],
+    playedMoveInBook: true,
+    moveSource: "book-and-policy" as const,
+    policyRuleId: "develop-dark-bishop",
+  };
+  const entry = { ply: 3, san: "Bf4", uci: "c1f4", positionKey: "position", context };
+  const maintainedContext = {
+    ...context,
+    entered: [],
+    maintained: [london],
+  };
+  const maintainedEntry = {
+    ...entry, ply: 4, san: "Nf6", uci: "g8f6", context: maintainedContext,
+  };
+  const workspace = workspaceFixture({
+    activity: [
+      ...initial.activity,
+      {
+        id: 2, sequence: 2, kind: "success", title: "White played Bf4",
+        message: "Correct.", attachment: null,
+      },
+      {
+        id: 3, sequence: 3, kind: "commentary", title: "Opening after 2.Bf4",
+        message: "Accelerated London System.", attachment: {
+          kind: "opening-context", entry, context, presentation: "transition",
+        },
+      },
+      {
+        id: 4, sequence: 4, kind: "move", title: "Black played Nf6",
+        message: "Selected reply.", attachment: null,
+      },
+      {
+        id: 5, sequence: 5, kind: "commentary", title: "Opening after 2...Nf6",
+        message: "Accelerated London System.", attachment: {
+          kind: "opening-context", entry: maintainedEntry,
+          context: maintainedContext, presentation: "compact",
+        },
+      },
+    ],
+  });
+
+  vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspace)));
+  renderRoute("/develop");
+
+  expect(await screen.findAllByText("Opening:")).toHaveLength(2);
+  expect(screen.queryByText("Entered:")).not.toBeInTheDocument();
+  expect(screen.queryByText("Left:")).not.toBeInTheDocument();
+  expect(screen.getAllByText(/Policy rule develop-dark-bishop, supported by book/)).toHaveLength(2);
+  expect(screen.getAllByRole("button", { name: "Label this flow" })).toHaveLength(2);
+  expect(screen.queryByText("Queen's Pawn Game: Accelerated London System")).not.toBeInTheDocument();
+});
+
+test("opening commentary can add an official flow label", async () => {
+  const initial = workspaceFixture();
+  const match = {
+    recordId: 536, eco: "A40", name: "Queen's Pawn Game",
+    family: "Queen's Pawn Game", variation: null, lineDepth: 1,
+  };
+  const context = {
+    ...initial.opening,
+    primaryMatch: match,
+    currentMatches: [match],
+    entered: [match],
+    playedMoveInBook: true,
+    moveSource: "book-and-policy" as const,
+    policyRuleId: "develop-d-pawn",
+  };
+  const entry = { ply: 1, san: "d4", uci: "d2d4", positionKey: "position", context };
+  const withCommentary = workspaceFixture({
+    activity: [
+      ...initial.activity,
+      {
+        id: 2, sequence: 2, kind: "commentary", title: "Opening after 1.d4",
+        message: "Queen's Pawn Game.", attachment: {
+          kind: "opening-context", entry, context, presentation: "transition",
+        },
+      },
+    ],
+  });
+  const tagged = workspaceFixture({
+    ...withCommentary,
+    flow: {
+      ...withCommentary.flow,
+      openingTags: [{ recordId: 536, eco: "A40", name: "Queen's Pawn Game" }],
+    },
+  });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(withCommentary))
+    .mockResolvedValueOnce(jsonResponse(tagged));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+
+  await userEvent.click(await screen.findByRole("button", { name: "Label this flow" }));
+
+  await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    "/api/sessions/session-1/opening-tags",
+    expect.objectContaining({
+      method: "POST",
+      body: JSON.stringify({ recordId: 536 }),
+    }),
+  ));
+  expect(await screen.findByRole("button", { name: /Queen's Pawn Game/ })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Remove flow label" })).toBeInTheDocument();
+});
+
 test("correct move advances directly to opponent and Enter calls Next", async () => {
   const initial = workspaceFixture();
   const opponent = workspaceFixture({
     phase: "opponent-ready", decision: null,
     position: { ...initial.position, turn: "black", historySan: ["d4"], ply: 1, lastMoveUci: "d2d4", legalMovesUci: ["d7d5"] },
-    activity: [{ id: 2, sequence: 2, kind: "success", title: "White played d4", message: "Correct. Control the center." }],
+    activity: [{ id: 2, sequence: 2, kind: "success", title: "White played d4", message: "Correct. Control the center.", attachment: null }],
   });
   const advanced = workspaceFixture({ position: { ...initial.position, historySan: ["d4", "d5"], ply: 2 } });
   const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(initial)).mockResolvedValueOnce(jsonResponse(commandResponse(opponent))).mockResolvedValueOnce(jsonResponse(commandResponse(advanced)));
@@ -155,16 +271,17 @@ test("analyse command adds book and engine suggestions to the status feed", asyn
         kind: "info",
         title: "Position analysis completed",
         message: "Candidate moves are available in the conversation.",
+        attachment: null,
       },
     ],
     chat: [
       { id: "chat-1", sequence: 2, role: "user", text: "/analyse", attachment: null },
       {
         id: "chat-2", sequence: 4, role: "assistant",
-        text: "Candidate moves for White from the local book and Stockfish.",
+        text: "Candidate moves for White from the opening index and Stockfish.",
         attachment: { kind: "position-analysis", analysis: {
           bookMoves: [
-            { uci: "d2d4", san: "d4", source: "policy", games: null, frequency: null },
+            { uci: "d2d4", san: "d4", source: "policy", openingNames: [], defenseNames: [] },
           ],
           engineMoves: [
             { uci: "d2d4", san: "d4", evaluationCp: 32, mateIn: null, principalVariation: ["d2d4", "g8f6"] },
@@ -243,6 +360,7 @@ test("mismatch chat command adds a rule for the attempted move", async () => {
         kind: "success",
         title: "Added rule allow-e2e4-ply-0",
         message: "e4 is now the exact-position policy move here and was accepted.",
+        attachment: null,
       },
     ],
   });

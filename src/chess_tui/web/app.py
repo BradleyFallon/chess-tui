@@ -24,6 +24,7 @@ from .api_models import (
     FlowSourceResponse,
     HealthResponse,
     MoveRequest,
+    OpeningTagRequest,
     InspectRuleCommandRequest,
     PlayMoveCommandRequest,
     SanMoveRequest,
@@ -300,6 +301,28 @@ def _register_api_routes(application: FastAPI) -> None:
         payload: UpdateOverrideRequest,
     ) -> WorkspaceSnapshot:
         return await _manager(request).update_override(session_id, override_id, payload)
+
+    @application.post(
+        "/api/sessions/{session_id}/opening-tags",
+        response_model=WorkspaceSnapshot,
+    )
+    async def add_opening_tag(
+        request: Request,
+        session_id: str,
+        payload: OpeningTagRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).add_opening_tag(session_id, payload.record_id)
+
+    @application.delete(
+        "/api/sessions/{session_id}/opening-tags/{record_id}",
+        response_model=WorkspaceSnapshot,
+    )
+    async def remove_opening_tag(
+        request: Request,
+        session_id: str,
+        record_id: int,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).remove_opening_tag(session_id, record_id)
 
     @application.post(
         "/api/sessions/{session_id}/back", response_model=WorkspaceSnapshot

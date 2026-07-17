@@ -55,9 +55,9 @@ reload, and edits reconstruct original-piece and lifecycle state by replaying
 the retained prefix. The Textual screen is a play and diagnostics surface; rule
 editing is provided by the local web UI and direct TOML editing.
 
-Black responses come from `OpponentMovePlanner`. It converts statistical rows
-from `OpeningMoveSource` into generic `MoveSuggestion` values when book data is
-available. Otherwise it asks `BotMoveSource`; the current
+Black responses come from `OpponentMovePlanner`. It converts continuations from
+the bundled opening position graph into generic `MoveSuggestion` values when
+book data is available. Otherwise it asks `BotMoveSource`; the current
 `FixtureBotMoveSource` deterministically ranks legal moves from the normalized
 position, profile id, and session seed. It works beyond the authored fixture
 depth but is not intended to model realistic chess strength. With
@@ -78,7 +78,7 @@ analysis only when the committed FEN changes, ignores stale results, preserves
 mate scores as mate distances, and reports analysis failures without changing
 the active flow phase.
 
-`MoveSuggestionPanel` labels book and bot rows and marks explored branches.
+`MoveSuggestionPanel` labels indexed book and bot rows and marks explored branches.
 Manual board and typed-SAN entry remain available.
 Completed boards enter a dedicated `GAME_OVER` phase that reports checkmate,
 stalemate, automatic draw terminations, or other python-chess outcomes.
@@ -134,5 +134,6 @@ npm run dev
 Web Quiz, graphical condition construction, rule creation/deletion, forward
 navigation, WebSockets, accounts, databases, and hosted deployment are deferred.
 The authoritative specifications are
-`docs/design/rule-policy-v2.md` and
-`docs/design/web-development-mode.md`.
+`docs/design/rule-policy-v2.md`,
+`docs/design/web-development-mode.md`, and
+`docs/design/opening-classification.md`.

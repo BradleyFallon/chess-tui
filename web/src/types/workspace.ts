@@ -4,8 +4,13 @@ export type ErrorCode =
 
 export interface ApiErrorItem { code: ErrorCode; message: string; details: Record<string, unknown>; }
 
+export interface OpeningTagSnapshot {
+  recordId: number | null; eco: string; name: string;
+}
+
 export interface FlowSnapshot {
   name: string; version: number; path: string; side: "white" | "black";
+  openingTags: OpeningTagSnapshot[];
   policyModel: "deterministic-v2";
 }
 
@@ -69,9 +74,39 @@ export interface EvaluationSnapshot {
   changeCentipawns: number | null; errorMessage: string | null;
 }
 
+export interface OpeningMatchSnapshot {
+  recordId: number; eco: string; name: string; family: string;
+  variation: string | null; lineDepth: number;
+}
+export interface BookContinuationSnapshot {
+  uci: string; san: string; openingNames: string[]; defenseNames: string[];
+}
+export type OpeningMoveSource =
+  | "book-and-policy" | "policy-only" | "exact-override" | "recorded-branch"
+  | "book" | "engine" | "manual" | "frontier";
+export interface OpeningContextSnapshot {
+  primaryMatch: OpeningMatchSnapshot | null;
+  currentMatches: OpeningMatchSnapshot[];
+  lastKnownMatch: OpeningMatchSnapshot | null;
+  entered: OpeningMatchSnapshot[]; maintained: OpeningMatchSnapshot[];
+  exited: OpeningMatchSnapshot[]; playedMoveInBook: boolean | null;
+  bookContinuations: BookContinuationSnapshot[]; reachableDefenses: string[];
+  moveSource: OpeningMoveSource | null; policyRuleId: string | null;
+  exactOverrideId: string | null; recordedReplyId: string | null;
+}
+export interface OpeningHistoryItemSnapshot {
+  ply: number; san: string; uci: string; positionKey: string;
+  context: OpeningContextSnapshot;
+}
+export interface OpeningContextAttachment {
+  kind: "opening-context"; entry: OpeningHistoryItemSnapshot | null;
+  context: OpeningContextSnapshot; presentation: "compact" | "transition" | "current";
+}
+
 export interface BookMoveSnapshot {
-  uci: string; san: string; source: "local-book" | "policy" | "opponent-branch";
-  games: number | null; frequency: number | null;
+  uci: string; san: string;
+  source: "opening-index" | "book-and-policy" | "policy" | "opponent-branch";
+  openingNames: string[]; defenseNames: string[];
 }
 export interface EngineMoveSnapshot {
   uci: string; san: string; evaluationCp: number | null; mateIn: number | null;
@@ -89,6 +124,11 @@ export interface PolicyReferenceSnapshot {
   moveSan: string | null; note: string | null; reason: string;
 }
 export type ChatAttachment =
+  | OpeningContextAttachment
+  | { kind: "opening-list"; primaryMatch: OpeningMatchSnapshot | null; matches: OpeningMatchSnapshot[] }
+  | { kind: "defense-list"; reachable: string[]; entered: string[] }
+  | { kind: "book-details"; playedMoveInBook: boolean | null; continuations: BookContinuationSnapshot[] }
+  | { kind: "book-history"; entries: OpeningHistoryItemSnapshot[]; firstPolicyWithoutBookPly: number | null }
   | { kind: "position-analysis"; analysis: PositionAnalysisSnapshot }
   | { kind: "decision-explanation"; selected: PolicyReferenceSnapshot | null; higherPriorityWaiting: PolicyReferenceSnapshot[]; shadowedActive: PolicyReferenceSnapshot[]; dormant: PolicyReferenceSnapshot[]; conditionReasons: string[]; provenance: string[] }
   | { kind: "rule-details"; rule: PolicyItemSnapshot; provenance: string[] }
@@ -102,14 +142,18 @@ export interface ChatMessageSnapshot {
   text: string; attachment: ChatAttachment | null;
 }
 export interface ActivitySnapshot {
-  id: number; sequence: number; kind: "info" | "move" | "success" | "warning";
+  id: number; sequence: number;
+  kind: "info" | "move" | "success" | "warning" | "commentary";
   title: string; message: string;
+  attachment: OpeningContextAttachment | null;
 }
 export interface WorkspaceSnapshot {
   sessionId: string; mode: "develop";
   phase: "policy-ready" | "policy-result" | "opponent-ready" | "game-over";
   flow: FlowSnapshot; position: PositionSnapshot; decision: DecisionSnapshot | null;
-  attempt: AttemptSnapshot | null; rules: RuleGroupsSnapshot; evaluation: EvaluationSnapshot;
+  attempt: AttemptSnapshot | null; rules: RuleGroupsSnapshot;
+  opening: OpeningContextSnapshot; openingHistory: OpeningHistoryItemSnapshot[];
+  evaluation: EvaluationSnapshot;
   navigation: { canBack: boolean; canRestart: boolean }; activity: ActivitySnapshot[];
   chat: ChatMessageSnapshot[]; availableCommands: AvailableCommandSnapshot[];
   errors: ApiErrorItem[];
@@ -117,7 +161,9 @@ export interface WorkspaceSnapshot {
 
 export type CommandId =
   | "analyse_position" | "explain_decision" | "inspect_rule" | "list_rules"
-  | "trace_decision" | "inspect_position" | "play_move" | "next_opponent"
+  | "trace_decision" | "inspect_position" | "inspect_opening" | "list_openings"
+  | "list_defenses" | "inspect_book" | "inspect_book_history"
+  | "play_move" | "next_opponent"
   | "retry_policy" | "continue_policy" | "add_rule_for_mismatch" | "go_back"
   | "restart" | "hint_policy_move" | "list_commands";
 type SimpleCommandId = Exclude<CommandId, "play_move" | "inspect_rule">;

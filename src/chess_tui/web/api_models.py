@@ -43,6 +43,11 @@ class SimpleCommandRequest(ApiModel):
         "list_rules",
         "trace_decision",
         "inspect_position",
+        "inspect_opening",
+        "list_openings",
+        "list_defenses",
+        "inspect_book",
+        "inspect_book_history",
         "next_opponent",
         "retry_policy",
         "continue_policy",
@@ -95,6 +100,10 @@ class UpdateOverrideRequest(ApiModel):
     move: MoveActionRequest
 
 
+class OpeningTagRequest(ApiModel):
+    record_id: int = Field(ge=0)
+
+
 class ApiErrorItem(ApiModel):
     code: ApiErrorCode
     message: str
@@ -119,11 +128,18 @@ class FlowSourceResponse(ApiModel):
     content: str
 
 
+class OpeningTagSnapshot(ApiModel):
+    record_id: int | None
+    eco: str
+    name: str
+
+
 class FlowSnapshot(ApiModel):
     name: str
     version: int
     path: str
     side: Literal["white", "black"]
+    opening_tags: list[OpeningTagSnapshot] = Field(default_factory=list)
     policy_model: Literal["deterministic-v2"] = "deterministic-v2"
 
 
@@ -250,12 +266,64 @@ class NavigationSnapshot(ApiModel):
     can_restart: bool
 
 
+class OpeningMatchSnapshot(ApiModel):
+    record_id: int
+    eco: str
+    name: str
+    family: str
+    variation: str | None
+    line_depth: int
+
+
+class BookContinuationSnapshot(ApiModel):
+    uci: str
+    san: str
+    opening_names: list[str] = Field(default_factory=list)
+    defense_names: list[str] = Field(default_factory=list)
+
+
+class OpeningContextSnapshot(ApiModel):
+    primary_match: OpeningMatchSnapshot | None
+    current_matches: list[OpeningMatchSnapshot] = Field(default_factory=list)
+    last_known_match: OpeningMatchSnapshot | None
+    entered: list[OpeningMatchSnapshot] = Field(default_factory=list)
+    maintained: list[OpeningMatchSnapshot] = Field(default_factory=list)
+    exited: list[OpeningMatchSnapshot] = Field(default_factory=list)
+    played_move_in_book: bool | None
+    book_continuations: list[BookContinuationSnapshot] = Field(default_factory=list)
+    reachable_defenses: list[str] = Field(default_factory=list)
+    move_source: (
+        Literal[
+            "book-and-policy",
+            "policy-only",
+            "exact-override",
+            "recorded-branch",
+            "book",
+            "engine",
+            "manual",
+            "frontier",
+        ]
+        | None
+    )
+    policy_rule_id: str | None
+    exact_override_id: str | None
+    recorded_reply_id: str | None
+
+
+class OpeningHistoryItemSnapshot(ApiModel):
+    ply: int
+    san: str
+    uci: str
+    position_key: str
+    context: OpeningContextSnapshot
+
+
 class BookMoveSnapshot(ApiModel):
     uci: str
     san: str
-    source: Literal["local-book", "policy", "opponent-branch"]
-    games: int | None = None
-    frequency: float | None = None
+    source: Literal["opening-index", "book-and-policy", "policy", "opponent-branch"]
+    opening_names: list[str] = Field(default_factory=list)
+    defense_names: list[str] = Field(default_factory=list)
 
 
 class EngineMoveSnapshot(ApiModel):
@@ -277,6 +345,37 @@ class AvailableCommandSnapshot(ApiModel):
     usage: str
     description: str
     arguments: list[dict[str, object]] = Field(default_factory=list)
+
+
+class OpeningContextAttachment(ApiModel):
+    kind: Literal["opening-context"] = "opening-context"
+    entry: OpeningHistoryItemSnapshot | None
+    context: OpeningContextSnapshot
+    presentation: Literal["compact", "transition", "current"]
+
+
+class OpeningListAttachment(ApiModel):
+    kind: Literal["opening-list"] = "opening-list"
+    primary_match: OpeningMatchSnapshot | None
+    matches: list[OpeningMatchSnapshot] = Field(default_factory=list)
+
+
+class DefenseListAttachment(ApiModel):
+    kind: Literal["defense-list"] = "defense-list"
+    reachable: list[str] = Field(default_factory=list)
+    entered: list[str] = Field(default_factory=list)
+
+
+class BookDetailsAttachment(ApiModel):
+    kind: Literal["book-details"] = "book-details"
+    played_move_in_book: bool | None
+    continuations: list[BookContinuationSnapshot] = Field(default_factory=list)
+
+
+class BookHistoryAttachment(ApiModel):
+    kind: Literal["book-history"] = "book-history"
+    entries: list[OpeningHistoryItemSnapshot] = Field(default_factory=list)
+    first_policy_without_book_ply: int | None
 
 
 class PositionAnalysisAttachment(ApiModel):
@@ -349,7 +448,12 @@ class ValidationErrorAttachment(ApiModel):
 
 
 ChatAttachment: TypeAlias = Annotated[
-    PositionAnalysisAttachment
+    OpeningContextAttachment
+    | OpeningListAttachment
+    | DefenseListAttachment
+    | BookDetailsAttachment
+    | BookHistoryAttachment
+    | PositionAnalysisAttachment
     | DecisionExplanationAttachment
     | RuleDetailsAttachment
     | RuleListAttachment
@@ -372,9 +476,10 @@ class ChatMessageSnapshot(ApiModel):
 class ActivitySnapshot(ApiModel):
     id: int
     sequence: int
-    kind: Literal["info", "move", "success", "warning"]
+    kind: Literal["info", "move", "success", "warning", "commentary"]
     title: str
     message: str
+    attachment: OpeningContextAttachment | None = None
 
 
 class WorkspaceSnapshot(ApiModel):
@@ -386,6 +491,8 @@ class WorkspaceSnapshot(ApiModel):
     decision: DecisionSnapshot | None
     attempt: AttemptSnapshot | None
     rules: RuleGroupsSnapshot
+    opening: OpeningContextSnapshot
+    opening_history: list[OpeningHistoryItemSnapshot] = Field(default_factory=list)
     evaluation: EvaluationSnapshot
     navigation: NavigationSnapshot
     activity: list[ActivitySnapshot] = Field(default_factory=list)

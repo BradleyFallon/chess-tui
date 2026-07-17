@@ -56,6 +56,8 @@ def test_health_and_initial_v2_snapshot(tmp_path: Path) -> None:
         assert snapshot["decision"]["moveUci"] == "d2d4"
         assert snapshot["rules"]["selected"]["id"] == "develop-d-pawn"
         assert snapshot["rules"]["dormant"]
+        assert snapshot["opening"]["primaryMatch"] is None
+        assert snapshot["openingHistory"] == []
         assert all(
             item["kind"] != "opponent-reply" for item in snapshot["rules"]["overrides"]
         )
@@ -63,6 +65,13 @@ def test_health_and_initial_v2_snapshot(tmp_path: Path) -> None:
         assert "play_move" in command_ids
         assert "hint_policy_move" in command_ids
         assert "analyse_position" not in command_ids
+        assert {
+            "inspect_opening",
+            "list_openings",
+            "list_defenses",
+            "inspect_book",
+            "inspect_book_history",
+        } <= command_ids
         assert "restart" not in command_ids
 
 
@@ -97,6 +106,101 @@ def test_typed_commands_drive_moves_hints_and_phase_availability(
         assert {"next_opponent", "play_move", "go_back", "restart"} <= command_ids
         assert "hint_policy_move" not in command_ids
         assert "explain_decision" not in command_ids
+
+
+def test_opening_snapshots_timeline_and_read_only_command_attachments(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, _):
+        created = session(client)
+        session_id = created["sessionId"]
+
+        played = move(client, session_id, "d2d4")
+        assert played["opening"]["primaryMatch"]["name"] == "Queen's Pawn Game"
+        assert played["opening"]["moveSource"] == "book-and-policy"
+        assert played["opening"]["policyRuleId"] == "develop-d-pawn"
+        opening_event = played["activity"][-1]["attachment"]
+        assert played["activity"][-1]["kind"] == "commentary"
+        assert played["activity"][-1]["title"] == "Opening after 1.d4"
+        assert opening_event["kind"] == "opening-context"
+        assert opening_event["presentation"] == "transition"
+        assert opening_event["entry"]["san"] == "d4"
+
+        command_kinds = {
+            "/opening": "opening-context",
+            "/openings": "opening-list",
+            "/defenses": "defense-list",
+            "/book": "book-details",
+            "/book-history": "book-history",
+        }
+        for slash, kind in command_kinds.items():
+            response = client.post(
+                f"/api/sessions/{session_id}/chat", json={"text": slash}
+            )
+            assert response.status_code == 200
+            attachment = response.json()["workspace"]["chat"][-1]["attachment"]
+            assert attachment["kind"] == kind
+
+        history_response = client.post(
+            f"/api/sessions/{session_id}/chat", json={"text": "/book-history"}
+        )
+        history = history_response.json()["workspace"]["chat"][-1]["attachment"]
+        assert history["entries"][0]["context"]["moveSource"] == "book-and-policy"
+        assert history["entries"][0]["context"]["playedMoveInBook"] is True
+
+
+def test_opening_matches_can_be_saved_as_durable_flow_labels(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+
+        after_d4 = move(client, session_id, "d2d4")
+        queen_pawn = after_d4["opening"]["primaryMatch"]
+        added = client.post(
+            f"/api/sessions/{session_id}/opening-tags",
+            json={"recordId": queen_pawn["recordId"]},
+        )
+        assert added.status_code == 200
+        assert added.json()["flow"]["openingTags"] == [
+            {
+                "recordId": queen_pawn["recordId"],
+                "eco": "A40",
+                "name": "Queen's Pawn Game",
+            }
+        ]
+
+        move(client, session_id, "d7d5")
+        after_bf4 = move(client, session_id, "c1f4")
+        accelerated = after_bf4["opening"]["primaryMatch"]
+        added = client.post(
+            f"/api/sessions/{session_id}/opening-tags",
+            json={"recordId": accelerated["recordId"]},
+        )
+        assert added.status_code == 200
+        assert [tag["name"] for tag in added.json()["flow"]["openingTags"]] == [
+            "Queen's Pawn Game",
+            "Queen's Pawn Game: Accelerated London System",
+        ]
+        assert [tag.name for tag in FlowStore().load(path).opening_tags] == [
+            "Queen's Pawn Game",
+            "Queen's Pawn Game: Accelerated London System",
+        ]
+
+        duplicate = client.post(
+            f"/api/sessions/{session_id}/opening-tags",
+            json={"recordId": accelerated["recordId"]},
+        )
+        assert duplicate.status_code == 422
+
+        removed = client.delete(
+            f"/api/sessions/{session_id}/opening-tags/{accelerated['recordId']}"
+        )
+        assert removed.status_code == 200
+        assert [tag["name"] for tag in removed.json()["flow"]["openingTags"]] == [
+            "Queen's Pawn Game"
+        ]
 
 
 def test_typed_command_validation_and_unavailability_are_structured(
@@ -251,7 +355,8 @@ def test_correct_move_auto_advances_and_opponent_move_returns_policy(
         result = move(client, created["sessionId"], "d2d4")
         assert result["phase"] == "opponent-ready"
         assert result["attempt"] is None
-        assert result["activity"][-1]["title"] == "White played d4"
+        assert result["activity"][-2]["title"] == "White played d4"
+        assert result["activity"][-1]["title"] == "Opening after 1.d4"
         result = move(client, created["sessionId"], "d7d5")
         assert result["phase"] == "policy-ready"
         assert result["decision"]["moveSan"] == "Bf4"
@@ -292,7 +397,8 @@ def test_mismatch_can_add_an_exact_rule_from_chat_action(tmp_path: Path) -> None
         assert snapshot["phase"] == "opponent-ready"
         assert snapshot["attempt"] is None
         assert snapshot["position"]["historySan"] == ["e4"]
-        assert snapshot["activity"][-1]["title"] == "Added rule allow-e2e4-ply-0"
+        assert snapshot["activity"][-2]["title"] == "Added rule allow-e2e4-ply-0"
+        assert snapshot["activity"][-1]["title"] == "Opening after 1.e4"
         override = FlowStore().load(path).overrides[-1]
         assert override.id == "allow-e2e4-ply-0"
         assert str(override.move.piece) == "white:e2"
@@ -310,6 +416,9 @@ def test_engine_review_and_next_opponent(tmp_path: Path) -> None:
         response = client.post(f"/api/sessions/{session_id}/opponent/next", json={})
         assert response.status_code == 200
         assert response.json()["phase"] == "policy-ready"
+        assert (
+            response.json()["openingHistory"][-1]["context"]["moveSource"] == "engine"
+        )
 
 
 def test_position_analysis_returns_book_and_engine_candidates(tmp_path: Path) -> None:
@@ -336,13 +445,15 @@ def test_position_analysis_returns_book_and_engine_candidates(tmp_path: Path) ->
         activity = snapshot["activity"][-1]
         assert activity["title"] == "Position analysis completed"
         analysis = snapshot["chat"][-1]["attachment"]["analysis"]
-        assert analysis["bookMoves"][0] == {
-            "uci": "d7d5",
-            "san": "d5",
-            "source": "local-book",
-            "games": 800_000,
-            "frequency": 0.46,
-        }
+        assert analysis["bookMoves"]
+        assert all(
+            item["source"] == "opening-index" and item["openingNames"]
+            for item in analysis["bookMoves"]
+        )
+        assert all(
+            "games" not in item and "frequency" not in item
+            for item in analysis["bookMoves"]
+        )
         assert len(analysis["engineMoves"]) == 4
         assert all(row["principalVariation"] for row in analysis["engineMoves"])
 
@@ -359,15 +470,9 @@ def test_position_analysis_includes_policy_move_and_requires_engine(
             f"/api/sessions/{created['sessionId']}/analysis", json={}
         )
         book_moves = response.json()["chat"][-1]["attachment"]["analysis"]["bookMoves"]
-        assert book_moves == [
-            {
-                "uci": "d2d4",
-                "san": "d4",
-                "source": "policy",
-                "games": None,
-                "frequency": None,
-            }
-        ]
+        assert book_moves[0]["uci"] == "d2d4"
+        assert book_moves[0]["source"] == "book-and-policy"
+        assert book_moves[0]["openingNames"]
 
     with web_client(tmp_path) as (client, _):
         created = session(client)

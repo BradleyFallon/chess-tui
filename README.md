@@ -36,7 +36,7 @@ With no arguments, `chess-tui` starts flow mode with the most recently saved
 `flows/*.toml` file and the `stockfish` executable found in `PATH`. London is
 currently the most recently saved flow. Startup fails clearly if no saved flow
 or Stockfish executable is available; the deterministic prototype is not used
-for this default path. Black's first ranked book or engine response is played
+for this default path. Black's first deterministic indexed book or engine response is played
 automatically. `--flow` and `--engine` remain explicit overrides, and
 `--select-black` restores the suggestion selector.
 
@@ -68,13 +68,45 @@ the complete flow is validated, saved atomically, and replayed after each edit.
 The right-side timeline keeps application activity separate from user/assistant
 conversation while displaying both in deterministic sequence order. Python
 publishes the commands available in each snapshot and handles SAN, `/analyse`,
-`/why`, `/rule`, `/rules`, `/trace`, `/position`, navigation, hint, and mismatch
+`/why`, `/rule`, `/rules`, `/trace`, `/position`, `/opening`, `/openings`,
+`/defenses`, `/book`, `/book-history`, navigation, hint, and mismatch
 commands through the shared command registry. React sends complete chat text or
 typed command invocations; it does not parse slash syntax or reproduce command
 availability rules. Python remains authoritative for legality, policy,
 persistence, replay, analysis, and transient client effects such as hint
 highlighting. Web Quiz remains a placeholder and the Textual application remains
 supported.
+
+Every committed Development Mode move is followed in the right-hand timeline
+by a deterministic “Opening after …” commentary card. Python reports exact and
+last-known opening, book alignment, and book-versus-policy provenance. The card
+uses one deterministic primary match so ordinary commentary stays concise;
+`/openings`, `/defenses`, and `/book` retain the fuller diagnostic views. A
+current match can be promoted from its card to a durable flow label. Those
+authored `{ ECO, name }` labels appear in the workspace header and are saved in
+the flow TOML. The browser does not classify positions.
+
+## Bundled opening data
+
+Opening classification and book continuations use one offline position graph
+built from a pinned CC0 copy of
+[`lichess-org/chess-openings`](https://github.com/lichess-org/chess-openings).
+Source provenance is in `data/openings/lichess/VERSION` and `LICENSE`; runtime
+startup never downloads data.
+
+To update intentionally, replace the combined `openings.tsv`, license, and full
+commit in `VERSION` from one upstream revision, then run:
+
+```bash
+source ./activate
+python scripts/build_opening_index.py
+```
+
+Commit the regenerated
+`src/chess_tui/opening/data/lichess-index.json`. The build validates all source
+rows and moves and produces stable ordering. The dataset has no popularity
+statistics, so the UI reports “Book defenses still reachable” without
+frequency or likelihood claims.
 
 For two-process frontend development:
 
@@ -129,7 +161,7 @@ then the highest-priority active legal rule, then frontier.
 - The Textual side panel shows the selected rule, note, and full decision trace.
   Edit v2 rules in local Web Development Mode or directly in TOML, then use
   `Ctrl+R` to validate and deterministically replay the active line.
-- On the opponent turn, normal mode automatically plays the first ranked book
+- On the opponent turn, normal mode automatically plays the first indexed book
   or Stockfish response. `--select-black` restores interactive selection and
   manual board/SAN entry. Recorded replies are branch data, never policy rules.
 - The advantage bar and mismatch engine review are White-normalized; mate

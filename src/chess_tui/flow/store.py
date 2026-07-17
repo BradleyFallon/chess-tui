@@ -28,7 +28,14 @@ from ..policy import (
     referenced_states,
 )
 from .errors import FlowStorageError, FlowValidationError
-from .models import ExactOverride, Flow, NamedState, OpponentReply, PolicyRule
+from .models import (
+    ExactOverride,
+    Flow,
+    NamedState,
+    OpeningTag,
+    OpponentReply,
+    PolicyRule,
+)
 from .position import normalized_position_key, parse_legal_san, replay_san
 
 SUPPORTED_VERSION = 2
@@ -148,6 +155,24 @@ class FlowStore:
             raise FlowValidationError("Flow name cannot be empty.")
         if flow.side not in {"white", "black"}:
             raise FlowValidationError(f"Invalid controlled side: {flow.side!r}.")
+        opening_tags: set[tuple[str, str]] = set()
+        for tag in flow.opening_tags:
+            if (
+                len(tag.eco) != 3
+                or tag.eco[0] not in "ABCDE"
+                or not tag.eco[1:].isdigit()
+            ):
+                raise FlowValidationError(
+                    f"Opening tag has invalid ECO code {tag.eco!r}."
+                )
+            if not tag.name.strip():
+                raise FlowValidationError("Opening tag name cannot be empty.")
+            identity = (tag.eco, tag.name)
+            if identity in opening_tags:
+                raise FlowValidationError(
+                    f"Opening tags must be unique; duplicate {tag.name!r} ({tag.eco})."
+                )
+            opening_tags.add(identity)
         try:
             start = chess.Board(_expanded_fen(flow.start_fen))
         except ValueError as exc:
@@ -244,6 +269,7 @@ class FlowStore:
                 "name",
                 "start_fen",
                 "side",
+                "opening_tags",
                 "states",
                 "rules",
                 "overrides",
@@ -252,11 +278,18 @@ class FlowStore:
         )
         collections = {
             key: data.get(key, [])
-            for key in ("states", "rules", "overrides", "opponent_replies")
+            for key in (
+                "opening_tags",
+                "states",
+                "rules",
+                "overrides",
+                "opponent_replies",
+            )
         }
         if not all(isinstance(value, list) for value in collections.values()):
             raise TypeError(
-                "states, rules, overrides, and opponent_replies must be arrays of tables"
+                "opening_tags, states, rules, overrides, and opponent_replies "
+                "must be arrays of tables"
             )
         side = _string(data, "side")
         if side not in {"white", "black"}:
@@ -266,6 +299,9 @@ class FlowStore:
             name=_string(data, "name"),
             start_fen=_string(data, "start_fen"),
             side=side,  # type: ignore[arg-type]
+            opening_tags=tuple(
+                self._decode_opening_tag(item) for item in collections["opening_tags"]
+            ),
             states=tuple(self._decode_state(item) for item in collections["states"]),
             rules=tuple(self._decode_rule(item) for item in collections["rules"]),
             overrides=tuple(
@@ -275,6 +311,11 @@ class FlowStore:
                 self._decode_reply(item) for item in collections["opponent_replies"]
             ),
         )
+
+    def _decode_opening_tag(self, value: object) -> OpeningTag:
+        item = _mapping(value, "opening tag")
+        _require_keys(item, {"eco", "name"})
+        return OpeningTag(eco=_string(item, "eco"), name=_string(item, "name"))
 
     def _decode_state(self, value: object) -> NamedState:
         item = _mapping(value, "state")
@@ -344,6 +385,15 @@ def _encode(flow: Flow) -> str:
         f"start_fen = {json.dumps(flow.start_fen)}",
         f"side = {json.dumps(flow.side)}",
     ]
+    for tag in flow.opening_tags:
+        lines.extend(
+            (
+                "",
+                "[[opening_tags]]",
+                f"eco = {json.dumps(tag.eco)}",
+                f"name = {json.dumps(tag.name)}",
+            )
+        )
     for state in flow.states:
         lines.extend(
             (

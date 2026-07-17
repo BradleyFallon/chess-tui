@@ -25,6 +25,8 @@ interface WorkspaceContextValue {
   executeCommand: (command: TypedCommand) => Promise<void>;
   updateRule: (ruleId: string, update: RuleUpdate) => Promise<void>;
   updateOverride: (overrideId: string, update: OverrideUpdate) => Promise<void>;
+  addOpeningTag: (recordId: number) => Promise<void>;
+  removeOpeningTag: (recordId: number) => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -124,6 +126,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       executeCommand: (command) => operateCommand((id) => workspaceApi.executeCommand(id, command)),
       updateRule: (ruleId, update) => operate((id) => workspaceApi.updateRule(id, ruleId, update)),
       updateOverride: (overrideId, update) => operate((id) => workspaceApi.updateOverride(id, overrideId, update)),
+      addOpeningTag: (recordId) => operate((id) => workspaceApi.addOpeningTag(id, recordId)),
+      removeOpeningTag: (recordId) => operate((id) => workspaceApi.removeOpeningTag(id, recordId)),
     }),
     [effects, error, initialize, loading, operate, operateCommand, pending, workspace],
   );

@@ -99,6 +99,10 @@ version = 2
 name = "London System"
 start_fen = "startpos"
 side = "white"
+opening_tags = [
+  { eco = "A40", name = "Queen's Pawn Game" },
+  { eco = "D00", name = "Queen's Pawn Game: Accelerated London System" },
+]
 ```
 
 ## Fields
@@ -141,6 +145,21 @@ side = "white"
 ```
 
 White and Black flows are separate policies. Piece identifiers always use explicit colors rather than relative terms.
+
+### `opening_tags`
+
+Optional authored metadata associating the flow with established opening,
+system, gambit, attack, or tactical variation names. Each item contains the
+upstream ECO code and exact name:
+
+```toml
+opening_tags = [{ eco = "D00", name = "Queen's Pawn Game: Accelerated London System" }]
+```
+
+Opening tags do not participate in policy resolution and do not claim that
+every reachable position has that classification. Development Mode may offer a
+deterministic current match as a candidate, but adding or removing a label is
+an explicit authoring action. Generated opening record ids are never persisted.
 
 Use:
 

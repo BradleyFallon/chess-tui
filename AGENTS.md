@@ -25,6 +25,7 @@ Before changing rule-policy or flow-schema behavior, read:
 Before changing the local web application or development-mode behavior, read:
 
 * `docs/design/web-development-mode.md`
+* `docs/design/opening-classification.md`
 
 Also review:
 
@@ -221,6 +222,22 @@ Back navigation must not automatically delete persisted rules or explored branch
 * Close owned engine processes cleanly.
 * Normalize evaluations consistently and document the evaluation perspective.
 * Keep mate scores separate from ordinary centipawn values.
+
+### Opening classification
+
+* The bundled index built from the pinned `lichess-org/chess-openings` dataset
+  is the sole opening-classification and book-sequence source.
+* Runtime classification is offline and deterministic. Do not download opening
+  data during startup or query an opening API.
+* Opening data describes established names and sequences; flow policy describes
+  authored decisions. Keep those concepts separate while recording when they
+  agree.
+* Python owns opening identity, transpositions, continuations, reachable
+  defenses, and move provenance. React only renders returned context.
+* Opening context belongs to move or branch history. Back, Restart, replay, and
+  branch navigation must reproduce it without deleting explored branches.
+* The bundled dataset contains no frequency information. Do not call reachable
+  defenses likely or invent game counts and popularity percentages.
 
 ### Rendering
 

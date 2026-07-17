@@ -2,7 +2,14 @@
 
 from .author import AuthorBoardController, ConfirmedAuthorMove, FlowAuthor
 from .errors import FlowError, FlowPolicyError, FlowStorageError, FlowValidationError
-from .models import ExactOverride, Flow, NamedState, OpponentReply, PolicyRule
+from .models import (
+    ExactOverride,
+    Flow,
+    NamedState,
+    OpeningTag,
+    OpponentReply,
+    PolicyRule,
+)
 from .position import normalized_position_key, replay_san
 from .store import FlowStore
 from .workspace import AttemptResult, FlowWorkspace, PolicyMoveAttempt, PolicyTurn
@@ -21,6 +28,7 @@ __all__ = [
     "FlowValidationError",
     "FlowWorkspace",
     "NamedState",
+    "OpeningTag",
     "OpponentReply",
     "PolicyMoveAttempt",
     "PolicyRule",

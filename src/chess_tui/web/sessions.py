@@ -35,12 +35,20 @@ from ..flow import (
     FlowStorageError,
     FlowStore,
     FlowWorkspace,
+    OpeningTag,
     PolicyMoveAttempt,
     PolicyRule,
     normalized_position_key,
 )
 from ..flow.position import replay_san
-from ..opening import FixtureOpeningMoveSource, OpeningSourceError
+from ..opening import (
+    OpeningContext,
+    OpeningHistoryEntry,
+    OpeningMatch,
+    OpeningMoveProvenance,
+    OpeningDataError,
+    OpeningSourceError,
+)
 from ..policy import MoveAction, OriginalPieceId, condition_to_data, parse_condition
 from ..policy.conditions import ConditionEvaluator
 from ..policy.models import EffectiveRuleStatus
@@ -54,12 +62,16 @@ from .api_models import (
     ActivitySnapshot,
     AvailableCommandSnapshot,
     AttemptSnapshot,
+    BookContinuationSnapshot,
+    BookDetailsAttachment,
+    BookHistoryAttachment,
     BookMoveSnapshot,
     ChatAttachment,
     ChatMessageSnapshot,
     CommandListAttachment,
     CommandResponse,
     ConditionSnapshot,
+    DefenseListAttachment,
     DecisionSnapshot,
     DecisionExplanationAttachment,
     DecisionTraceAttachment,
@@ -73,6 +85,12 @@ from .api_models import (
     HighlightMoveEffect,
     LegalMoveSnapshot,
     NavigationSnapshot,
+    OpeningContextAttachment,
+    OpeningContextSnapshot,
+    OpeningHistoryItemSnapshot,
+    OpeningListAttachment,
+    OpeningMatchSnapshot,
+    OpeningTagSnapshot,
     OverrideRuntimeSnapshot,
     PolicyReferenceSnapshot,
     PositionAnalysisAttachment,
@@ -171,7 +189,6 @@ class SessionManager:
             startup_flow_path.resolve() if startup_flow_path else None
         )
         self.evaluations = EvaluationCache(engine, engine_identity=engine_identity)
-        self.opening_source = FixtureOpeningMoveSource()
         self.commands = CommandRegistry()
         self.sessions: dict[str, DevelopmentSession] = {}
 
@@ -322,6 +339,7 @@ class SessionManager:
                 "success",
                 f"Continued with {expected}",
                 attempt.decision.note or "The selected policy rule was kept unchanged.",
+                _latest_opening_attachment(workspace),
             )
             return CommandOutcome()
 
@@ -339,6 +357,7 @@ class SessionManager:
                 "success",
                 f"Added rule {override.id}",
                 f"{played_san} is now the exact-position policy move here and was accepted.",
+                _latest_opening_attachment(workspace),
             )
             return CommandOutcome()
 
@@ -443,6 +462,85 @@ class SessionManager:
                     _position_details(workspace),
                 )
             )
+        if command is CommandId.INSPECT_OPENING:
+            context = workspace.get_current_opening_context()
+            return CommandOutcome(
+                reply=AssistantReply(
+                    _opening_context_text(context),
+                    "opening-context",
+                    OpeningContextAttachment(
+                        entry=(
+                            _opening_history_item(workspace.opening_history[-1])
+                            if workspace.opening_history
+                            else None
+                        ),
+                        context=_opening_context_snapshot(context),
+                        presentation="current",
+                    ),
+                )
+            )
+        if command is CommandId.LIST_OPENINGS:
+            context = workspace.get_current_opening_context()
+            return CommandOutcome(
+                reply=AssistantReply(
+                    "Named opening matches for the current normalized position.",
+                    "opening-list",
+                    OpeningListAttachment(
+                        primary_match=(
+                            _opening_match_snapshot(context.primary_match)
+                            if context.primary_match
+                            else None
+                        ),
+                        matches=[
+                            _opening_match_snapshot(match)
+                            for match in context.current_matches
+                        ],
+                    ),
+                )
+            )
+        if command is CommandId.LIST_DEFENSES:
+            return CommandOutcome(
+                reply=AssistantReply(
+                    "Entered defenses and book defenses still reachable.",
+                    "defense-list",
+                    DefenseListAttachment(
+                        reachable=list(workspace.get_reachable_defenses()),
+                        entered=_entered_defenses(workspace),
+                    ),
+                )
+            )
+        if command is CommandId.INSPECT_BOOK:
+            context = workspace.get_current_opening_context()
+            return CommandOutcome(
+                reply=AssistantReply(
+                    "Opening-index alignment and current continuations.",
+                    "book-details",
+                    BookDetailsAttachment(
+                        played_move_in_book=context.played_move_in_book,
+                        continuations=[
+                            _book_continuation_snapshot(item)
+                            for item in workspace.get_book_continuations()
+                        ],
+                    ),
+                )
+            )
+        if command is CommandId.INSPECT_BOOK_HISTORY:
+            transition = workspace.find_book_policy_transition()
+            return CommandOutcome(
+                reply=AssistantReply(
+                    "Opening transitions along the current line.",
+                    "book-history",
+                    BookHistoryAttachment(
+                        entries=[
+                            _opening_history_item(entry)
+                            for entry in workspace.get_opening_history()
+                        ],
+                        first_policy_without_book_ply=(
+                            transition.ply if transition else None
+                        ),
+                    ),
+                )
+            )
         if command is CommandId.LIST_COMMANDS:
             return CommandOutcome(
                 reply=AssistantReply(
@@ -482,12 +580,15 @@ class SessionManager:
             )
         san = workspace.board.san(move)
         color = "White" if workspace.board.turn == chess.WHITE else "Black"
-        workspace.submit_opponent_uci(move.uci())
+        workspace.submit_opponent_uci(
+            move.uci(), move_source=OpeningMoveProvenance.ENGINE
+        )
         self._append_activity(
             session,
             "move",
             f"{color} played {san}",
             "The engine selected this reply after you chose Next.",
+            _latest_opening_attachment(workspace),
         )
         if workspace.outcome is None:
             workspace.begin_policy_turn()
@@ -653,14 +754,14 @@ class SessionManager:
     ) -> list[BookMoveSnapshot]:
         suggestions: list[BookMoveSnapshot] = []
         seen: set[str] = set()
-        for move in await self.opening_source.moves_for(board):
+        for move in workspace.opening_classifier.book_continuations(board):
             suggestions.append(
                 BookMoveSnapshot(
                     uci=move.uci,
                     san=move.san,
-                    source="local-book",
-                    games=move.games,
-                    frequency=move.frequency,
+                    source="opening-index",
+                    opening_names=list(move.opening_names),
+                    defense_names=list(move.defense_names),
                 )
             )
             seen.add(move.uci)
@@ -669,7 +770,21 @@ class SessionManager:
             decision = workspace.policy_turn or workspace.begin_policy_turn()
             if decision.decision.move is not None:
                 move = decision.decision.move
-                if move.uci() not in seen:
+                existing_index = next(
+                    (
+                        index
+                        for index, item in enumerate(suggestions)
+                        if item.uci == move.uci()
+                    ),
+                    None,
+                )
+                if existing_index is not None:
+                    existing = suggestions.pop(existing_index)
+                    suggestions.insert(
+                        0,
+                        existing.model_copy(update={"source": "book-and-policy"}),
+                    )
+                else:
                     suggestions.append(
                         BookMoveSnapshot(
                             uci=move.uci(),
@@ -707,6 +822,7 @@ class SessionManager:
         session = self._session(session_id)
         async with session.lock:
             workspace = session.workspace
+            opening_ply_before = len(workspace.opening_history)
             if all(rule.id != rule_id for rule in workspace.author.flow.rules):
                 raise WebApiError(
                     ApiErrorCode.INVALID_REQUEST, f"Unknown rule id {rule_id!r}."
@@ -743,6 +859,11 @@ class SessionManager:
                 "info",
                 f"Updated rule {rule_id}",
                 "The complete flow was validated, saved atomically, and replayed.",
+                (
+                    _latest_opening_attachment(workspace)
+                    if len(workspace.opening_history) > opening_ply_before
+                    else None
+                ),
             )
             return await self._snapshot(session)
 
@@ -752,6 +873,7 @@ class SessionManager:
         session = self._session(session_id)
         async with session.lock:
             workspace = session.workspace
+            opening_ply_before = len(workspace.opening_history)
             if all(item.id != override_id for item in workspace.author.flow.overrides):
                 raise WebApiError(
                     ApiErrorCode.INVALID_REQUEST,
@@ -779,8 +901,57 @@ class SessionManager:
                 "info",
                 f"Updated override {override_id}",
                 "The exact position, action, and flow replay all validated.",
+                (
+                    _latest_opening_attachment(workspace)
+                    if len(workspace.opening_history) > opening_ply_before
+                    else None
+                ),
             )
             return await self._snapshot(session)
+
+    async def add_opening_tag(
+        self, session_id: str, record_id: int
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            match = self._opening_match(workspace, record_id)
+            tag = OpeningTag(match.eco, match.name)
+            workspace.add_opening_tag(tag)
+            self._append_activity(
+                session,
+                "success",
+                f"Labeled flow {match.name}",
+                f"Saved {match.eco} as durable flow metadata.",
+            )
+            return await self._snapshot(session)
+
+    async def remove_opening_tag(
+        self, session_id: str, record_id: int
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            match = self._opening_match(workspace, record_id)
+            tag = OpeningTag(match.eco, match.name)
+            workspace.remove_opening_tag(tag)
+            self._append_activity(
+                session,
+                "info",
+                f"Removed flow label {match.name}",
+                f"Removed {match.eco} from the durable flow metadata.",
+            )
+            return await self._snapshot(session)
+
+    @staticmethod
+    def _opening_match(workspace: FlowWorkspace, record_id: int) -> OpeningMatch:
+        try:
+            return workspace.opening_classifier.match_by_id(record_id)
+        except OpeningDataError as error:
+            raise WebApiError(
+                ApiErrorCode.INVALID_REQUEST,
+                f"Unknown opening record id {record_id}.",
+            ) from error
 
     async def go_back(self, session_id: str) -> WorkspaceSnapshot:
         return await self._compat_command(
@@ -818,17 +989,36 @@ class SessionManager:
         color = "White" if workspace.board.turn == chess.WHITE else "Black"
         if workspace.is_policy_turn:
             attempt = workspace.submit_policy_uci(move.uci())
-            self._record_policy_attempt(session, attempt)
             if attempt.result is AttemptResult.CORRECT:
                 workspace.complete_correct_move()
+            self._record_policy_attempt(session, attempt)
         else:
-            workspace.submit_opponent_uci(move.uci())
+            source = OpeningMoveProvenance.MANUAL
+            if not typed:
+                visible_history = tuple(workspace.history)
+                recorded = any(
+                    reply.after_san == visible_history and reply.move_san == san
+                    for reply in workspace.author.flow.opponent_replies
+                )
+                if recorded:
+                    source = OpeningMoveProvenance.RECORDED_BRANCH
+                elif workspace.opening_classifier.compare_move_to_book(
+                    workspace.board, move
+                ):
+                    source = OpeningMoveProvenance.BOOK
+            workspace.submit_opponent_uci(move.uci(), move_source=source)
             reason = (
                 "This reply was entered in the move composer."
                 if typed
                 else "This is the selected opponent reply for the current line."
             )
-            self._append_activity(session, "move", f"{color} played {san}", reason)
+            self._append_activity(
+                session,
+                "move",
+                f"{color} played {san}",
+                reason,
+                _latest_opening_attachment(workspace),
+            )
             if workspace.outcome is None:
                 workspace.begin_policy_turn()
 
@@ -851,6 +1041,11 @@ class SessionManager:
             kind,
             f"{color} played {attempt.selected_move.san}",
             message.strip(),
+            (
+                _latest_opening_attachment(session.workspace)
+                if attempt.result is AttemptResult.CORRECT
+                else None
+            ),
         )
 
     async def _snapshot(self, session: DevelopmentSession) -> WorkspaceSnapshot:
@@ -877,6 +1072,23 @@ class SessionManager:
                 version=workspace.author.flow.version,
                 path=self._display_path(session.flow_path),
                 side=workspace.author.flow.side,
+                opening_tags=[
+                    OpeningTagSnapshot(
+                        record_id=(
+                            match.record_id
+                            if (
+                                match := workspace.opening_classifier.match_for_identity(
+                                    tag.eco, tag.name
+                                )
+                            )
+                            is not None
+                            else None
+                        ),
+                        eco=tag.eco,
+                        name=tag.name,
+                    )
+                    for tag in workspace.author.flow.opening_tags
+                ],
             ),
             position=PositionSnapshot(
                 fen=workspace.board.fen(en_passant="fen"),
@@ -898,6 +1110,11 @@ class SessionManager:
             decision=_decision_snapshot(decision),
             attempt=attempt,
             rules=_rule_groups(workspace, decision),
+            opening=_opening_context_snapshot(workspace.get_current_opening_context()),
+            opening_history=[
+                _opening_history_item(entry)
+                for entry in workspace.get_opening_history()
+            ],
             evaluation=evaluation,
             navigation=NavigationSnapshot(
                 can_back=workspace.can_go_back, can_restart=workspace.can_restart
@@ -1026,18 +1243,35 @@ class SessionManager:
         kind: Literal["info", "move", "success", "warning"],
         title: str,
         message: str,
+        attachment: OpeningContextAttachment | None = None,
     ) -> None:
-        session.activity.append(
-            ActivitySnapshot(
-                id=session.next_activity_id,
-                sequence=session.next_sequence,
-                kind=kind,
-                title=title,
-                message=message,
+        def append(
+            event_kind: Literal["info", "move", "success", "warning", "commentary"],
+            event_title: str,
+            event_message: str,
+            event_attachment: OpeningContextAttachment | None = None,
+        ) -> None:
+            session.activity.append(
+                ActivitySnapshot(
+                    id=session.next_activity_id,
+                    sequence=session.next_sequence,
+                    kind=event_kind,
+                    title=event_title,
+                    message=event_message,
+                    attachment=event_attachment,
+                )
             )
-        )
-        session.next_activity_id += 1
-        session.next_sequence += 1
+            session.next_activity_id += 1
+            session.next_sequence += 1
+
+        append(kind, title, message)
+        if attachment is not None:
+            append(
+                "commentary",
+                _opening_commentary_title(attachment),
+                _opening_commentary_text(attachment),
+                attachment,
+            )
         if len(session.activity) > 100:
             del session.activity[:-100]
 
@@ -1450,6 +1684,144 @@ def _terminal_analysis(outcome: chess.Outcome) -> AnalysedMove:
             "", "", None, (), mate_in=0 if outcome.winner is chess.WHITE else -1
         )
     return AnalysedMove("", "", 0, ())
+
+
+def _opening_match_snapshot(match: OpeningMatch) -> OpeningMatchSnapshot:
+    return OpeningMatchSnapshot(
+        record_id=match.record_id,
+        eco=match.eco,
+        name=match.name,
+        family=match.family,
+        variation=match.variation,
+        line_depth=match.line_depth,
+    )
+
+
+def _book_continuation_snapshot(
+    continuation: object,
+) -> BookContinuationSnapshot:
+    from ..opening import BookContinuation
+
+    assert isinstance(continuation, BookContinuation)
+    return BookContinuationSnapshot(
+        uci=continuation.uci,
+        san=continuation.san,
+        opening_names=list(continuation.opening_names),
+        defense_names=list(continuation.defense_names),
+    )
+
+
+def _opening_context_snapshot(context: OpeningContext) -> OpeningContextSnapshot:
+    return OpeningContextSnapshot(
+        primary_match=(
+            _opening_match_snapshot(context.primary_match)
+            if context.primary_match
+            else None
+        ),
+        current_matches=[
+            _opening_match_snapshot(match) for match in context.current_matches
+        ],
+        last_known_match=(
+            _opening_match_snapshot(context.last_known_match)
+            if context.last_known_match
+            else None
+        ),
+        entered=[_opening_match_snapshot(match) for match in context.entered],
+        maintained=[_opening_match_snapshot(match) for match in context.maintained],
+        exited=[_opening_match_snapshot(match) for match in context.exited],
+        played_move_in_book=context.played_move_in_book,
+        book_continuations=[
+            _book_continuation_snapshot(item) for item in context.book_continuations
+        ],
+        reachable_defenses=list(context.reachable_defenses),
+        move_source=(
+            context.move_source.value if context.move_source is not None else None
+        ),  # type: ignore[arg-type]
+        policy_rule_id=context.policy_rule_id,
+        exact_override_id=context.exact_override_id,
+        recorded_reply_id=context.recorded_reply_id,
+    )
+
+
+def _opening_history_item(entry: OpeningHistoryEntry) -> OpeningHistoryItemSnapshot:
+    return OpeningHistoryItemSnapshot(
+        ply=entry.ply,
+        san=entry.san,
+        uci=entry.uci,
+        position_key=entry.position_key,
+        context=_opening_context_snapshot(entry.context),
+    )
+
+
+def _latest_opening_attachment(
+    workspace: FlowWorkspace,
+) -> OpeningContextAttachment | None:
+    if not workspace.opening_history:
+        return None
+    entry = workspace.opening_history[-1]
+    context = entry.context
+    transition = bool(context.entered or context.exited)
+    if context.played_move_in_book is False and context.move_source in {
+        OpeningMoveProvenance.POLICY_ONLY,
+        OpeningMoveProvenance.EXACT_OVERRIDE,
+    }:
+        transition = True
+    return OpeningContextAttachment(
+        entry=_opening_history_item(entry),
+        context=_opening_context_snapshot(context),
+        presentation="transition" if transition else "compact",
+    )
+
+
+def _opening_context_text(context: OpeningContext) -> str:
+    if context.primary_match is not None:
+        return f"Current opening: {context.primary_match.name} ({context.primary_match.eco})."
+    if context.last_known_match is not None:
+        return (
+            "No exact named opening position. Last known opening: "
+            f"{context.last_known_match.name} ({context.last_known_match.eco})."
+        )
+    return "No exact named opening position has been reached on this line."
+
+
+def _opening_commentary_title(attachment: OpeningContextAttachment) -> str:
+    entry = attachment.entry
+    if entry is None:
+        return "Opening commentary"
+    move_number = (entry.ply + 1) // 2
+    move_label = (
+        f"{move_number}.{entry.san}"
+        if entry.ply % 2
+        else f"{move_number}...{entry.san}"
+    )
+    return f"Opening after {move_label}"
+
+
+def _opening_commentary_text(attachment: OpeningContextAttachment) -> str:
+    context = attachment.context
+    if context.primary_match is not None:
+        return f"{_opening_display_name(context.primary_match)}."
+    if context.last_known_match is not None:
+        return (
+            "No exact named opening position. Last known: "
+            f"{_opening_display_name(context.last_known_match)}."
+        )
+    return "No exact named opening position is known on this line."
+
+
+def _opening_display_name(match: OpeningMatchSnapshot) -> str:
+    return match.variation or match.name
+
+
+def _entered_defenses(workspace: FlowWorkspace) -> list[str]:
+    return sorted(
+        {
+            match.family
+            for entry in workspace.get_opening_history()
+            for match in entry.context.current_matches
+            if "Defense" in match.family
+        }
+    )
 
 
 def _clean_note(note: str | None) -> str | None:

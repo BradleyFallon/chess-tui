@@ -119,7 +119,5 @@ class MoveSuggestionPanel(Static):
 
 def _suggestion_details(suggestion: MoveSuggestion) -> str:
     kind = suggestion.kind.value.upper()
-    if suggestion.frequency is not None and suggestion.games is not None:
-        return f"{kind} · {suggestion.frequency:.0%} · {suggestion.games:,} games"
     label = suggestion.label.strip()
     return f"{kind} · {label}" if label and label.upper() != kind else kind

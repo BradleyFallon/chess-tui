@@ -3,6 +3,14 @@ name = "London System"
 start_fen = "startpos"
 side = "white"
 
+[[opening_tags]]
+eco = "A40"
+name = "Queen's Pawn Game"
+
+[[opening_tags]]
+eco = "D00"
+name = "Queen's Pawn Game: Accelerated London System"
+
 [[states]]
 id = "london-before-nf3"
 when = { all = [{ at = { piece = "white:d2", square = "d4" } }, { at = { piece = "white:c1", square = "f4" } }, { at = { piece = "white:e2", square = "e3" } }] }
@@ -75,6 +83,12 @@ id = "qb4-after-bd7"
 after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3", "c5", "Bd3", "Qb6", "c3", "c4", "Qa4+", "Bd7"]
 note = "Keep pressure on the queenside after ...Bd7."
 move = { piece = "white:d1", to = "b4" }
+
+[[overrides]]
+id = "allow-c2c3-ply-8"
+after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3", "Nc6"]
+note = "Added from chat to allow c3 here."
+move = { piece = "white:c2", to = "c3" }
 
 [[opponent_replies]]
 id = "after-d4-d5-bf4-nf6-e3-e6-nf3-c5-bd3-qb6"

@@ -11,7 +11,7 @@ import chess
 from ..board import ParsedFen, parse_fen
 from ..game import BoardInteraction, ChessMove
 from .errors import FlowValidationError
-from .models import ExactOverride, Flow, OpponentReply, PolicyRule
+from .models import ExactOverride, Flow, OpeningTag, OpponentReply, PolicyRule
 from .position import normalized_position_key, parse_legal_san, replay_san
 from .store import FlowStore
 
@@ -57,6 +57,23 @@ class FlowAuthor:
         if any(item.id == override.id for item in self.flow.overrides):
             raise FlowValidationError(f"Duplicate override id: {override.id!r}.")
         return replace(self.flow, overrides=(*self.flow.overrides, override))
+
+    def candidate_with_added_opening_tag(self, tag: OpeningTag) -> Flow:
+        if tag in self.flow.opening_tags:
+            raise FlowValidationError(
+                f"Flow is already labeled {tag.name!r} ({tag.eco})."
+            )
+        return replace(self.flow, opening_tags=(*self.flow.opening_tags, tag))
+
+    def candidate_without_opening_tag(self, tag: OpeningTag) -> Flow:
+        if tag not in self.flow.opening_tags:
+            raise FlowValidationError(f"Flow is not labeled {tag.name!r} ({tag.eco}).")
+        return replace(
+            self.flow,
+            opening_tags=tuple(
+                existing for existing in self.flow.opening_tags if existing != tag
+            ),
+        )
 
     def record_opponent_reply(
         self,

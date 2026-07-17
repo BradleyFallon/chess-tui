@@ -6,11 +6,7 @@ from typing import Protocol
 
 import chess
 
-from .models import MoveSuggestion, OpeningMove
-
-
-class OpeningMoveSource(Protocol):
-    async def moves_for(self, board: chess.Board) -> tuple[OpeningMove, ...]: ...
+from .models import MoveSuggestion
 
 
 class BotMoveSource(Protocol):

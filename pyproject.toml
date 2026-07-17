@@ -42,7 +42,12 @@ where = ["src"]
 include = ["chess_tui", "chess_tui.*"]
 
 [tool.setuptools.package-data]
-chess_tui = ["output_schema.json", "assets/pieces/*.toml", "assets/quiz/*.toml"]
+chess_tui = [
+  "output_schema.json",
+  "assets/pieces/*.toml",
+  "assets/quiz/*.toml",
+  "opening/data/*.json",
+]
 
 [tool.pytest.ini_options]
 addopts = "-q"

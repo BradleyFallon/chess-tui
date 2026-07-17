@@ -18,7 +18,7 @@ COMMANDS: tuple[CommandDefinition, ...] = (
         CommandId.ANALYSE_POSITION,
         "/analyse",
         "/analyse",
-        "Show local book moves and Stockfish's best candidates.",
+        "Show opening-index moves and Stockfish's best candidates.",
     ),
     CommandDefinition(
         CommandId.EXPLAIN_DECISION,
@@ -50,6 +50,36 @@ COMMANDS: tuple[CommandDefinition, ...] = (
         "/position",
         "/position",
         "Show the current position, history, and legal moves.",
+    ),
+    CommandDefinition(
+        CommandId.INSPECT_OPENING,
+        "/opening",
+        "/opening",
+        "Explain the current or last known opening classification.",
+    ),
+    CommandDefinition(
+        CommandId.LIST_OPENINGS,
+        "/openings",
+        "/openings",
+        "List all named opening matches for the current position.",
+    ),
+    CommandDefinition(
+        CommandId.LIST_DEFENSES,
+        "/defenses",
+        "/defenses",
+        "List entered defenses and book defenses still reachable.",
+    ),
+    CommandDefinition(
+        CommandId.INSPECT_BOOK,
+        "/book",
+        "/book",
+        "Show book alignment and continuations from the opening index.",
+    ),
+    CommandDefinition(
+        CommandId.INSPECT_BOOK_HISTORY,
+        "/book-history",
+        "/book-history",
+        "Summarize opening transitions along the current line.",
     ),
     CommandDefinition(
         CommandId.PLAY_MOVE,
@@ -123,6 +153,11 @@ class CommandRegistry:
     def is_available(self, command: CommandId, context: CommandAvailability) -> bool:
         if command in {
             CommandId.INSPECT_POSITION,
+            CommandId.INSPECT_OPENING,
+            CommandId.LIST_OPENINGS,
+            CommandId.LIST_DEFENSES,
+            CommandId.INSPECT_BOOK,
+            CommandId.INSPECT_BOOK_HISTORY,
             CommandId.LIST_RULES,
             CommandId.LIST_COMMANDS,
         }:

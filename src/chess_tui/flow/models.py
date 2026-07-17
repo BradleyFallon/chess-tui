@@ -11,6 +11,12 @@ FlowSide: TypeAlias = Literal["white", "black"]
 
 
 @dataclass(frozen=True, slots=True)
+class OpeningTag:
+    eco: str
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
 class NamedState:
     id: str
     when: Condition
@@ -50,6 +56,7 @@ class Flow:
     name: str
     start_fen: str
     side: FlowSide
+    opening_tags: tuple[OpeningTag, ...] = ()
     states: tuple[NamedState, ...] = ()
     rules: tuple[PolicyRule, ...] = ()
     overrides: tuple[ExactOverride, ...] = ()

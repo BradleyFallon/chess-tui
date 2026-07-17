@@ -19,6 +19,8 @@ export function DevelopPage() {
     executeCommand,
     updateRule,
     updateOverride,
+    addOpeningTag,
+    removeOpeningTag,
   } = useWorkspace();
 
   useEffect(() => {
@@ -67,6 +69,25 @@ export function DevelopPage() {
         </div>
         <div className="flow-title">
           <strong>{workspace.flow.name}</strong>
+          {workspace.flow.openingTags.length > 0 && (
+            <div className="flow-tags" aria-label="Opening labels">
+              {workspace.flow.openingTags.map((tag) => (
+                <button
+                  className="flow-tag"
+                  key={`${tag.eco}-${tag.name}`}
+                  type="button"
+                  disabled={pending || tag.recordId === null}
+                  onClick={() => {
+                    if (tag.recordId !== null) void removeOpeningTag(tag.recordId);
+                  }}
+                  title={`Remove ${tag.name} label`}
+                >
+                  {shortOpeningName(tag.name)}
+                  <span aria-hidden="true">×</span>
+                </button>
+              ))}
+            </div>
+          )}
           <span>{workspace.flow.path}</span>
         </div>
       </header>
@@ -106,6 +127,8 @@ export function DevelopPage() {
             hintVisible={hintVisible}
             onSubmit={(text) => void sendChat(text)}
             onExecute={(command) => void executeCommand(command)}
+            onAddOpeningTag={(recordId) => void addOpeningTag(recordId)}
+            onRemoveOpeningTag={(recordId) => void removeOpeningTag(recordId)}
           />
         </div>
       </div>
@@ -115,4 +138,8 @@ export function DevelopPage() {
 
 function LoadingScreen() {
   return <main className="center-page"><p>Loading Development Mode…</p></main>;
+}
+
+function shortOpeningName(name: string): string {
+  return name.includes(":") ? name.split(":").at(-1)?.trim() ?? name : name;
 }
