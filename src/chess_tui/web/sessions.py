@@ -6,7 +6,7 @@ import asyncio
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 import secrets
-from typing import Literal, cast
+from typing import Literal, TypeAlias, cast
 
 import chess
 
@@ -67,6 +67,7 @@ from ..policy.runtime import (
     DecisionSource,
     OverrideResolution,
     PolicyDecision,
+    PolicyRuntime,
     RuleResolution,
 )
 from .api_models import (
@@ -76,6 +77,7 @@ from .api_models import (
     AnalysisSettingsSnapshot,
     AvailableCommandSnapshot,
     AttemptSnapshot,
+    AttemptAuthoringPrefill,
     BookContinuationSnapshot,
     BookDetailsAttachment,
     BookHistoryAttachment,
@@ -85,6 +87,7 @@ from .api_models import (
     CommandListAttachment,
     CommandResponse,
     ConditionSnapshot,
+    ConditionSuggestion,
     DefenseListAttachment,
     DecisionSnapshot,
     DecisionExplanationAttachment,
@@ -103,6 +106,7 @@ from .api_models import (
     HighlightMoveEffect,
     LegalMoveSnapshot,
     NavigationSnapshot,
+    NamedConditionSnapshot,
     OpeningContextAttachment,
     OpeningContextSnapshot,
     OpeningHistoryItemSnapshot,
@@ -117,9 +121,13 @@ from .api_models import (
     PositionSnapshot,
     PositionAnalysisSnapshot,
     RuleDetailsAttachment,
+    RuleDraftRequest,
+    RuleDraftValidationResponse,
     RuleGroupsSnapshot,
     RuleListAttachment,
     RuleRuntimeSnapshot,
+    RelatedRuleSnapshot,
+    ExactFixSummary,
     StartingPieceSnapshot,
     StructureOrderRequest,
     StructureRuntimeSnapshot,
@@ -369,20 +377,23 @@ class SessionManager:
             )
             return CommandOutcome()
 
-        if command is CommandId.ADD_RULE_FOR_MISMATCH:
+        if command is CommandId.ACCEPT_ATTEMPT_AS_OVERRIDE:
             attempt = workspace.attempt
-            if attempt is None or attempt.result is not AttemptResult.MISMATCH:
+            if attempt is None or attempt.result not in {
+                AttemptResult.MISMATCH,
+                AttemptResult.FRONTIER,
+            }:
                 raise CommandFailure(
                     "COMMAND_UNAVAILABLE",
-                    "A rule can only be added for a pending mismatching move.",
+                    "Only a pending mismatch or frontier move can be accepted here.",
                 )
             played_san = attempt.selected_move.san
-            override = workspace.allow_mismatch_as_override()
+            override = workspace.accept_attempt_as_override()
             self._append_activity(
                 session,
                 "success",
-                f"Added rule {override.id}",
-                f"{played_san} is now the exact-position policy move here and was accepted.",
+                f"Accepted {played_san} here",
+                f"Exact fix {override.id} now owns this position and the move was committed.",
                 _latest_opening_attachment(workspace),
             )
             return CommandOutcome()
@@ -669,6 +680,11 @@ class SessionManager:
                 workspace.attempt is not None
                 and workspace.attempt.result is AttemptResult.MISMATCH
             ),
+            authorable_attempt=(
+                workspace.attempt is not None
+                and workspace.attempt.result
+                in {AttemptResult.MISMATCH, AttemptResult.FRONTIER}
+            ),
             can_back=workspace.can_go_back,
             can_restart=workspace.can_restart,
             has_rules=bool(
@@ -752,10 +768,10 @@ class SessionManager:
             session_id, CommandInvocation(CommandId.CONTINUE_POLICY, "ui")
         )
 
-    async def add_rule_for_mismatch(self, session_id: str) -> WorkspaceSnapshot:
+    async def accept_attempt_as_override(self, session_id: str) -> WorkspaceSnapshot:
         return await self._compat_command(
             session_id,
-            CommandInvocation(CommandId.ADD_RULE_FOR_MISMATCH, "ui"),
+            CommandInvocation(CommandId.ACCEPT_ATTEMPT_AS_OVERRIDE, "ui"),
         )
 
     async def play_next_opponent(self, session_id: str) -> WorkspaceSnapshot:
@@ -929,6 +945,84 @@ class SessionManager:
             )
             return await self._snapshot(session)
 
+    async def validate_rule_draft(
+        self, session_id: str, payload: RuleDraftRequest
+    ) -> RuleDraftValidationResponse:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            rule_id = payload.id or _response_rule_id(payload.piece, payload.target)
+            try:
+                rule, candidate = _response_candidate(workspace, payload)
+                preview = _validate_candidate(workspace, candidate)
+            except (TypeError, ValueError, FlowError) as error:
+                return RuleDraftValidationResponse(
+                    valid=False,
+                    rule_id=rule_id,
+                    errors=[str(error)],
+                )
+            return RuleDraftValidationResponse(
+                valid=True,
+                rule_id=rule.id,
+                summary=_move_rule_summary(rule),
+                trigger_summary=_condition_summary(
+                    rule.when, fallback="In any position"
+                ),
+                expiration_summary=_expiration_summary(rule.expire_when),
+                current_decision=_decision_label(
+                    _current_decision(workspace, _phase(workspace))
+                ),
+                preview_decision=_decision_label(preview),
+                affected_order=[item.id for item in candidate.responses],
+                condition_expression=(
+                    condition_to_data(rule.when) if rule.when is not None else None
+                ),
+                warnings=list(workspace.author.store.warnings(candidate)),
+            )
+
+    async def apply_rule_draft(
+        self, session_id: str, payload: RuleDraftRequest
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            try:
+                rule, candidate = _response_candidate(workspace, payload)
+                _validate_candidate(workspace, candidate)
+                workspace.save_response_rule(rule)
+            except (TypeError, ValueError, FlowError) as error:
+                if isinstance(error, FlowError):
+                    raise
+                raise WebApiError(
+                    ApiErrorCode.FLOW_VALIDATION_ERROR, str(error), status_code=422
+                ) from error
+            self._append_activity(
+                session,
+                "success",
+                f"Applied special response {rule.id}",
+                "The complete flow was validated, saved atomically, and replayed.",
+            )
+            return await self._snapshot(session)
+
+    async def delete_rule(self, session_id: str, rule_id: str) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            try:
+                session.workspace.delete_response_rule(rule_id)
+            except (TypeError, ValueError, FlowError) as error:
+                if isinstance(error, FlowError):
+                    raise
+                raise WebApiError(
+                    ApiErrorCode.FLOW_VALIDATION_ERROR, str(error), status_code=422
+                ) from error
+            self._append_activity(
+                session,
+                "info",
+                f"Removed special response {rule_id}",
+                "The remaining policy was validated, saved, and replayed.",
+            )
+            return await self._snapshot(session)
+
     async def validate_development_rule(
         self, session_id: str, payload: DevelopmentRuleDraftRequest
     ) -> DevelopmentRuleValidationResponse:
@@ -977,6 +1071,23 @@ class SessionManager:
                     )
                     else len(workspace.author.flow.development) + 1
                 ),
+                summary=f"Move {rule.piece.label} to {rule.target}.",
+                readiness_summary=_condition_summary(
+                    rule.ready_when, fallback="Ready immediately"
+                ),
+                current_decision=_decision_label(
+                    _current_decision(workspace, _phase(workspace))
+                ),
+                preview_decision=_decision_label(
+                    _candidate_decision(workspace, reparsed)
+                ),
+                affected_order=[item.id for item in reparsed.development],
+                condition_expression=(
+                    condition_to_data(rule.ready_when)
+                    if rule.ready_when is not None
+                    else None
+                ),
+                warnings=list(workspace.author.store.warnings(reparsed)),
             )
 
     async def apply_development_rule(
@@ -1156,15 +1267,7 @@ class SessionManager:
                     f"Unknown override id {override_id!r}.",
                 )
             try:
-                replacement = ExactOverride(
-                    id=override_id,
-                    after_san=tuple(payload.after_san),
-                    note=_clean_note(payload.note),
-                    move=MoveAction(
-                        StartingPieceRef.parse(payload.move.piece).original_piece_id,
-                        payload.move.to,
-                    ),
-                )
+                replacement = _override_candidate_item(override_id, payload)
                 workspace.update_override(replacement)
             except (TypeError, ValueError, FlowError) as error:
                 if isinstance(error, FlowError):
@@ -1184,6 +1287,46 @@ class SessionManager:
                 ),
             )
             return await self._snapshot(session)
+
+    async def validate_override(
+        self, session_id: str, override_id: str, payload: UpdateOverrideRequest
+    ) -> RuleDraftValidationResponse:
+        session = self._session(session_id)
+        async with session.lock:
+            workspace = session.workspace
+            if all(item.id != override_id for item in workspace.author.flow.overrides):
+                return RuleDraftValidationResponse(
+                    valid=False,
+                    rule_id=override_id,
+                    errors=[f"Unknown exact fix id {override_id!r}."],
+                )
+            try:
+                replacement = _override_candidate_item(override_id, payload)
+                candidate = workspace.author.candidate_with_override(replacement)
+                preview = _validate_candidate(workspace, candidate)
+            except (TypeError, ValueError, FlowError) as error:
+                return RuleDraftValidationResponse(
+                    valid=False,
+                    rule_id=override_id,
+                    errors=[str(error)],
+                )
+            return RuleDraftValidationResponse(
+                valid=True,
+                rule_id=override_id,
+                summary=(
+                    f"After {_after_summary(replacement.after_san)}, play "
+                    f"{StartingPieceRef.from_original(replacement.move.piece).label} "
+                    f"to {replacement.move.to_square}."
+                ),
+                trigger_summary=f"Exact position after {_after_summary(replacement.after_san)}",
+                expiration_summary="Exact fixes apply only in this position",
+                current_decision=_decision_label(
+                    _current_decision(workspace, _phase(workspace))
+                ),
+                preview_decision=_decision_label(preview),
+                affected_order=[item.id for item in candidate.overrides],
+                warnings=list(workspace.author.store.warnings(candidate)),
+            )
 
     async def add_opening_tag(
         self, session_id: str, record_id: int
@@ -1308,10 +1451,17 @@ class SessionManager:
             message = f"Correct. {decision.note or f'This matches {decision.source.value} {decision.source_id}.' }"
         elif attempt.result is AttemptResult.MISMATCH:
             kind = "warning"
-            message = f"Incorrect for this policy. Expected {decision.move_san}. {decision.note or ''} Retry, use the selected move, or edit the rule."
+            message = (
+                f"The policy expected {decision.move_san}. {decision.note or ''} "
+                "Accept this position, create a broader response, use the expected "
+                "move, or retry."
+            )
         else:
             kind = "warning"
-            message = "The policy is at a frontier. Edit the TOML or an existing rule, then retry."
+            message = (
+                "No authored rule selected this move. Accept it in this exact "
+                "position, create a broader response, or retry."
+            )
         self._append_activity(
             session,
             kind,
@@ -1389,6 +1539,14 @@ class SessionManager:
             attempt=attempt,
             rules=rule_groups,
             starting_pieces=_starting_piece_snapshots(workspace, rule_groups),
+            named_conditions=[
+                NamedConditionSnapshot(
+                    id=item.id,
+                    summary=_condition_summary(item.when),
+                    expression=condition_to_data(item.when),
+                )
+                for item in workspace.author.flow.conditions
+            ],
             opening=_opening_context_snapshot(workspace.get_current_opening_context()),
             opening_history=[
                 _opening_history_item(entry)
@@ -1487,6 +1645,7 @@ class SessionManager:
             else None
         )
         decision = attempt.decision
+        authoring_prefill = _attempt_authoring_prefill(workspace, attempt)
         return AttemptSnapshot(
             result=attempt.result.value,  # type: ignore[arg-type]
             played_uci=attempt.selected_move.move.uci,
@@ -1498,6 +1657,7 @@ class SessionManager:
             note=decision.note,
             trace=list(decision.trace),
             engine_review=review,
+            authoring_prefill=authoring_prefill,
         )
 
     async def _engine_review(self, session: DevelopmentSession) -> EngineReviewSnapshot:
@@ -1671,6 +1831,316 @@ class SessionManager:
             return path.name
 
 
+def _response_candidate(
+    workspace: FlowWorkspace, payload: RuleDraftRequest
+) -> tuple[MoveRule, Flow]:
+    piece = StartingPieceRef.parse(payload.piece)
+    trigger = (
+        parse_condition(payload.trigger, context="trigger")
+        if payload.trigger is not None
+        else None
+    )
+    expiration = (
+        parse_condition(payload.expire_when, context="expireWhen")
+        if payload.expire_when is not None
+        else None
+    )
+    existing = (
+        next(
+            (rule for rule in workspace.author.flow.responses if rule.id == payload.id),
+            None,
+        )
+        if payload.id is not None
+        else None
+    )
+    if payload.id is not None and existing is None:
+        raise ValueError(f"Unknown special response id {payload.id!r}.")
+    rule_id = payload.id or _available_response_rule_id(
+        workspace, _response_rule_id(str(piece), payload.target)
+    )
+    rule = MoveRule(
+        id=rule_id,
+        move=MoveAction(piece.original_piece_id, payload.target),
+        structures=existing.structures if existing is not None else (),
+        unlock_when=existing.unlock_when if existing is not None else None,
+        note=_clean_note(payload.note),
+        when=trigger,
+        expire_when=expiration,
+    )
+    candidate = (
+        workspace.author.candidate_with_rule(rule)
+        if existing is not None
+        else workspace.author.candidate_with_added_response(rule)
+    )
+    return rule, candidate
+
+
+def _override_candidate_item(
+    override_id: str, payload: UpdateOverrideRequest
+) -> ExactOverride:
+    return ExactOverride(
+        id=override_id,
+        after_san=tuple(payload.after_san),
+        note=_clean_note(payload.note),
+        move=MoveAction(
+            StartingPieceRef.parse(payload.move.piece).original_piece_id,
+            payload.move.to,
+        ),
+    )
+
+
+def _validate_candidate(
+    workspace: FlowWorkspace, candidate: Flow
+) -> PolicyDecision | None:
+    source = workspace.author.store.encode(candidate)
+    reparsed = workspace.author.store.decode(source, context="rule draft preview")
+    return _candidate_decision(workspace, reparsed)
+
+
+def _candidate_decision(
+    workspace: FlowWorkspace, candidate: Flow
+) -> PolicyDecision | None:
+    history = (
+        workspace.attempt.history_before
+        if workspace.attempt is not None
+        else tuple(workspace.history)
+    )
+    runtime, board = PolicyRuntime.replay(candidate, history)
+    controlled = chess.WHITE if candidate.side == "white" else chess.BLACK
+    return (
+        runtime.resolve(board)
+        if board.turn == controlled and not board.is_game_over()
+        else None
+    )
+
+
+def _decision_label(decision: PolicyDecision | None) -> str | None:
+    if decision is None:
+        return None
+    if decision.move_san:
+        return (
+            f"{decision.move_san} · {decision.note or _source_label(decision.source)}"
+        )
+    return "No authored move · flow frontier"
+
+
+def _source_label(source: DecisionSource) -> str:
+    return {
+        DecisionSource.RESPONSE: "Special response",
+        DecisionSource.DEVELOPMENT: "Normal development",
+        DecisionSource.CONTINUATION: "Other policy behavior",
+        DecisionSource.EXACT_OVERRIDE: "Exact fix",
+        DecisionSource.FRONTIER: "Flow frontier",
+    }[source]
+
+
+def _response_rule_id(piece: str, target: str) -> str:
+    normalized = piece.removeprefix("piece:").replace(":", "-")
+    return f"respond-{normalized}-to-{target.lower()}"
+
+
+def _available_response_rule_id(workspace: FlowWorkspace, stem: str) -> str:
+    existing = {item.id for item in workspace.author.flow.policy_items}
+    if stem not in existing:
+        return stem
+    suffix = 2
+    while f"{stem}-{suffix}" in existing:
+        suffix += 1
+    return f"{stem}-{suffix}"
+
+
+def _move_rule_summary(rule: MoveRule) -> str:
+    trigger = _condition_summary(rule.when, fallback="In any position")
+    return f"{trigger}, move {StartingPieceRef.from_original(rule.move.piece).label} to {rule.move.to_square}."
+
+
+def _expiration_summary(condition) -> str:
+    if condition is None:
+        return "Stops after the move is used"
+    return f"Stops when {_condition_summary(condition).removesuffix('.')}"
+
+
+def _rule_trigger_summary(rule: MoveRule | DevelopmentAssignment) -> str:
+    if isinstance(rule, DevelopmentAssignment):
+        return _condition_summary(rule.ready_when, fallback="Ready immediately")
+    parts = [
+        _condition_summary(condition)
+        for condition in (rule.unlock_when, rule.when)
+        if condition is not None
+    ]
+    return " and ".join(parts) if parts else "Available immediately"
+
+
+RuleFriendlyStatus: TypeAlias = Literal[
+    "not-triggered", "available", "recommended", "blocked", "completed"
+]
+DevelopmentFriendlyStatus: TypeAlias = Literal[
+    "not-ready", "ready", "recommended", "blocked", "completed"
+]
+
+
+def _rule_friendly_status(status: str) -> RuleFriendlyStatus:
+    return cast(
+        RuleFriendlyStatus,
+        {
+            "locked": "not-triggered",
+            "inactive": "not-triggered",
+            "out-of-scope": "not-triggered",
+            "applicable": "available",
+            "selected": "recommended",
+            "waiting": "blocked",
+            "retired": "completed",
+        }[status],
+    )
+
+
+def _development_friendly_status(status: str) -> DevelopmentFriendlyStatus:
+    return cast(
+        DevelopmentFriendlyStatus,
+        {
+            "inactive": "not-ready",
+            "out-of-scope": "not-ready",
+            "applicable": "ready",
+            "selected": "recommended",
+            "waiting": "blocked",
+            "developed": "completed",
+            "captured": "completed",
+        }[status],
+    )
+
+
+def _related_rule_snapshot(item: RuleRuntimeSnapshot) -> RelatedRuleSnapshot:
+    return RelatedRuleSnapshot(
+        id=item.id,
+        role="response" if item.section == "response" else "other",
+        title=item.title,
+        piece=item.piece,
+        target=item.destination,
+        move_san=item.move_san,
+        trigger_summary=item.trigger_summary,
+        expiration_summary=item.expiration_summary,
+        friendly_status=item.friendly_status,
+        runtime_status=item.status,
+        note=item.note,
+    )
+
+
+def _after_summary(after_san: tuple[str, ...] | list[str]) -> str:
+    if not after_san:
+        return "Starting position"
+    numbered: list[str] = []
+    for index in range(0, len(after_san), 2):
+        move_number = index // 2 + 1
+        white = after_san[index]
+        black = after_san[index + 1] if index + 1 < len(after_san) else None
+        numbered.append(
+            f"{move_number}.{white}" + (f" {black}" if black is not None else "")
+        )
+    return " ".join(numbered)
+
+
+def _condition_summary(condition, *, fallback: str = "Always") -> str:
+    if condition is None:
+        return fallback
+    return _condition_data_summary(condition_to_data(condition))
+
+
+def _condition_data_summary(expression: dict[str, object]) -> str:
+    kind, value = next(iter(expression.items()))
+    if kind == "moved":
+        return f"{StartingPieceRef.parse(str(value)).label} has moved"
+    if kind == "unmoved":
+        return f"{StartingPieceRef.parse(str(value)).label} has not moved"
+    if kind == "captured":
+        return f"{StartingPieceRef.parse(str(value)).label} has been captured"
+    if kind == "at" and isinstance(value, dict):
+        return (
+            f"{StartingPieceRef.parse(str(value['piece'])).label} is on "
+            f"{value['square']}"
+        )
+    if kind == "occupied":
+        return f"{value} is occupied"
+    if kind == "empty":
+        return f"{value} is empty"
+    if kind == "occupied_by" and isinstance(value, dict):
+        color = str(value.get("color", "")).capitalize()
+        piece = str(value.get("type", "piece"))
+        return f"{value.get('square')} contains a {color} {piece}"
+    if kind == "attacked":
+        return f"{StartingPieceRef.parse(str(value)).label} is attacked"
+    if kind == "attacked_by" and isinstance(value, dict):
+        return (
+            f"{StartingPieceRef.parse(str(value['target'])).label} is attacked by "
+            f"{StartingPieceRef.parse(str(value['attacker'])).label}"
+        )
+    if kind == "in_check":
+        return f"{str(value).capitalize()} is in check"
+    if kind == "condition":
+        return f"Named condition {value}"
+    if kind in {"all", "any"} and isinstance(value, list):
+        joiner = " and " if kind == "all" else " or "
+        return joiner.join(
+            _condition_data_summary(item) for item in value if isinstance(item, dict)
+        )
+    if kind == "not" and isinstance(value, dict):
+        nested_kind = next(iter(value), "")
+        if nested_kind == "moved":
+            return f"{StartingPieceRef.parse(str(value['moved'])).label} has not moved"
+        return f"not ({_condition_data_summary(value)})"
+    if kind == "last_move" and isinstance(value, dict):
+        return (
+            f"the previous move was "
+            f"{StartingPieceRef.parse(str(value['piece'])).label} to {value['to']}"
+        )
+    return str(expression)
+
+
+def _attempt_authoring_prefill(
+    workspace: FlowWorkspace, attempt: PolicyMoveAttempt
+) -> AttemptAuthoringPrefill:
+    move = chess.Move.from_uci(attempt.selected_move.move.uci)
+    tracked = next(
+        (
+            item
+            for item in workspace.runtime.tracker.pieces
+            if item.current_square == move.from_square
+        ),
+        None,
+    )
+    if tracked is None:
+        raise ValueError("The attempted move does not belong to an original piece.")
+    ref = StartingPieceRef.from_original(tracked.id)
+    suggestions: list[ConditionSuggestion] = []
+    tracked_color = chess.WHITE if tracked.id.color == "white" else chess.BLACK
+    if attempt.board_before.is_attacked_by(not tracked_color, move.from_square):
+        suggestions.append(
+            ConditionSuggestion(
+                label=f"{ref.label} is attacked",
+                expression={"attacked": str(ref)},
+            )
+        )
+    last_move = workspace.runtime.last_move
+    if last_move is not None:
+        last_ref = StartingPieceRef.from_original(last_move.piece)
+        suggestions.append(
+            ConditionSuggestion(
+                label=f"{last_ref.label} is on {last_move.to_square}",
+                expression={
+                    "at": {
+                        "piece": str(last_ref),
+                        "square": last_move.to_square,
+                    }
+                },
+            )
+        )
+    return AttemptAuthoringPrefill(
+        piece=str(ref),
+        target=chess.square_name(move.to_square),
+        piece_label=ref.label,
+        suggestions=suggestions,
+    )
+
+
 def _development_candidate(
     workspace: FlowWorkspace, payload: DevelopmentRuleDraftRequest
 ) -> tuple[DevelopmentAssignment, Flow]:
@@ -1759,6 +2229,17 @@ def _decision_snapshot(decision: PolicyDecision | None) -> DecisionSnapshot | No
         source_id=decision.source_id,
         note=decision.note,
         trace=list(decision.trace),
+        summary=(
+            f"{decision.move_san} · {_source_label(decision.source)}"
+            if decision.move_san
+            else "No authored move"
+        ),
+        reason=decision.note
+        or (
+            "The current policy has reached a frontier."
+            if decision.source is DecisionSource.FRONTIER
+            else f"Selected by {_source_label(decision.source).lower()} order."
+        ),
     )
 
 
@@ -1927,6 +2408,12 @@ def _rule_groups(
                 selected=False,
                 note=item.note,
                 reason="Exact overrides are evaluated on the controlled side's turn.",
+                friendly_status="another-position",
+                position_summary=_after_summary(item.after_san),
+                move_summary=(
+                    f"{StartingPieceRef.from_original(item.move.piece).label} "
+                    f"to {item.move.to_square}"
+                ),
             )
             for item in workspace.author.flow.overrides
         ]
@@ -1958,14 +2445,11 @@ def _starting_piece_snapshots(
     development_by_piece: dict[StartingPieceRef, list[DevelopmentAssignment]] = {}
     for rule in development_rules:
         development_by_piece.setdefault(rule.piece, []).append(rule)
-    controlled_color = workspace.author.flow.side
     result: list[StartingPieceSnapshot] = []
     for tracked in sorted(
         workspace.runtime.tracker.pieces,
         key=lambda item: item.id.start_square,
     ):
-        if tracked.id.color != controlled_color:
-            continue
         try:
             ref = StartingPieceRef.from_original(tracked.id)
         except ValueError:
@@ -1992,6 +2476,12 @@ def _starting_piece_snapshots(
                     ready_when=runtime.when,
                     note=development_rule.note,
                     reason=runtime.reason,
+                    readiness_summary=_condition_summary(
+                        development_rule.ready_when, fallback="Ready immediately"
+                    ),
+                    friendly_status=_development_friendly_status(
+                        status_map[runtime.status]
+                    ),
                 )
             )
         if tracked.captured:
@@ -2018,6 +2508,24 @@ def _starting_piece_snapshots(
                 first_moved_ply=tracked.first_moved_ply,
                 captured_ply=tracked.captured_ply,
                 development_rules=development_snapshots,
+                related_rules=[
+                    _related_rule_snapshot(item)
+                    for item in (*groups.responses, *groups.continuations)
+                    if item.piece == str(ref)
+                ],
+                exact_fixes=[
+                    ExactFixSummary(
+                        id=item.id,
+                        after_san=item.after_san,
+                        piece=item.piece,
+                        target=item.destination,
+                        move_san=item.move_san,
+                        reason=item.note,
+                        friendly_status=item.friendly_status,
+                    )
+                    for item in groups.overrides
+                    if item.piece == str(ref)
+                ],
             )
         )
     return result
@@ -2053,6 +2561,18 @@ def _rule_snapshot(item: RuleResolution, order: int) -> RuleRuntimeSnapshot:
         unlocked_at_ply=item.unlocked_at_ply,
         retired_at_ply=item.retired_at_ply,
         reason=item.reason,
+        title=item.rule.note
+        or (
+            f"Move {StartingPieceRef.from_original(item.rule.move.piece).label} "
+            f"to {item.rule.move.to_square}"
+        ),
+        trigger_summary=_rule_trigger_summary(item.rule),
+        expiration_summary=(
+            _expiration_summary(item.rule.expire_when)
+            if isinstance(item.rule, MoveRule)
+            else "Completed when this piece develops"
+        ),
+        friendly_status=_rule_friendly_status(item.status.value),
     )
 
 
@@ -2069,6 +2589,14 @@ def _override_snapshot(item: OverrideResolution) -> OverrideRuntimeSnapshot:
         selected=item.selected,
         note=item.override.note,
         reason=item.reason,
+        friendly_status=(
+            "exact-fix-active" if item.matched and item.selected else "another-position"
+        ),
+        position_summary=_after_summary(item.override.after_san),
+        move_summary=(
+            f"{StartingPieceRef.from_original(item.override.move.piece).label} "
+            f"to {item.override.move.to_square}"
+        ),
     )
 
 
@@ -2189,6 +2717,18 @@ def _passive_rule_snapshots(workspace: FlowWorkspace) -> list[RuleRuntimeSnapsho
                     unlocked_at_ply=unlocked_at_ply,
                     retired_at_ply=retired_at_ply,
                     reason=reason,
+                    title=rule.note
+                    or (
+                        f"Move {StartingPieceRef.from_original(rule.move.piece).label} "
+                        f"to {rule.move.to_square}"
+                    ),
+                    trigger_summary=_rule_trigger_summary(rule),
+                    expiration_summary=(
+                        _expiration_summary(rule.expire_when)
+                        if isinstance(rule, MoveRule)
+                        else "Completed when this piece develops"
+                    ),
+                    friendly_status=_rule_friendly_status(status.value),
                 )
             )
     return snapshots

@@ -352,24 +352,26 @@ active line, write atomically, and retain the existing backup behavior.
 The left-side authoring hierarchy is:
 
 ```text
-PIECE DEVELOPMENT
-STRUCTURE
+PIECE
 CURRENT DECISION
-POLICY ORDER
-  Responses
-  Development
-  Continuations
-  Exact overrides
+AUTHORING
+  Normal development
+  Special responses
+  Exact fixes
+  Change rule order
+POLICY DETAILS
 ```
 
-Runtime status and condition explanations come from the Python snapshot.
-Structure scopes and conditions are editable. The current editor exposes
-validated JSON for the closed condition language; it is not arbitrary
-expression evaluation. Structured condition controls remain a presentation
-follow-up and must produce the same typed Python condition data.
+Runtime status, condition explanations, piece grouping, and friendly status
+mapping come from the Python snapshot. The normal editor uses a structured
+condition AST and chess terminology. Raw condition JSON, lifecycle data,
+structure state, trace, and TOML are advanced diagnostics. The focused primary
+surface does not edit structures or continuations; existing scopes are
+preserved when development assignments are edited.
 
-Every mutation validates the complete candidate flow and replays the current
-line before atomic persistence. Development assignments also expose a
-non-mutating validation endpoint. A richer before/after impact preview—covering
-TOML diffs, stored branches, newly shadowed items, and decision changes—remains
-planned and must not weaken this validation boundary.
+Every edit validates the complete candidate flow and replays the current line
+without persistence before review. Apply revalidates before atomic persistence,
+then replays and returns a complete snapshot. The review shows natural-language
+intent plus current and preview decisions. Richer TOML diffs, stored-branch
+impact, and newly shadowed item analysis remain planned and must not weaken this
+validation boundary.

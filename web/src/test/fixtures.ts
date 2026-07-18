@@ -7,6 +7,8 @@ export function ruleFixture(overrides: Partial<RuleRuntimeSnapshot> = {}): RuleR
     legal: true, lifecycle: "unlocked", status: "selected", selected: true,
     shadowed: false, note: "Control the center.", unlockWhen: null, when: null,
     expireWhen: null, unlockedAtPly: 0, retiredAtPly: null, reason: "First applicable assignment in development order.",
+    title: "Control the center.", triggerSummary: "Available immediately",
+    expirationSummary: "Completed when this piece develops", friendlyStatus: "recommended",
     ...overrides,
   };
 }
@@ -31,6 +33,7 @@ export function workspaceFixture(overrides: Partial<WorkspaceSnapshot> = {}): Wo
       status: "ready", moveUci: "d2d4", moveSan: "d4", source: "development",
       sourceId: "develop-d-pawn", note: "Control the center.",
       trace: ["Development develop-d-pawn: selected."],
+      summary: "d4 · Normal development", reason: "Control the center.",
     },
     attempt: null,
     rules: {
@@ -51,7 +54,9 @@ export function workspaceFixture(overrides: Partial<WorkspaceSnapshot> = {}): Wo
           id: "develop-d-pawn", target: "d4", order: 1, structures: [],
           status: "selected", readyWhen: null, note: "Control the center.",
           reason: "First applicable assignment in development order.",
+          readinessSummary: "Ready immediately", friendlyStatus: "recommended",
         }],
+        relatedRules: [], exactFixes: [],
       },
       {
         ref: "piece:white:bishop:queenside", originalPieceId: "white:c1", color: "white",
@@ -62,9 +67,12 @@ export function workspaceFixture(overrides: Partial<WorkspaceSnapshot> = {}): Wo
           id: "develop-dark-bishop", target: "f4", order: 2, structures: [],
           status: "inactive", readyWhen: null, note: "Develop outside the chain.",
           reason: "White d-pawn has not moved.",
+          readinessSummary: "White d-pawn has moved", friendlyStatus: "not-ready",
         }],
+        relatedRules: [], exactFixes: [],
       },
     ],
+    namedConditions: [],
     opening,
     openingHistory: [],
     evaluation: {

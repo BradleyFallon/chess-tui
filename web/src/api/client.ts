@@ -1,4 +1,4 @@
-import type { ApiErrorItem, CommandResponse, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleUpdate, StructureUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
+import type { ApiErrorItem, CommandResponse, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleDraft, RuleDraftValidation, RuleUpdate, StructureUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
 
 interface ErrorEnvelope {
   error: ApiErrorItem;
@@ -94,15 +94,29 @@ export const workspaceApi = {
     post(`/api/sessions/${sessionId}/moves/san`, { san }),
   retryPolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/retry`),
   continuePolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/continue`),
-  addRuleForMismatch: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/add-rule`),
+  acceptAttemptHere: (sessionId: string) => post(`/api/sessions/${sessionId}/attempt/accept-here`),
   playNextOpponent: (sessionId: string) => post(`/api/sessions/${sessionId}/opponent/next`),
   analysePosition: (sessionId: string) => post(`/api/sessions/${sessionId}/analysis`),
   updateAnalysisSettings: (sessionId: string, profileId: string) =>
     put(`/api/sessions/${sessionId}/analysis/settings`, { profileId }),
   updateRule: (sessionId: string, ruleId: string, update: RuleUpdate) =>
     put(`/api/sessions/${sessionId}/rules/${encodeURIComponent(ruleId)}`, update),
+  validateRuleDraft: (sessionId: string, draft: RuleDraft) =>
+    request<RuleDraftValidation>(
+      `/api/sessions/${sessionId}/rules/drafts/validate`,
+      { method: "POST", body: JSON.stringify(draft) },
+    ),
+  applyRuleDraft: (sessionId: string, draft: RuleDraft) =>
+    post(`/api/sessions/${sessionId}/rules`, draft),
+  deleteRule: (sessionId: string, ruleId: string) =>
+    remove(`/api/sessions/${sessionId}/rules/${encodeURIComponent(ruleId)}`),
   updateOverride: (sessionId: string, overrideId: string, update: OverrideUpdate) =>
     put(`/api/sessions/${sessionId}/overrides/${encodeURIComponent(overrideId)}`, update),
+  validateOverride: (sessionId: string, overrideId: string, update: OverrideUpdate) =>
+    request<RuleDraftValidation>(
+      `/api/sessions/${sessionId}/overrides/${encodeURIComponent(overrideId)}/validate`,
+      { method: "POST", body: JSON.stringify(update) },
+    ),
   validateDevelopmentRule: (sessionId: string, draft: DevelopmentRuleDraft) =>
     request<DevelopmentRuleValidation>(
       `/api/sessions/${sessionId}/development-rules/validate`,

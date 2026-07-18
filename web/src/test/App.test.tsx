@@ -39,14 +39,17 @@ test("menu and development workspace show the v3 policy", async () => {
   expect(screen.getByRole("link", { name: /Develop/ })).toBeInTheDocument();
 });
 
-test("workspace renders board, grouped rule status, lifecycle, and activity", async () => {
+test("workspace centers piece authoring and keeps diagnostics collapsed", async () => {
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture())));
   renderRoute("/develop");
   expect(await screen.findByTestId("chessboard")).toBeInTheDocument();
-  const panel = screen.getByRole("heading", { name: "Policy order" }).closest("aside");
-  expect(panel).not.toBeNull();
-  expect(within(panel!).getAllByText("develop-d-pawn").length).toBeGreaterThan(0);
-  expect(within(panel!).getByText("Development")).toBeInTheDocument();
+  const panel = screen.getByRole("complementary", { name: "Piece authoring" });
+  expect(within(panel).getByText(/Click a piece to inspect/)).toBeInTheDocument();
+  expect(within(panel).getByText("Current decision")).toBeInTheDocument();
+  expect(within(panel).getByText("Change rule order")).toBeInTheDocument();
+  expect(within(panel).queryByText("develop-d-pawn")).not.toBeInTheDocument();
+  expect(within(panel).queryByText(/priority/i)).not.toBeInTheDocument();
+  expect(within(panel).queryByLabelText("Generated condition JSON")).not.toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Options" })).toBeInTheDocument();
   expect(screen.getByRole("checkbox", { name: /Auto-respond/ })).not.toBeChecked();
   expect(screen.getByRole("log")).toHaveTextContent("Development session ready");
@@ -69,7 +72,8 @@ test("piece inspection coexists with move entry and renders status markers", asy
   await userEvent.click(screen.getByRole("button", { name: "Click d2" }));
   expect(screen.getByRole("heading", { name: "White d-pawn" })).toBeInTheDocument();
   expect(screen.getByText("piece:white:pawn:d")).toBeInTheDocument();
-  expect(screen.getByText("Target d4")).toBeInTheDocument();
+  expect(screen.getByText("Move White d-pawn to d4")).toBeInTheDocument();
+  expect(screen.getByText("Recommended now")).toBeInTheDocument();
 
   await userEvent.click(screen.getByRole("button", { name: "Play d4" }));
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
@@ -89,6 +93,7 @@ test("unassigned piece can choose, cancel, validate, and apply a board target", 
         pieceType: "pawn", qualifier: "a", label: "White a-pawn",
         startingSquare: "a2", currentSquare: "a2", state: "undeveloped",
         firstMovedPly: null, capturedPly: null, developmentRules: [],
+        relatedRules: [], exactFixes: [],
       },
     ],
   });
@@ -100,6 +105,7 @@ test("unassigned piece can choose, cancel, validate, and apply a board target", 
           id: "develop-white-pawn-a", target: "f4", order: 3, structures: [],
           status: "waiting" as const, readyWhen: null, note: "Test target.",
           reason: "a2f4 is not legal.",
+          readinessSummary: "Ready immediately", friendlyStatus: "blocked" as const,
         }],
       }
       : piece),
@@ -108,7 +114,12 @@ test("unassigned piece can choose, cancel, validate, and apply a board target", 
     .mockResolvedValueOnce(jsonResponse(initial))
     .mockResolvedValueOnce(jsonResponse({
       valid: true, ruleId: "develop-white-pawn-a",
-      piece: "piece:white:pawn:a", target: "f4", order: 3, errors: [],
+      piece: "piece:white:pawn:a", target: "f4", order: 3,
+      summary: "Move White a-pawn to f4.",
+      readinessSummary: "White d-pawn has moved",
+      currentDecision: "d4", previewDecision: "d4",
+      affectedOrder: [], conditionExpression: { moved: "piece:white:pawn:d" },
+      warnings: [], errors: [],
     }))
     .mockResolvedValueOnce(jsonResponse(applied))
     .mockResolvedValueOnce(jsonResponse(initial));
@@ -116,22 +127,21 @@ test("unassigned piece can choose, cancel, validate, and apply a board target", 
   renderRoute("/develop");
 
   await userEvent.click(await screen.findByRole("button", { name: "Click a2" }));
-  expect(screen.getByText("Not assigned")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Add development rule" }));
-  await userEvent.click(screen.getByRole("button", { name: "Choose target" }));
+  expect(screen.getByText("No development assignment.")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Set normal development" }));
+  await userEvent.click(screen.getByRole("button", { name: "Choose on board" }));
   await userEvent.click(screen.getByRole("button", { name: "Click f4" }));
-  expect(screen.getByLabelText("Target")).toHaveValue("f4");
+  expect(screen.getByLabelText("Development target")).toHaveValue("f4");
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
-  await userEvent.click(screen.getByRole("button", { name: "Add development rule" }));
-  expect(screen.getByLabelText("Target")).toHaveValue("");
-  await userEvent.click(screen.getByRole("button", { name: "Choose target" }));
+  await userEvent.click(screen.getByRole("button", { name: "Set normal development" }));
+  expect(screen.getByLabelText("Development target")).toHaveValue("");
+  await userEvent.click(screen.getByRole("button", { name: "Choose on board" }));
   await userEvent.click(screen.getByRole("button", { name: "Click f4" }));
 
-  await userEvent.type(screen.getByLabelText("Note"), "Test target.");
-  fireEvent.change(screen.getByLabelText(/Ready when/), {
-    target: { value: '{"moved":"piece:white:pawn:d"}' },
-  });
-  await userEvent.click(screen.getByRole("button", { name: "Validate & apply" }));
+  await userEvent.type(screen.getByLabelText("Reason"), "Test target.");
+  await userEvent.click(screen.getByRole("radio", { name: "After another piece develops" }));
+  await userEvent.selectOptions(screen.getByLabelText("Required piece"), "piece:white:pawn:d");
+  await userEvent.click(screen.getByRole("button", { name: "Review changes" }));
   await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
     2,
     "/api/sessions/session-1/development-rules/validate",
@@ -140,30 +150,42 @@ test("unassigned piece can choose, cancel, validate, and apply a board target", 
       body: expect.stringContaining('"readyWhen":{"moved":"piece:white:pawn:d"}'),
     }),
   ));
+  await userEvent.click(await screen.findByRole("button", { name: "Apply" }));
   await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
     3,
     "/api/sessions/session-1/development-rules",
     expect.objectContaining({ method: "POST" }),
   ));
-  expect(await screen.findByText("Target f4")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: "Edit development rule" }));
-  await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+  expect(await screen.findByText("Move White a-pawn to f4")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Remove development" }));
   await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
     4,
     "/api/sessions/session-1/development-rules/develop-white-pawn-a",
     expect.objectContaining({ method: "DELETE" }),
   ));
-  expect(await screen.findByText("Not assigned")).toBeInTheDocument();
+  expect(await screen.findByText("No development assignment.")).toBeInTheDocument();
 });
 
 test("black-controlled flows flip the board and keep markers square-local", async () => {
   const initial = workspaceFixture();
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(workspaceFixture({
     flow: { ...initial.flow, side: "black" },
+    startingPieces: [...initial.startingPieces, {
+      ref: "piece:black:pawn:d", originalPieceId: "black:d7", color: "black",
+      pieceType: "pawn", qualifier: "d", label: "Black d-pawn",
+      startingSquare: "d7", currentSquare: "d7", state: "undeveloped",
+      firstMovedPly: null, capturedPly: null,
+      developmentRules: [{
+        id: "develop-black-pawn-d", target: "d5", order: 1, structures: [],
+        status: "selected", readyWhen: null, note: null, reason: "Selected.",
+        readinessSummary: "Ready immediately", friendlyStatus: "recommended",
+      }],
+      relatedRules: [], exactFixes: [],
+    }],
   }))));
   renderRoute("/develop");
   expect(await screen.findByTestId("chessboard")).toHaveAttribute("data-orientation", "black");
-  expect(screen.getByRole("img", { name: /White d-pawn.*selected/i })).toBeInTheDocument();
+  expect(screen.queryByRole("img", { name: /White d-pawn.*selected/i })).not.toBeInTheDocument();
 });
 
 test("development order controls call the deterministic reorder endpoint", async () => {
@@ -173,7 +195,7 @@ test("development order controls call the deterministic reorder endpoint", async
     .mockResolvedValueOnce(jsonResponse(initial));
   vi.stubGlobal("fetch", fetchMock);
   renderRoute("/develop");
-  await userEvent.click(await screen.findByText(/Development order/));
+  await userEvent.click(await screen.findByText("Change rule order"));
   await userEvent.click(screen.getByRole("button", { name: "Move White d-pawn later" }));
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
     "/api/sessions/session-1/development-rules/order",
@@ -204,10 +226,9 @@ test("captured development pieces remain inspectable from the order list", async
   });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(captured)));
   renderRoute("/develop");
-  await userEvent.click(await screen.findByText(/Development order/));
+  await userEvent.click(await screen.findByText("Change rule order"));
   await userEvent.click(screen.getByRole("button", { name: /White queenside bishop → f4/ }));
-  expect(screen.getByText("Captured undeveloped · ply 4")).toBeInTheDocument();
-  expect(screen.getByText("Captured")).toBeInTheDocument();
+  expect(screen.getAllByText("Captured before development on ply 4").length).toBeGreaterThan(0);
 });
 
 test("activity and deterministic chat attachments render in sequence order", async () => {
@@ -563,23 +584,25 @@ test("analyse command adds book and engine suggestions to the status feed", asyn
   expect(screen.getByText("+0.32")).toBeInTheDocument();
 });
 
-test("mismatch shows retry, selected continuation, engine review, and editor direction", async () => {
+test("mismatch shows direct exact-fix and broader-response authoring actions", async () => {
   const snapshot = workspaceFixture({
     phase: "policy-result",
     attempt: {
       result: "mismatch", playedUci: "e2e4", playedSan: "e4", expectedUci: "d2d4", expectedSan: "d4",
       source: "development", sourceId: "develop-d-pawn", note: "Control the center.", trace: [],
       engineReview: { status: "ready", quality: "blunder", lossCp: 260, bestMoveUci: "d2d4", bestMoveSan: "d4", evaluationBeforeCp: 20, evaluationAfterCp: -240, mateBefore: null, mateAfter: null, errorMessage: null },
+      authoringPrefill: { piece: "piece:white:pawn:e", target: "e4", pieceLabel: "White e-pawn", suggestions: [] },
     },
   });
   vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(snapshot))); renderRoute("/develop");
   expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Use selected move" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Use expected move" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Accept in this position" })).toBeInTheDocument();
+  expect(screen.getByRole("button", { name: "Create broader response" })).toBeInTheDocument();
   expect(screen.getByText("blunder").closest("p")).toHaveTextContent("Best move: d4");
-  expect(screen.getByText(/Edit in Rule Status/)).toBeInTheDocument();
 });
 
-test("mismatch chat command adds a rule for the attempted move", async () => {
+test("mismatch chat command accepts the attempted move here", async () => {
   const initial = workspaceFixture();
   const mismatch = workspaceFixture({
     phase: "policy-result",
@@ -588,9 +611,10 @@ test("mismatch chat command adds a rule for the attempted move", async () => {
       expectedUci: "d2d4", expectedSan: "d4", source: "development",
       sourceId: "develop-d-pawn", note: "Control the center.", trace: [],
       engineReview: null,
+      authoringPrefill: { piece: "piece:white:pawn:e", target: "e4", pieceLabel: "White e-pawn", suggestions: [] },
     },
     availableCommands: [
-      { id: "add_rule_for_mismatch", slash: "/add-rule", usage: "/add-rule", description: "Add an exact-position rule that accepts the attempted move.", arguments: [] },
+      { id: "accept_attempt_as_override", slash: "/accept-here", usage: "/accept-here", description: "Accept the attempted move as an exact fix.", arguments: [] },
       { id: "retry_policy", slash: "/retry", usage: "/retry", description: "Discard the attempted move and try again.", arguments: [] },
       { id: "continue_policy", slash: "/continue", usage: "/continue", description: "Discard the attempt and play the selected policy move.", arguments: [] },
     ],
@@ -624,13 +648,13 @@ test("mismatch chat command adds a rule for the attempted move", async () => {
   const composer = await screen.findByRole("combobox", { name: "Enter move in SAN" });
 
   await userEvent.type(composer, "/");
-  expect(screen.getByRole("option", { name: /\/add-rule/ })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: /\/accept-here/ })).toBeInTheDocument();
   await userEvent.clear(composer);
-  await userEvent.type(composer, "/add-rule{Enter}");
+  await userEvent.type(composer, "/accept-here{Enter}");
 
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
     "/api/sessions/session-1/chat",
-    expect.objectContaining({ method: "POST", body: JSON.stringify({ text: "/add-rule" }) }),
+    expect.objectContaining({ method: "POST", body: JSON.stringify({ text: "/accept-here" }) }),
   ));
   expect(await screen.findByText("Added rule allow-e2e4-ply-0")).toBeInTheDocument();
 });
@@ -643,49 +667,118 @@ test("hint highlights the expected original piece square", async () => {
   await waitFor(() => expect(board).toHaveAttribute("data-hint", "d2"));
 });
 
-test("full v3 rule editor sends conditions and original-piece action", async () => {
+test("guided special-response editor validates, reviews, and applies", async () => {
   const initial = workspaceFixture();
   const generic = ruleFixture({
     id: "generic-center-rule",
     section: "response",
+    piece: "piece:white:pawn:d",
+    destination: "e4",
+    title: "Protect the center",
+    triggerSummary: "White d-pawn is attacked",
+    expirationSummary: "Stops after the move is used",
   });
   const snapshot = workspaceFixture({
     rules: { ...initial.rules, selected: generic, responses: [generic] },
+    startingPieces: initial.startingPieces.map((piece) => piece.ref === "piece:white:pawn:d" ? {
+      ...piece,
+      relatedRules: [{
+        id: generic.id, role: "response", title: generic.title,
+        piece: generic.piece, target: generic.destination, moveSan: generic.moveSan,
+        triggerSummary: generic.triggerSummary,
+        expirationSummary: generic.expirationSummary,
+        friendlyStatus: "recommended", runtimeStatus: "selected", note: generic.note,
+      }],
+    } : piece),
   });
-  const fetchMock = vi.fn().mockResolvedValue(jsonResponse(snapshot));
+  const validation = {
+    valid: true, ruleId: generic.id, summary: "If attacked, move the White d-pawn to e4.",
+    triggerSummary: "White d-pawn is attacked",
+    expirationSummary: "Stops after the move is used",
+    currentDecision: "d4", previewDecision: "e4", affectedOrder: [generic.id],
+    conditionExpression: { attacked: "piece:white:pawn:d" }, warnings: [], errors: [],
+  };
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(snapshot))
+    .mockResolvedValueOnce(jsonResponse(validation))
+    .mockResolvedValueOnce(jsonResponse(snapshot));
   vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
-  await userEvent.click(await screen.findByRole("button", { name: "Edit rule" }));
-  const destination = screen.getByRole("textbox", { name: "Destination" });
-  await userEvent.clear(destination); await userEvent.type(destination, "e4");
-  await userEvent.click(screen.getByRole("button", { name: "Save" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Click d2" }));
+  await userEvent.click(screen.getByRole("button", { name: "Edit response" }));
+  await userEvent.click(screen.getByRole("button", { name: "Next" }));
+  await userEvent.click(screen.getByRole("button", { name: "Next" }));
+  await userEvent.click(screen.getByRole("button", { name: "Review response" }));
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
-    "/api/sessions/session-1/rules/generic-center-rule",
-    expect.objectContaining({ method: "PUT", body: expect.stringContaining('"piece":"piece:white:pawn:d"') }),
+    "/api/sessions/session-1/rules/drafts/validate",
+    expect.objectContaining({ method: "POST", body: expect.stringContaining('"piece":"piece:white:pawn:d"') }),
+  ));
+  expect(await screen.findByText("Review changes")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Apply" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/rules",
+    expect.objectContaining({ method: "POST" }),
   ));
 });
 
-test("exact override editor uses its dedicated endpoint", async () => {
-  const override = { kind: "exact-override" as const, id: "after-d4-e5", enabled: true, afterSan: ["d4", "e5"], piece: "piece:white:pawn:d", destination: "e5", moveUci: "d4e5", moveSan: "dxe5", matched: true, legal: true, selected: true, note: "Capture.", reason: "Exact position matched." };
-  const snapshot = workspaceFixture({ rules: { ...workspaceFixture().rules, selected: override, overrides: [override] } });
-  const fetchMock = vi.fn().mockResolvedValue(jsonResponse(snapshot)); vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
-  await userEvent.click(await screen.findByRole("button", { name: "Edit override" }));
-  await userEvent.click(screen.getByRole("button", { name: "Save" }));
-  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith("/api/sessions/session-1/overrides/after-d4-e5", expect.objectContaining({ method: "PUT" })));
+test("exact fix uses friendly language and reviews edits before apply", async () => {
+  const override = { kind: "exact-override" as const, id: "after-d4-e5", enabled: true, afterSan: ["d4", "e5"], piece: "piece:white:pawn:d", destination: "e5", moveUci: "d4e5", moveSan: "dxe5", matched: true, legal: true, selected: true, note: "Capture.", reason: "Exact position matched.", friendlyStatus: "exact-fix-active" as const, positionSummary: "1.d4 e5", moveSummary: "White d-pawn to e5" };
+  const initial = workspaceFixture();
+  const snapshot = workspaceFixture({
+    rules: { ...initial.rules, selected: override, overrides: [override] },
+    startingPieces: initial.startingPieces.map((piece) => piece.ref === "piece:white:pawn:d" ? {
+      ...piece,
+      exactFixes: [{ id: override.id, afterSan: override.afterSan, piece: override.piece, target: override.destination, moveSan: override.moveSan, reason: override.note, friendlyStatus: override.friendlyStatus }],
+    } : piece),
+  });
+  const validation = {
+    valid: true, ruleId: override.id,
+    summary: "After 1.d4 e5, play White d-pawn to e5.",
+    triggerSummary: "Exact position after 1.d4 e5",
+    expirationSummary: "Exact fixes apply only in this position",
+    currentDecision: "dxe5", previewDecision: "dxe5",
+    affectedOrder: [override.id], conditionExpression: null, warnings: [], errors: [],
+  };
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(snapshot))
+    .mockResolvedValueOnce(jsonResponse(validation))
+    .mockResolvedValueOnce(jsonResponse(snapshot));
+  vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
+  await userEvent.click(await screen.findByRole("button", { name: "Click d2" }));
+  expect(screen.getByText("Exact fix active")).toBeInTheDocument();
+  expect(screen.getByText("1.d4 e5")).toBeInTheDocument();
+  expect(screen.getByText("dxe5")).toBeInTheDocument();
+  expect(screen.queryByText('["d4","e5"]')).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Edit exact fix" }));
+  await userEvent.clear(screen.getByLabelText("Reason"));
+  await userEvent.type(screen.getByLabelText("Reason"), "Accept the offered pawn.");
+  await userEvent.click(screen.getByRole("button", { name: "Review changes" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
+    2,
+    "/api/sessions/session-1/overrides/after-d4-e5/validate",
+    expect.objectContaining({ method: "POST" }),
+  ));
+  await userEvent.click(await screen.findByRole("button", { name: "Apply" }));
+  await waitFor(() => expect(fetchMock).toHaveBeenNthCalledWith(
+    3,
+    "/api/sessions/session-1/overrides/after-d4-e5",
+    expect.objectContaining({ method: "PUT" }),
+  ));
 });
 
-test("TOML tab, Back, Restart, and failed API preserve the last snapshot", async () => {
+test("policy details drawer contains TOML and failed navigation preserves the snapshot", async () => {
   const initial = workspaceFixture({ navigation: { canBack: true, canRestart: true } });
   const error = { error: { code: "FLOW_PERSISTENCE_ERROR", message: "Could not save flow", details: {} } };
-  const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(initial)).mockResolvedValueOnce(jsonResponse({ path: "flows/london.toml", content: 'version = 2\n[[rules]]\nid = "develop-d-pawn"\n' })).mockResolvedValueOnce(jsonResponse(error, 500));
+  const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse(initial)).mockResolvedValueOnce(jsonResponse({ path: "flows/london.toml", content: 'version = 3\n[[development]]\nid = "develop-d-pawn"\n' })).mockResolvedValueOnce(jsonResponse(error, 500));
   vi.stubGlobal("fetch", fetchMock); renderRoute("/develop");
-  await userEvent.click(await screen.findByRole("tab", { name: "TOML" }));
-  expect(await screen.findByLabelText("Flow TOML source")).toHaveTextContent("version = 2");
-  await userEvent.click(screen.getByRole("tab", { name: "Rules" }));
+  await userEvent.click(await screen.findByRole("button", { name: "View policy details" }));
+  expect(await screen.findByLabelText("Flow TOML source")).toHaveTextContent("version = 3");
+  expect(screen.getByText("Lifecycle")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "Close policy details" }));
   await userEvent.click(screen.getByRole("button", { name: "Back" }));
   await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
     "/api/sessions/session-1/commands",
     expect.objectContaining({ method: "POST", body: JSON.stringify({ command: "go_back", source: "ui" }) }),
   ));
   expect(await screen.findByRole("alert")).toHaveTextContent("Could not save flow");
-  expect(screen.getAllByText("develop-d-pawn").length).toBeGreaterThan(0);
+  expect(screen.getByText("Current decision")).toBeInTheDocument();
 });

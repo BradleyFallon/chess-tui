@@ -34,6 +34,8 @@ export interface RuleRuntimeSnapshot {
   unlockWhen: ConditionSnapshot | null; when: ConditionSnapshot | null;
   expireWhen: ConditionSnapshot | null;
   unlockedAtPly: number | null; retiredAtPly: number | null; reason: string;
+  title: string; triggerSummary: string; expirationSummary: string;
+  friendlyStatus: "not-triggered" | "available" | "recommended" | "blocked" | "completed";
 }
 
 export type DevelopmentStatus =
@@ -43,6 +45,20 @@ export interface DevelopmentRuleSnapshot {
   id: string; target: string; order: number; structures: string[];
   status: DevelopmentStatus; readyWhen: ConditionSnapshot | null;
   note: string | null; reason: string;
+  readinessSummary: string;
+  friendlyStatus: "not-ready" | "ready" | "recommended" | "blocked" | "completed";
+}
+export interface RelatedRuleSnapshot {
+  id: string; role: "response" | "other"; title: string; piece: string;
+  target: string; moveSan: string | null; triggerSummary: string;
+  expirationSummary: string;
+  friendlyStatus: "not-triggered" | "available" | "recommended" | "blocked" | "completed";
+  runtimeStatus: string; note: string | null;
+}
+export interface ExactFixSummary {
+  id: string; afterSan: string[]; piece: string; target: string;
+  moveSan: string | null; reason: string | null;
+  friendlyStatus: "exact-fix-active" | "another-position";
 }
 export interface StartingPieceSnapshot {
   ref: string; originalPieceId: string; color: "white" | "black";
@@ -52,12 +68,16 @@ export interface StartingPieceSnapshot {
   state: "undeveloped" | "developed" | "captured-undeveloped" | "captured-developed";
   firstMovedPly: number | null; capturedPly: number | null;
   developmentRules: DevelopmentRuleSnapshot[];
+  relatedRules: RelatedRuleSnapshot[];
+  exactFixes: ExactFixSummary[];
 }
 
 export interface OverrideRuntimeSnapshot {
   kind: "exact-override"; id: string; afterSan: string[];
   piece: string; destination: string; moveUci: string | null; moveSan: string | null;
   matched: boolean; legal: boolean; selected: boolean; note: string | null; reason: string;
+  friendlyStatus: "exact-fix-active" | "another-position";
+  positionSummary: string; moveSummary: string;
 }
 
 export type PolicyItemSnapshot = RuleRuntimeSnapshot | OverrideRuntimeSnapshot;
@@ -78,6 +98,7 @@ export interface DecisionSnapshot {
   status: "ready" | "frontier"; moveUci: string | null; moveSan: string | null;
   source: "response" | "development" | "continuation" | "exact-override" | "frontier";
   sourceId: string | null; note: string | null; trace: string[];
+  summary: string; reason: string;
 }
 
 export interface EngineReviewSnapshot {
@@ -93,6 +114,10 @@ export interface AttemptSnapshot {
   source: "response" | "development" | "continuation" | "exact-override" | "frontier";
   sourceId: string | null;
   note: string | null; trace: string[]; engineReview: EngineReviewSnapshot | null;
+  authoringPrefill: {
+    piece: string; target: string; pieceLabel: string;
+    suggestions: Array<{ label: string; expression: ConditionExpression }>;
+  };
 }
 
 export interface EvaluationSnapshot {
@@ -197,6 +222,7 @@ export interface WorkspaceSnapshot {
   flow: FlowSnapshot; position: PositionSnapshot; decision: DecisionSnapshot | null;
   attempt: AttemptSnapshot | null; rules: RuleGroupsSnapshot;
   startingPieces: StartingPieceSnapshot[];
+  namedConditions: Array<{ id: string; summary: string; expression: ConditionExpression }>;
   opening: OpeningContextSnapshot; openingHistory: OpeningHistoryItemSnapshot[];
   evaluation: EvaluationSnapshot;
   analysisSettings: AnalysisSettingsSnapshot;
@@ -210,7 +236,7 @@ export type CommandId =
   | "trace_decision" | "inspect_position" | "inspect_opening" | "list_openings"
   | "list_defenses" | "inspect_book" | "inspect_book_history"
   | "play_move" | "next_opponent"
-  | "retry_policy" | "continue_policy" | "add_rule_for_mismatch" | "go_back"
+  | "retry_policy" | "continue_policy" | "accept_attempt_as_override" | "go_back"
   | "restart" | "hint_policy_move" | "list_commands";
 type SimpleCommandId = Exclude<CommandId, "play_move" | "inspect_rule">;
 export type TypedCommand =
@@ -244,5 +270,19 @@ export interface DevelopmentRuleDraft {
 }
 export interface DevelopmentRuleValidation {
   valid: boolean; ruleId: string; piece: string; target: string;
-  order: number; errors: string[];
+  order: number; summary: string; readinessSummary: string;
+  currentDecision: string | null; previewDecision: string | null;
+  affectedOrder: string[]; conditionExpression: ConditionExpression | null;
+  warnings: string[]; errors: string[];
+}
+
+export interface RuleDraft {
+  id: string | null; piece: string; target: string; note: string | null;
+  trigger: ConditionExpression | null; expireWhen: ConditionExpression | null;
+}
+export interface RuleDraftValidation {
+  valid: boolean; ruleId: string; summary: string; triggerSummary: string;
+  expirationSummary: string; currentDecision: string | null;
+  previewDecision: string | null; affectedOrder: string[];
+  conditionExpression: ConditionExpression | null; warnings: string[]; errors: string[];
 }

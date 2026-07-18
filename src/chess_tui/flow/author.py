@@ -70,6 +70,21 @@ class FlowAuthor:
             )
         raise FlowValidationError(f"Unknown move-rule id: {replacement.id!r}.")
 
+    def candidate_with_added_response(self, response: AuthoredPolicyItem) -> Flow:
+        if isinstance(response, DevelopmentAssignment):
+            raise FlowValidationError("A development assignment is not a response.")
+        if any(item.id == response.id for item in self.flow.policy_items):
+            raise FlowValidationError(f"Duplicate rule id: {response.id!r}.")
+        return replace(self.flow, responses=(*self.flow.responses, response))
+
+    def candidate_without_response(self, rule_id: str) -> Flow:
+        if all(item.id != rule_id for item in self.flow.responses):
+            raise FlowValidationError(f"Unknown response id: {rule_id!r}.")
+        return replace(
+            self.flow,
+            responses=tuple(item for item in self.flow.responses if item.id != rule_id),
+        )
+
     def candidate_with_added_development_rule(
         self, development_rule: DevelopmentAssignment
     ) -> Flow:

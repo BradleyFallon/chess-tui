@@ -1,11 +1,12 @@
 # Chess TUI
 
 In Web Development Mode, click any board piece to inspect its original
-starting-piece identity. Undeveloped pieces show a compact development-status
-marker. From the left panel you can add or edit a typed development rule,
-choose its target on the board, edit `ready_when` JSON, enable or disable it,
-delete it, and reorder the development sequence. Changes are preview-validated,
-saved atomically, and replayed through the deterministic Python policy runtime.
+starting-piece identity and authored behavior. The left panel centers normal
+development, special responses, exact fixes, and a compact current decision.
+Guided editors and a visual condition builder keep raw JSON and runtime
+lifecycle detail in the advanced Policy details drawer. Every change is
+validated, reviewed, saved atomically, and replayed through the deterministic
+Python policy runtime.
 
 Authored piece references use readable identifiers such as
 `piece:white:pawn:d`, `piece:white:bishop:queenside`, and
@@ -71,23 +72,25 @@ The server binds to `127.0.0.1:8765` and opens a browser by default. Use
 default Textual flow, the web workspace may omit `--engine`; evaluation then
 shows `engine-off` and never substitutes fixture analysis.
 
-Development Mode displays the Python-owned board, SAN history, deterministic-v3
-decision trace, structure state, authored policy order, Back/Restart navigation,
-and optional Stockfish evaluation. The analysis options select Blunder check,
+Development Mode displays the Python-owned board, SAN history, a piece-centered
+authoring inspector, a compact current decision, Back/Restart navigation, and
+optional Stockfish evaluation. Runtime status, exact conditions, decision
+traces, and TOML remain available through Policy details. The analysis options select Blunder check,
 Quick, Analysis, or Deep local search at fixed depths 10, 15, 20, or 26.
 Current-position and candidate
 scores identify the UCI engine and report actual depth, elapsed time, and nodes
 when supplied by the engine. Local Stockfish has no API or per-analysis fee;
-deeper and multi-line searches use more local CPU time. Responses,
-structure-scoped development,
-continuations, and exact-position overrides use canonical starting-piece
-references and the closed JSON condition language. The complete flow is
-validated, saved atomically, and replayed after each edit.
+deeper and multi-line searches use more local CPU time. Guided development,
+response, and exact-fix editors use canonical starting-piece references and one
+structured condition AST. The complete flow is preview-validated before review,
+then validated again, saved atomically, and replayed on Apply. Existing
+structure scopes are preserved, but structure and continuation authoring are
+outside this UI batch.
 The right-side timeline keeps application activity separate from user/assistant
 conversation while displaying both in deterministic sequence order. Python
 publishes the commands available in each snapshot and handles SAN, `/analyse`,
 `/why`, `/rule`, `/rules`, `/trace`, `/position`, `/opening`, `/openings`,
-`/defenses`, `/book`, `/book-history`, navigation, hint, and mismatch
+`/defenses`, `/book`, `/book-history`, `/accept-here`, navigation, hint, and mismatch
 commands through the shared command registry. React sends complete chat text or
 typed command invocations; it does not parse slash syntax or reproduce command
 availability rules. Python remains authoritative for legality, policy,

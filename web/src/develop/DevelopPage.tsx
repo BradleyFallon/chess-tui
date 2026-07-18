@@ -3,9 +3,9 @@ import { Link } from "react-router-dom";
 
 import { BoardPanel } from "../components/BoardPanel";
 import { EvaluationBar } from "../components/EvaluationBar";
-import { PieceDevelopmentPanel } from "../components/PieceDevelopmentPanel";
-import { RuleStatusPanel } from "../components/RuleStatusPanel";
+import { PieceAuthoringPanel } from "../components/PieceAuthoringPanel";
 import { StatusFeed } from "../components/StatusFeed";
+import type { RuleDraft } from "../types/workspace";
 import { useWorkspace } from "./WorkspaceContext";
 
 const AUTO_RESPOND_KEY = "chess-flow-development-auto-respond";
@@ -20,15 +20,16 @@ export function DevelopPage() {
     initialize,
     sendChat,
     executeCommand,
-    updateRule,
+    validateRuleDraft,
+    applyRuleDraft,
+    deleteRule,
+    validateOverride,
     updateOverride,
     validateDevelopmentRule,
     applyDevelopmentRule,
     deleteDevelopmentRule,
     reorderDevelopmentRules,
     reorderPolicySection,
-    updateStructure,
-    reorderStructures,
     addOpeningTag,
     removeOpeningTag,
     updateAnalysisSettings,
@@ -40,6 +41,7 @@ export function DevelopPage() {
   const [selectedPieceRef, setSelectedPieceRef] = useState<string | null>(null);
   const [targetPicking, setTargetPicking] = useState(false);
   const [pickedTarget, setPickedTarget] = useState<string | null>(null);
+  const [responsePrefill, setResponsePrefill] = useState<RuleDraft | null>(null);
 
   useEffect(() => {
     localStorage.setItem(AUTO_RESPOND_KEY, String(autoRespond));
@@ -134,6 +136,10 @@ export function DevelopPage() {
           )}
           <span>{workspace.flow.path}</span>
         </div>
+        <div className="header-actions">
+          <button onClick={() => void executeCommand({ command: "go_back", source: "ui" })} disabled={pending || !workspace.navigation.canBack}>Back</button>
+          <button onClick={() => void executeCommand({ command: "restart", source: "ui" })} disabled={pending || !workspace.navigation.canRestart}>Restart</button>
+        </div>
       </header>
       {error && (
         <div className="global-error" role="alert">
@@ -142,38 +148,34 @@ export function DevelopPage() {
         </div>
       )}
       <div className="workspace-grid">
-        <RuleStatusPanel
+        <PieceAuthoringPanel
+          key={`${selectedPiece?.ref ?? "no-piece"}:${responsePrefill ? "prefill" : "idle"}`}
           workspace={workspace}
+          piece={selectedPiece}
           pending={pending}
-          onUpdateRule={(ruleId, update) => void updateRule(ruleId, update)}
-          onUpdateOverride={(overrideId, update) => void updateOverride(overrideId, update)}
-          onReorderPolicy={(section, itemIds) => void reorderPolicySection(section, itemIds)}
-          onUpdateStructure={(structureId, update) => void updateStructure(structureId, update)}
-          onReorderStructures={(structureIds) => void reorderStructures(structureIds)}
-          onBack={() => void executeCommand({ command: "go_back", source: "ui" })}
-          onRestart={() => void executeCommand({ command: "restart", source: "ui" })}
-          inspector={
-            <PieceDevelopmentPanel
-              key={`${selectedPiece?.ref ?? "none"}:${selectedPiece?.developmentRules.map((item) => `${item.id}:${item.target}`).join("|") ?? "none"}`}
-              workspace={workspace}
-              piece={selectedPiece}
-              pending={pending}
-              pickedTarget={pickedTarget}
-              onBeginTargetPick={() => {
-                setPickedTarget(null);
-                setTargetPicking(true);
-              }}
-              onCancelTargetPick={() => {
-                setTargetPicking(false);
-                setPickedTarget(null);
-              }}
-              onValidate={validateDevelopmentRule}
-              onApply={applyDevelopmentRule}
-              onDelete={deleteDevelopmentRule}
-              onReorder={reorderDevelopmentRules}
-              onInspectPiece={(pieceRef) => setSelectedPieceRef(pieceRef)}
-            />
-          }
+          pickedTarget={pickedTarget}
+          responsePrefill={responsePrefill}
+          onConsumeResponsePrefill={() => setResponsePrefill(null)}
+          onBeginTargetPick={() => {
+            setPickedTarget(null);
+            setTargetPicking(true);
+          }}
+          onCancelTargetPick={() => {
+            setTargetPicking(false);
+            setPickedTarget(null);
+          }}
+          onValidateDevelopment={validateDevelopmentRule}
+          onApplyDevelopment={applyDevelopmentRule}
+          onDeleteDevelopment={deleteDevelopmentRule}
+          onReorderDevelopment={reorderDevelopmentRules}
+          onValidateRule={validateRuleDraft}
+          onApplyRule={applyRuleDraft}
+          onDeleteRule={deleteRule}
+          onReorderResponses={(ids) => reorderPolicySection("response", ids)}
+          onValidateOverride={validateOverride}
+          onUpdateOverride={updateOverride}
+          onInspectPiece={(pieceRef) => setSelectedPieceRef(pieceRef)}
+          onExplain={() => void executeCommand({ command: "explain_decision", source: "ui" })}
         />
         <div className="board-region">
           <EvaluationBar
@@ -210,6 +212,20 @@ export function DevelopPage() {
             onAnalysisProfileChange={(profileId) => void updateAnalysisSettings(profileId)}
             onSubmit={(text) => void sendChat(text)}
             onExecute={(command) => void executeCommand(command)}
+            onAcceptHere={() => void executeCommand({ command: "accept_attempt_as_override", source: "ui" })}
+            onCreateBroaderResponse={() => {
+              const prefill = workspace.attempt?.authoringPrefill;
+              if (!prefill) return;
+              setSelectedPieceRef(prefill.piece);
+              setResponsePrefill({
+                id: null,
+                piece: prefill.piece,
+                target: prefill.target,
+                note: null,
+                trigger: prefill.suggestions[0]?.expression ?? { attacked: prefill.piece },
+                expireWhen: null,
+              });
+            }}
             onAddOpeningTag={(recordId) => void addOpeningTag(recordId)}
             onRemoveOpeningTag={(recordId) => void removeOpeningTag(recordId)}
           />

@@ -10,7 +10,7 @@ import {
 } from "react";
 
 import { ApiError, workspaceApi } from "../api/client";
-import type { ClientEffect, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleUpdate, StructureUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
+import type { ClientEffect, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleDraft, RuleDraftValidation, RuleUpdate, StructureUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
 
 const SESSION_KEY = "chess-flow-development-session";
 
@@ -24,7 +24,11 @@ interface WorkspaceContextValue {
   sendChat: (text: string) => Promise<void>;
   executeCommand: (command: TypedCommand) => Promise<void>;
   updateRule: (ruleId: string, update: RuleUpdate) => Promise<void>;
+  validateRuleDraft: (draft: RuleDraft) => Promise<RuleDraftValidation>;
+  applyRuleDraft: (draft: RuleDraft) => Promise<void>;
+  deleteRule: (ruleId: string) => Promise<void>;
   updateOverride: (overrideId: string, update: OverrideUpdate) => Promise<void>;
+  validateOverride: (overrideId: string, update: OverrideUpdate) => Promise<RuleDraftValidation>;
   validateDevelopmentRule: (draft: DevelopmentRuleDraft) => Promise<DevelopmentRuleValidation>;
   applyDevelopmentRule: (draft: DevelopmentRuleDraft) => Promise<void>;
   deleteDevelopmentRule: (ruleId: string) => Promise<void>;
@@ -136,7 +140,17 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
       sendChat: (text) => operateCommand((id) => workspaceApi.sendChat(id, text)),
       executeCommand: (command) => operateCommand((id) => workspaceApi.executeCommand(id, command)),
       updateRule: (ruleId, update) => operate((id) => workspaceApi.updateRule(id, ruleId, update)),
+      validateRuleDraft: (draft) => {
+        if (!workspace) return Promise.reject(new Error("No active workspace."));
+        return workspaceApi.validateRuleDraft(workspace.sessionId, draft);
+      },
+      applyRuleDraft: (draft) => operate((id) => workspaceApi.applyRuleDraft(id, draft)),
+      deleteRule: (ruleId) => operate((id) => workspaceApi.deleteRule(id, ruleId)),
       updateOverride: (overrideId, update) => operate((id) => workspaceApi.updateOverride(id, overrideId, update)),
+      validateOverride: (overrideId, update) => {
+        if (!workspace) return Promise.reject(new Error("No active workspace."));
+        return workspaceApi.validateOverride(workspace.sessionId, overrideId, update);
+      },
       validateDevelopmentRule: (draft) => {
         if (!workspace) return Promise.reject(new Error("No active workspace."));
         return workspaceApi.validateDevelopmentRule(workspace.sessionId, draft);

@@ -500,21 +500,23 @@ def test_mismatch_retry_and_continue_selected_move(tmp_path: Path) -> None:
         assert continued["position"]["historySan"] == ["d4"]
 
 
-def test_mismatch_can_add_an_exact_rule_from_chat_action(tmp_path: Path) -> None:
+def test_mismatch_can_be_accepted_as_an_exact_fix(tmp_path: Path) -> None:
     with web_client(tmp_path) as (client, path):
         created = session(client)
         session_id = created["sessionId"]
         mismatch = move(client, session_id, "e2e4")
         assert mismatch["phase"] == "policy-result"
 
-        response = client.post(f"/api/sessions/{session_id}/policy/add-rule", json={})
+        response = client.post(
+            f"/api/sessions/{session_id}/attempt/accept-here", json={}
+        )
 
         assert response.status_code == 200
         snapshot = response.json()
         assert snapshot["phase"] == "opponent-ready"
         assert snapshot["attempt"] is None
         assert snapshot["position"]["historySan"] == ["e4"]
-        assert snapshot["activity"][-2]["title"] == "Added rule allow-e2e4-ply-0"
+        assert snapshot["activity"][-2]["title"] == "Accepted e4 here"
         assert snapshot["activity"][-1]["title"] == "Opening after 1.e4"
         override = FlowStore().load(path).overrides[-1]
         assert override.id == "allow-e2e4-ply-0"
@@ -714,6 +716,14 @@ def test_override_edit_and_validation(tmp_path: Path) -> None:
             "note": "Updated exception",
             "move": {"piece": "piece:white:pawn:d", "to": "e5"},
         }
+        preview = client.post(
+            f"/api/sessions/{session_id}/overrides/after-d4-e5/validate",
+            json=payload,
+        )
+        assert preview.status_code == 200
+        assert preview.json()["valid"]
+        assert preview.json()["summary"].startswith("After 1.d4 e5")
+        assert FlowStore().load(path).overrides[0].note != "Updated exception"
         response = client.put(
             f"/api/sessions/{session_id}/overrides/after-d4-e5", json=payload
         )
@@ -811,3 +821,182 @@ def test_flow_path_restriction_and_static_fallback(tmp_path: Path) -> None:
     (dist / "index.html").write_text("<main>built app</main>", encoding="utf-8")
     with web_client(tmp_path / "built", frontend_dist=dist) as (client, _):
         assert "built app" in client.get("/develop").text
+
+
+def test_piece_authoring_snapshot_groups_rules_and_uses_friendly_statuses(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, _):
+        snapshot = session(client)
+        assert len(snapshot["startingPieces"]) == 32
+        by_ref = {item["ref"]: item for item in snapshot["startingPieces"]}
+        bishop = by_ref["piece:white:bishop:queenside"]
+        response = next(
+            item
+            for item in bishop["relatedRules"]
+            if item["id"] == "retreat-attacked-london-bishop"
+        )
+        assert response["role"] == "response"
+        assert response["triggerSummary"] == "White queenside bishop is attacked"
+        assert response["friendlyStatus"] == "not-triggered"
+        assert bishop["developmentRules"][0]["friendlyStatus"] == "not-ready"
+        assert by_ref["piece:black:bishop:queenside"]["developmentRules"] == []
+
+        d_pawn = by_ref["piece:white:pawn:d"]
+        exact = next(
+            item for item in d_pawn["exactFixes"] if item["id"] == "after-d4-e5"
+        )
+        assert exact["friendlyStatus"] == "another-position"
+        assert exact["afterSan"] == ["d4", "e5"]
+
+
+def test_structured_response_draft_validates_then_applies_without_cross_section_reorder(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        before = FlowStore().load(path)
+        original = path.read_text(encoding="utf-8")
+        draft = {
+            "id": None,
+            "piece": "piece:white:pawn:a",
+            "target": "a3",
+            "note": "Create luft when the d-pawn is still home.",
+            "trigger": {"not": {"moved": "piece:white:pawn:d"}},
+            "expireWhen": None,
+        }
+        preview = client.post(
+            f"/api/sessions/{session_id}/rules/drafts/validate", json=draft
+        )
+        assert preview.status_code == 200
+        body = preview.json()
+        assert body["valid"]
+        assert body["conditionExpression"] == draft["trigger"]
+        assert body["triggerSummary"] == "White d-pawn has not moved"
+        assert body["previewDecision"].startswith("a3")
+        assert path.read_text(encoding="utf-8") == original
+
+        applied = client.post(f"/api/sessions/{session_id}/rules", json=draft)
+        assert applied.status_code == 200
+        saved = FlowStore().load(path)
+        assert saved.responses[-1].id == body["ruleId"]
+        assert saved.development == before.development
+        assert saved.continuations == before.continuations
+
+        response_ids = [item.id for item in saved.responses]
+        reordered = client.put(
+            f"/api/sessions/{session_id}/policy-order/response",
+            json={"itemIds": list(reversed(response_ids))},
+        )
+        assert reordered.status_code == 200
+        reordered_flow = FlowStore().load(path)
+        assert [item.id for item in reordered_flow.responses] == list(
+            reversed(response_ids)
+        )
+        assert reordered_flow.development == before.development
+        assert reordered_flow.continuations == before.continuations
+
+        deleted = client.delete(f"/api/sessions/{session_id}/rules/{body['ruleId']}")
+        assert deleted.status_code == 200
+        assert all(
+            item.id != body["ruleId"] for item in FlowStore().load(path).responses
+        )
+
+
+def test_invalid_response_draft_preserves_saved_flow(tmp_path: Path) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        original = path.read_text(encoding="utf-8")
+        invalid = {
+            "id": None,
+            "piece": "piece:white:pawn:a",
+            "target": "z9",
+            "trigger": {"unknown": True},
+            "expireWhen": None,
+        }
+        preview = client.post(
+            f"/api/sessions/{created['sessionId']}/rules/drafts/validate",
+            json=invalid,
+        )
+        assert preview.status_code == 200
+        assert not preview.json()["valid"]
+        applied = client.post(
+            f"/api/sessions/{created['sessionId']}/rules", json=invalid
+        )
+        assert applied.status_code == 422
+        assert path.read_text(encoding="utf-8") == original
+
+
+def test_response_edit_preserves_hidden_scope_and_unlock_metadata(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        before = FlowStore().load(path).responses[0]
+        draft = {
+            "id": before.id,
+            "piece": "piece:white:pawn:d",
+            "target": "d5",
+            "note": "Updated through the guided editor.",
+            "trigger": {"at": {"piece": "piece:white:pawn:d", "square": "d4"}},
+            "expireWhen": {
+                "not": {"at": {"piece": "piece:white:pawn:d", "square": "d4"}}
+            },
+        }
+
+        applied = client.post(f"/api/sessions/{session_id}/rules", json=draft)
+
+        assert applied.status_code == 200
+        saved = FlowStore().load(path).responses[0]
+        assert saved.structures == before.structures
+        assert saved.unlock_when == before.unlock_when
+        assert saved.note == draft["note"]
+
+
+def test_frontier_attempt_can_be_accepted_here_and_prefills_broader_response(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, path):
+        path.write_text(
+            """
+version = 3
+name = "Frontier"
+start_fen = "startpos"
+side = "white"
+""".strip() + "\n",
+            encoding="utf-8",
+        )
+        created = session(client)
+        session_id = created["sessionId"]
+        frontier = move(client, session_id, "e2e4")
+        assert frontier["attempt"]["result"] == "frontier"
+        assert frontier["attempt"]["authoringPrefill"] == {
+            "piece": "piece:white:pawn:e",
+            "target": "e4",
+            "pieceLabel": "White e-pawn",
+            "suggestions": [],
+        }
+        commands = {item["slash"] for item in frontier["availableCommands"]}
+        assert "/accept-here" in commands
+        assert "/add-rule" not in commands
+
+        accepted = client.post(
+            f"/api/sessions/{session_id}/attempt/accept-here", json={}
+        )
+        assert accepted.status_code == 200
+        snapshot = accepted.json()
+        assert snapshot["position"]["historySan"] == ["e4"]
+        assert snapshot["attempt"] is None
+        override = FlowStore().load(path).overrides[0]
+        assert override.after_san == ()
+        assert override.move.to_square == "e4"
+
+        removed = client.post(
+            f"/api/sessions/{session_id}/chat", json={"text": "/add-rule"}
+        )
+        assert removed.status_code == 200
+        assert removed.json()["workspace"]["chat"][-1]["attachment"]["code"] == (
+            "UNKNOWN_COMMAND"
+        )

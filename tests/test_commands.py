@@ -17,6 +17,7 @@ def context(**overrides: object) -> CommandAvailability:
         "has_decision": True,
         "has_decision_move": True,
         "mismatch": False,
+        "authorable_attempt": False,
         "can_back": False,
         "can_restart": False,
         "has_rules": True,
@@ -64,13 +65,14 @@ def test_mismatch_opponent_frontier_and_game_over_availability() -> None:
     mismatch = available(
         phase="policy-result",
         mismatch=True,
+        authorable_attempt=True,
         can_back=True,
         can_restart=True,
     )
     assert {
         CommandId.RETRY_POLICY,
         CommandId.CONTINUE_POLICY,
-        CommandId.ADD_RULE_FOR_MISMATCH,
+        CommandId.ACCEPT_ATTEMPT_AS_OVERRIDE,
     } <= mismatch
     assert CommandId.PLAY_MOVE not in mismatch
 
@@ -86,6 +88,13 @@ def test_mismatch_opponent_frontier_and_game_over_availability() -> None:
     frontier = available(has_decision=True, has_decision_move=False)
     assert CommandId.EXPLAIN_DECISION in frontier
     assert CommandId.HINT_POLICY_MOVE not in frontier
+    frontier_attempt = available(
+        phase="policy-result",
+        has_decision_move=False,
+        authorable_attempt=True,
+    )
+    assert CommandId.ACCEPT_ATTEMPT_AS_OVERRIDE in frontier_attempt
+    assert CommandId.CONTINUE_POLICY not in frontier_attempt
 
     game_over = available(
         phase="game-over",
@@ -124,7 +133,12 @@ def test_command_availability_is_side_agnostic_for_black_controlled_flows() -> N
         ("/next", CommandId.NEXT_OPPONENT, None, None),
         ("/retry", CommandId.RETRY_POLICY, None, None),
         ("/continue", CommandId.CONTINUE_POLICY, None, None),
-        ("/add-rule", CommandId.ADD_RULE_FOR_MISMATCH, None, None),
+        (
+            "/accept-here",
+            CommandId.ACCEPT_ATTEMPT_AS_OVERRIDE,
+            None,
+            None,
+        ),
         ("/back", CommandId.GO_BACK, None, None),
         ("/restart", CommandId.RESTART, None, None),
         ("/hint", CommandId.HINT_POLICY_MOVE, None, None),

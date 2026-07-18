@@ -107,10 +107,10 @@ COMMANDS: tuple[CommandDefinition, ...] = (
         "Discard the mismatch and play the selected policy move.",
     ),
     CommandDefinition(
-        CommandId.ADD_RULE_FOR_MISMATCH,
-        "/add-rule",
-        "/add-rule",
-        "Accept the attempted move as an exact-position policy rule.",
+        CommandId.ACCEPT_ATTEMPT_AS_OVERRIDE,
+        "/accept-here",
+        "/accept-here",
+        "Accept the attempted move as an exact fix for this position.",
     ),
     CommandDefinition(
         CommandId.GO_BACK,
@@ -174,11 +174,10 @@ class CommandRegistry:
             return context.engine_available and context.phase == "opponent-ready"
         if command is CommandId.RETRY_POLICY:
             return context.phase == "policy-result"
-        if command in {
-            CommandId.CONTINUE_POLICY,
-            CommandId.ADD_RULE_FOR_MISMATCH,
-        }:
+        if command is CommandId.CONTINUE_POLICY:
             return context.mismatch
+        if command is CommandId.ACCEPT_ATTEMPT_AS_OVERRIDE:
+            return context.authorable_attempt
         if command is CommandId.GO_BACK:
             return context.can_back
         if command is CommandId.RESTART:

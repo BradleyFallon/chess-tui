@@ -108,7 +108,10 @@ export function BoardPanel({
     },
     squareRenderer: ({ square, children }) => {
       const startingPiece = workspace.startingPieces.find(
-        (item) => item.currentSquare === square && item.state === "undeveloped",
+        (item) =>
+          item.currentSquare === square
+          && item.state === "undeveloped"
+          && item.color === workspace.flow.side,
       );
       const marker = startingPiece ? developmentMarker(startingPiece) : null;
       return (
@@ -136,7 +139,7 @@ export function BoardPanel({
       </div>
       <p className="sr-status" aria-live="polite">
         {targetPicking
-          ? "Choose a development target square."
+          ? "Target selection is active. Choose a target square."
           : pending ? "Submitting move" : `${workspace.phase.replaceAll("-", " ")}. ${legalMoves.length} legal moves.`}
       </p>
       {promotionMoves.length > 0 && (

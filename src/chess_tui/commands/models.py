@@ -23,7 +23,7 @@ class CommandId(str, Enum):
     NEXT_OPPONENT = "next_opponent"
     RETRY_POLICY = "retry_policy"
     CONTINUE_POLICY = "continue_policy"
-    ADD_RULE_FOR_MISMATCH = "add_rule_for_mismatch"
+    ACCEPT_ATTEMPT_AS_OVERRIDE = "accept_attempt_as_override"
     GO_BACK = "go_back"
     RESTART = "restart"
     HINT_POLICY_MOVE = "hint_policy_move"
@@ -66,6 +66,7 @@ class CommandAvailability:
     has_decision: bool
     has_decision_move: bool
     mismatch: bool
+    authorable_attempt: bool
     can_back: bool
     can_restart: bool
     has_rules: bool

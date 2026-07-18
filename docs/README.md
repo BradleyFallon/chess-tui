@@ -2,6 +2,8 @@
 
 Piece-centered Development Mode authoring is specified in
 [`design/piece-development-authoring.md`](design/piece-development-authoring.md).
+The implemented chess-oriented rule-authoring experience is specified in
+[`design/rule-authoring-ui.md`](design/rule-authoring-ui.md).
 
 ## Quiz demo architecture
 
@@ -112,12 +114,15 @@ chess-tui web \
 The default bind is `127.0.0.1:8765`. Omitting `--engine` is supported and
 reported as `engine-off`. Development Mode supports controlled board/SAN input,
 generic policy retry/continuation, manual or engine opponent moves, Back,
-Restart, deterministic-v3 traces, structure states, grouped policy order,
-policy and exact-override editing, structured errors, and White-normalized
-evaluation. Conditions are
-edited as JSON objects matching the TOML condition language. Python validates
-the whole flow, atomically saves it, and replays the active line before returning
-a new snapshot. Each snapshot also contains the commands currently available,
+Restart, deterministic-v3 traces, piece-centered authoring, structured errors,
+and White-normalized evaluation. Normal development, existing response rules,
+and exact fixes use guided editors and a reusable visual condition tree. Raw
+condition JSON, lifecycle data, decision traces, and TOML live in the advanced
+Policy details drawer. Every edit validates before review; Apply validates the
+whole flow, atomically saves it, and replays the active line before returning a
+new snapshot. Frontier and mismatch attempts can be accepted as an exact fix
+with `/accept-here`, or can prefill a broader response draft without applying
+it. Each snapshot also contains the commands currently available,
 computed by Python from phase, policy decision, engine state, and navigation.
 The composer sends complete text to the backend: non-slash input is SAN and slash
 input is parsed by the shared command registry. Conversation messages and
@@ -136,9 +141,10 @@ cd web
 npm run dev
 ```
 
-Web Quiz, graphical condition construction, rule creation/deletion, forward
-navigation, WebSockets, accounts, databases, and hosted deployment are deferred.
+Web Quiz, structure and continuation authoring, forward navigation, WebSockets,
+accounts, databases, and hosted deployment are deferred.
 The authoritative specifications are
 `docs/design/rule-policy-v3.md`,
+`docs/design/rule-authoring-ui.md`,
 `docs/design/web-development-mode.md`, and
 `docs/design/opening-classification.md`.

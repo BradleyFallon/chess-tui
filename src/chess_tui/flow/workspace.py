@@ -245,6 +245,20 @@ class FlowWorkspace:
     def update_rule(self, replacement: AuthoredPolicyItem) -> PolicyMoveAttempt | None:
         return self._apply_candidate(self.author.candidate_with_rule(replacement))
 
+    def save_response_rule(
+        self, response: AuthoredPolicyItem
+    ) -> PolicyMoveAttempt | None:
+        if isinstance(response, DevelopmentAssignment):
+            raise FlowValidationError("A development assignment is not a response.")
+        if any(item.id == response.id for item in self.author.flow.responses):
+            candidate = self.author.candidate_with_rule(response)
+        else:
+            candidate = self.author.candidate_with_added_response(response)
+        return self._apply_candidate(candidate)
+
+    def delete_response_rule(self, rule_id: str) -> PolicyMoveAttempt | None:
+        return self._apply_candidate(self.author.candidate_without_response(rule_id))
+
     def add_development_rule(
         self, development_rule: DevelopmentAssignment
     ) -> PolicyMoveAttempt | None:
@@ -301,11 +315,11 @@ class FlowWorkspace:
     def remove_opening_tag(self, tag: OpeningTag) -> None:
         self._apply_candidate(self.author.candidate_without_opening_tag(tag))
 
-    def allow_mismatch_as_override(self) -> ExactOverride:
+    def accept_attempt_as_override(self) -> ExactOverride:
         attempt = self._require_attempt()
-        if attempt.result is not AttemptResult.MISMATCH:
+        if attempt.result not in {AttemptResult.MISMATCH, AttemptResult.FRONTIER}:
             raise FlowValidationError(
-                "Only a mismatching policy move can be added as an exact rule."
+                "Only a mismatching or frontier move can be accepted as an exact fix."
             )
         move = chess.Move.from_uci(attempt.selected_move.move.uci)
         if move.promotion is not None:
@@ -337,7 +351,7 @@ class FlowWorkspace:
             ),
             after_san=attempt.history_before,
             move=MoveAction(tracked_piece.id, chess.square_name(move.to_square)),
-            note=f"Added from chat to allow {attempt.selected_move.san} here.",
+            note=f"Accepted {attempt.selected_move.san} in this exact position.",
         )
         candidate = (
             self.author.candidate_with_override(override)

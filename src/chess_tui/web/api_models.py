@@ -51,7 +51,7 @@ class SimpleCommandRequest(ApiModel):
         "next_opponent",
         "retry_policy",
         "continue_policy",
-        "add_rule_for_mismatch",
+        "accept_attempt_as_override",
         "go_back",
         "restart",
         "hint_policy_move",
@@ -90,6 +90,15 @@ class UpdateRuleRequest(ApiModel):
     structures: list[str] = Field(default_factory=list)
     unlock_when: dict[str, object] | None = None
     when: dict[str, object] | None = None
+    expire_when: dict[str, object] | None = None
+
+
+class RuleDraftRequest(ApiModel):
+    id: str | None = Field(default=None, min_length=1, max_length=100)
+    piece: str = Field(min_length=3, max_length=80)
+    target: str = Field(min_length=2, max_length=2)
+    note: str | None = None
+    trigger: dict[str, object] | None = None
     expire_when: dict[str, object] | None = None
 
 
@@ -133,6 +142,27 @@ class DevelopmentRuleValidationResponse(ApiModel):
     piece: str
     target: str
     order: int
+    summary: str = ""
+    readiness_summary: str = ""
+    current_decision: str | None = None
+    preview_decision: str | None = None
+    affected_order: list[str] = Field(default_factory=list)
+    condition_expression: dict[str, object] | None = None
+    warnings: list[str] = Field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
+
+
+class RuleDraftValidationResponse(ApiModel):
+    valid: bool
+    rule_id: str
+    summary: str = ""
+    trigger_summary: str = ""
+    expiration_summary: str = ""
+    current_decision: str | None = None
+    preview_decision: str | None = None
+    affected_order: list[str] = Field(default_factory=list)
+    condition_expression: dict[str, object] | None = None
+    warnings: list[str] = Field(default_factory=list)
     errors: list[str] = Field(default_factory=list)
 
 
@@ -235,6 +265,12 @@ class ConditionSnapshot(ApiModel):
     explanation: str
 
 
+class NamedConditionSnapshot(ApiModel):
+    id: str
+    summary: str
+    expression: dict[str, object]
+
+
 class RuleRuntimeSnapshot(ApiModel):
     kind: Literal["rule"] = "rule"
     section: Literal["response", "development", "continuation"]
@@ -265,6 +301,12 @@ class RuleRuntimeSnapshot(ApiModel):
     unlocked_at_ply: int | None
     retired_at_ply: int | None
     reason: str
+    title: str
+    trigger_summary: str
+    expiration_summary: str
+    friendly_status: Literal[
+        "not-triggered", "available", "recommended", "blocked", "completed"
+    ]
 
 
 class DevelopmentRuleSnapshot(ApiModel):
@@ -284,6 +326,36 @@ class DevelopmentRuleSnapshot(ApiModel):
     ready_when: ConditionSnapshot | None
     note: str | None
     reason: str
+    readiness_summary: str
+    friendly_status: Literal[
+        "not-ready", "ready", "recommended", "blocked", "completed"
+    ]
+
+
+class RelatedRuleSnapshot(ApiModel):
+    id: str
+    role: Literal["response", "other"]
+    title: str
+    piece: str
+    target: str
+    move_san: str | None = None
+    trigger_summary: str
+    expiration_summary: str
+    friendly_status: Literal[
+        "not-triggered", "available", "recommended", "blocked", "completed"
+    ]
+    runtime_status: str
+    note: str | None = None
+
+
+class ExactFixSummary(ApiModel):
+    id: str
+    after_san: list[str] = Field(default_factory=list)
+    piece: str
+    target: str
+    move_san: str | None = None
+    reason: str | None = None
+    friendly_status: Literal["exact-fix-active", "another-position"]
 
 
 class StartingPieceSnapshot(ApiModel):
@@ -304,6 +376,8 @@ class StartingPieceSnapshot(ApiModel):
     first_moved_ply: int | None
     captured_ply: int | None
     development_rules: list[DevelopmentRuleSnapshot] = Field(default_factory=list)
+    related_rules: list[RelatedRuleSnapshot] = Field(default_factory=list)
+    exact_fixes: list[ExactFixSummary] = Field(default_factory=list)
 
 
 class StructureRuntimeSnapshot(ApiModel):
@@ -330,6 +404,9 @@ class OverrideRuntimeSnapshot(ApiModel):
     selected: bool
     note: str | None
     reason: str
+    friendly_status: Literal["exact-fix-active", "another-position"]
+    position_summary: str
+    move_summary: str
 
 
 class RuleGroupsSnapshot(ApiModel):
@@ -351,6 +428,8 @@ class DecisionSnapshot(ApiModel):
     source_id: str | None
     note: str | None
     trace: list[str] = Field(default_factory=list)
+    summary: str
+    reason: str
 
 
 class EngineReviewSnapshot(ApiModel):
@@ -379,6 +458,19 @@ class AttemptSnapshot(ApiModel):
     note: str | None
     trace: list[str] = Field(default_factory=list)
     engine_review: EngineReviewSnapshot | None
+    authoring_prefill: "AttemptAuthoringPrefill"
+
+
+class ConditionSuggestion(ApiModel):
+    label: str
+    expression: dict[str, object]
+
+
+class AttemptAuthoringPrefill(ApiModel):
+    piece: str
+    target: str
+    piece_label: str
+    suggestions: list[ConditionSuggestion] = Field(default_factory=list)
 
 
 class EvaluationSnapshot(ApiModel):
@@ -624,6 +716,7 @@ class WorkspaceSnapshot(ApiModel):
     attempt: AttemptSnapshot | None
     rules: RuleGroupsSnapshot
     starting_pieces: list[StartingPieceSnapshot] = Field(default_factory=list)
+    named_conditions: list[NamedConditionSnapshot] = Field(default_factory=list)
     opening: OpeningContextSnapshot
     opening_history: list[OpeningHistoryItemSnapshot] = Field(default_factory=list)
     evaluation: EvaluationSnapshot

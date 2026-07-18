@@ -30,6 +30,8 @@ from .api_models import (
     MoveRequest,
     OpeningTagRequest,
     PolicyOrderRequest,
+    RuleDraftRequest,
+    RuleDraftValidationResponse,
     InspectRuleCommandRequest,
     PlayMoveCommandRequest,
     SanMoveRequest,
@@ -261,13 +263,13 @@ def _register_api_routes(application: FastAPI) -> None:
         return await _manager(request).continue_policy(session_id)
 
     @application.post(
-        "/api/sessions/{session_id}/policy/add-rule",
+        "/api/sessions/{session_id}/attempt/accept-here",
         response_model=WorkspaceSnapshot,
     )
-    async def add_rule_for_mismatch(
+    async def accept_attempt_as_override(
         request: Request, session_id: str
     ) -> WorkspaceSnapshot:
-        return await _manager(request).add_rule_for_mismatch(session_id)
+        return await _manager(request).accept_attempt_as_override(session_id)
 
     @application.post(
         "/api/sessions/{session_id}/opponent/next",
@@ -309,6 +311,39 @@ def _register_api_routes(application: FastAPI) -> None:
         payload: UpdateRuleRequest,
     ) -> WorkspaceSnapshot:
         return await _manager(request).update_rule(session_id, rule_id, payload)
+
+    @application.post(
+        "/api/sessions/{session_id}/rules/drafts/validate",
+        response_model=RuleDraftValidationResponse,
+    )
+    async def validate_rule_draft(
+        request: Request,
+        session_id: str,
+        payload: RuleDraftRequest,
+    ) -> RuleDraftValidationResponse:
+        return await _manager(request).validate_rule_draft(session_id, payload)
+
+    @application.post(
+        "/api/sessions/{session_id}/rules",
+        response_model=WorkspaceSnapshot,
+    )
+    async def apply_rule_draft(
+        request: Request,
+        session_id: str,
+        payload: RuleDraftRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).apply_rule_draft(session_id, payload)
+
+    @application.delete(
+        "/api/sessions/{session_id}/rules/{rule_id}",
+        response_model=WorkspaceSnapshot,
+    )
+    async def delete_rule(
+        request: Request,
+        session_id: str,
+        rule_id: str,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).delete_rule(session_id, rule_id)
 
     @application.post(
         "/api/sessions/{session_id}/development-rules/validate",
@@ -402,6 +437,20 @@ def _register_api_routes(application: FastAPI) -> None:
         payload: UpdateOverrideRequest,
     ) -> WorkspaceSnapshot:
         return await _manager(request).update_override(session_id, override_id, payload)
+
+    @application.post(
+        "/api/sessions/{session_id}/overrides/{override_id}/validate",
+        response_model=RuleDraftValidationResponse,
+    )
+    async def validate_override(
+        request: Request,
+        session_id: str,
+        override_id: str,
+        payload: UpdateOverrideRequest,
+    ) -> RuleDraftValidationResponse:
+        return await _manager(request).validate_override(
+            session_id, override_id, payload
+        )
 
     @application.post(
         "/api/sessions/{session_id}/opening-tags",

@@ -31,6 +31,8 @@ interface Props {
   onAnalysisProfileChange: (profileId: string) => void;
   onSubmit: (text: string) => void;
   onExecute: (command: TypedCommand) => void;
+  onAcceptHere: () => void;
+  onCreateBroaderResponse: () => void;
   onAddOpeningTag: (recordId: number) => void;
   onRemoveOpeningTag: (recordId: number) => void;
 }
@@ -48,6 +50,8 @@ export function StatusFeed({
   onAnalysisProfileChange,
   onSubmit,
   onExecute,
+  onAcceptHere,
+  onCreateBroaderResponse,
   onAddOpeningTag,
   onRemoveOpeningTag,
 }: Props) {
@@ -192,6 +196,8 @@ export function StatusFeed({
           hintVisible={hintVisible}
           autoRespond={autoRespond}
           onExecute={onExecute}
+          onAcceptHere={onAcceptHere}
+          onCreateBroaderResponse={onCreateBroaderResponse}
         />
       </div>
       <div className="status-composer-shell">
@@ -437,7 +443,9 @@ function CurrentStatus({
   hintVisible,
   autoRespond,
   onExecute,
-}: Pick<Props, "workspace" | "pending" | "hintVisible" | "autoRespond" | "onExecute">) {
+  onAcceptHere,
+  onCreateBroaderResponse,
+}: Pick<Props, "workspace" | "pending" | "hintVisible" | "autoRespond" | "onExecute" | "onAcceptHere" | "onCreateBroaderResponse">) {
   if (workspace.phase === "policy-ready") {
     const side = capitalize(workspace.flow.side);
     return <article className="status-note status-note-prompt status-note-current"><span className="status-note-marker" aria-hidden="true" /><div>
@@ -450,18 +458,17 @@ function CurrentStatus({
     const side = workspace.position.turn === "white" ? "White" : "Black";
     return <article className="status-note status-note-prompt status-note-current"><span className="status-note-marker" aria-hidden="true" /><div><strong>{side} to move</strong><p>{autoRespond ? "Auto-respond is choosing the opponent reply." : "Pick a reply on the board, or press Enter / choose Next and let the engine play it."}</p><button className="primary status-next-button" onClick={() => onExecute({ command: "next_opponent", source: "ui" })} disabled={pending} aria-keyshortcuts="Enter">Next</button></div></article>;
   }
-  if (workspace.phase === "policy-result" && workspace.attempt) return <ResultActions attempt={workspace.attempt} pending={pending} onExecute={onExecute} />;
+  if (workspace.phase === "policy-result" && workspace.attempt) return <ResultActions attempt={workspace.attempt} pending={pending} onExecute={onExecute} onAcceptHere={onAcceptHere} onCreateBroaderResponse={onCreateBroaderResponse} />;
   return <article className="status-note status-note-current"><span className="status-note-marker" aria-hidden="true" /><div><strong>Game over</strong><p>{workspace.position.gameOver?.termination ?? "The line has ended."} {workspace.position.gameOver?.result}</p></div></article>;
 }
 
-function ResultActions({ attempt, pending, onExecute }: { attempt: AttemptSnapshot; pending: boolean; onExecute: Props["onExecute"] }) {
+function ResultActions({ attempt, pending, onExecute, onAcceptHere, onCreateBroaderResponse }: { attempt: AttemptSnapshot; pending: boolean; onExecute: Props["onExecute"]; onAcceptHere: Props["onAcceptHere"]; onCreateBroaderResponse: Props["onCreateBroaderResponse"] }) {
   const mismatch = attempt.result === "mismatch";
   return <article className="status-note status-note-action status-note-current"><span className="status-note-marker" aria-hidden="true" /><div>
-    <strong>{mismatch ? "Rule mismatch" : "Flow frontier"}</strong>
+    <strong>{mismatch ? "Policy mismatch" : "Flow frontier"}</strong>
     <p>You played {attempt.playedSan}.{attempt.expectedSan ? ` The selected policy expects ${attempt.expectedSan}.` : " No policy action resolves here."}</p>
     {attempt.note && <p>Reason: {attempt.note}</p>}<EngineReview attempt={attempt} />
-    <div className="button-row status-actions"><button onClick={() => onExecute({ command: "retry_policy", source: "ui" })} disabled={pending}>Retry</button>{mismatch && <button className="primary" onClick={() => onExecute({ command: "continue_policy", source: "ui" })} disabled={pending}>Use selected move</button>}</div>
-    <p className="status-edit-help">Use /add-rule in chat to accept this move here, or use Edit in Rule Status to change the selected rule or override.</p>
+    <div className="button-row status-actions"><button className="primary" onClick={onAcceptHere} disabled={pending}>Accept in this position</button><button onClick={onCreateBroaderResponse} disabled={pending}>Create broader response</button><button onClick={() => onExecute({ command: "retry_policy", source: "ui" })} disabled={pending}>Retry</button>{mismatch && <button onClick={() => onExecute({ command: "continue_policy", source: "ui" })} disabled={pending}>Use expected move</button>}</div>
   </div></article>;
 }
 

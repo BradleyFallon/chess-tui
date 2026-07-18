@@ -317,6 +317,21 @@ It may expose:
 
 Development Mode should support experimental play followed by turning an observed move into a deterministic rule.
 
+The primary web authoring surface is piece-centered. Use chess-facing terms
+such as Normal development, Special responses, Exact fixes, Recommended now,
+Ready, Not ready, Blocked, and Completed. Keep authored IDs, lifecycle,
+conditions, trace, and TOML in the advanced Policy details drawer.
+
+Focused edits follow `Edit -> Validate -> Review -> Apply`. Validation must not
+persist. Apply revalidates, saves atomically, replays the active line, and
+returns a complete snapshot. The visual condition builder and advanced source
+must edit one shared condition AST.
+
+Mismatch and frontier attempts both support Accept in this position through
+`accept_attempt_as_override` and `/accept-here`. `/add-rule` is unsupported.
+Creating a broader response only prefills a reviewed draft; it must not apply a
+rule automatically.
+
 ## Web application direction
 
 The web application belongs in this repository and shares the Python core.

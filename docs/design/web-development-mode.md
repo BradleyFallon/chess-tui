@@ -11,6 +11,51 @@ Active architecture and product-direction specification. The local
 deterministic-v3 Development Mode slice is implemented; later broad analysis
 and Quiz surfaces remain planned.
 
+The implemented primary rule-authoring experience is defined by
+[rule-authoring-ui.md](rule-authoring-ui.md). Historical rule-list,
+JSON-first, priority, and phased vertical-slice material later in this document
+does not override that focused specification.
+
+## Current authoring workspace
+
+The desktop workspace retains three columns:
+
+```text
+piece and authoring inspector | board and evaluation | timeline and chat
+```
+
+The left column is piece-centered:
+
+```text
+PIECE
+CURRENT DECISION
+AUTHORING
+  Normal development
+  Special responses
+  Exact fixes
+  Change rule order
+POLICY DETAILS
+```
+
+Piece inspection is always active and coexists with move selection. Normal
+editing uses chess terminology and friendly statuses. Exact lifecycle,
+conditions, authored IDs, decision trace, and TOML are progressive-disclosure
+diagnostics.
+
+All focused edits use `Edit -> Validate -> Review -> Apply`. Validation never
+writes. Apply revalidates, saves atomically, replays, and returns a complete
+snapshot. Response and development ordering use v3 authored list order; the
+browser never calculates policy precedence.
+
+Pending mismatch and frontier moves offer **Accept in this position**,
+**Create broader response**, and **Retry**. Mismatches also offer **Use expected
+move**. `/accept-here` is available for both attempt kinds; `/add-rule` is
+removed.
+
+This authoring batch does not add a schema, resolver, structure controls, or
+continuation controls. Existing v3 structure state and scopes remain Python
+policy data.
+
 This document defines the planned local web application, its relationship to the existing Python core and terminal interface, and the product behavior of Quiz Mode and Flow Development Mode.
 
 The deterministic rule-policy schema is defined separately in:
