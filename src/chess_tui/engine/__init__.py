@@ -15,6 +15,8 @@ from .assessment import (
 )
 from .fixture import FixtureEngineService
 from .models import (
+    ANALYSIS_PROFILES,
+    DEFAULT_ANALYSIS_PROFILE,
     DEFAULT_QUALITY_THRESHOLDS,
     ENGINE_PROTOTYPE_PROFILE,
     AnalysedMove,
@@ -28,7 +30,9 @@ from .stockfish import StockfishEngineService, validate_engine_path
 
 __all__ = [
     "ChessEngineService",
+    "ANALYSIS_PROFILES",
     "AnalysedMove",
+    "DEFAULT_ANALYSIS_PROFILE",
     "DEFAULT_QUALITY_THRESHOLDS",
     "ENGINE_PROTOTYPE_PROFILE",
     "EngineConfigurationError",

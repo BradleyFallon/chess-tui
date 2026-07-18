@@ -544,9 +544,9 @@ def test_position_analysis_returns_book_and_engine_candidates(tmp_path: Path) ->
             super().__init__()
             self.analysis_counts: list[int] = []
 
-        async def analyse(self, board, *, count=4):
+        async def analyse(self, board, *, count=4, profile=None):
             self.analysis_counts.append(count)
-            return await super().analyse(board, count=count)
+            return await super().analyse(board, count=count, profile=profile)
 
     engine = CountingEngine()
     with web_client(tmp_path, engine=engine) as (client, _):
@@ -578,6 +578,40 @@ def test_position_analysis_returns_book_and_engine_candidates(tmp_path: Path) ->
         assert engine.analysis_counts.count(4) == 1
 
 
+def test_analysis_profile_is_visible_and_changes_depth(tmp_path: Path) -> None:
+    class ProfileTrackingEngine(FixtureEngineService):
+        def __init__(self) -> None:
+            super().__init__()
+            self.profile_ids: list[str] = []
+
+        async def analyse(self, board, *, count=4, profile=None):
+            assert profile is not None
+            self.profile_ids.append(profile.id)
+            return await super().analyse(board, count=count, profile=profile)
+
+    engine = ProfileTrackingEngine()
+    with web_client(tmp_path, engine=engine) as (client, _):
+        created = session(client)
+        settings = created["analysisSettings"]
+        assert settings["engineName"] == "Deterministic fixture"
+        assert settings["selectedProfileId"] == "analysis"
+        assert settings["billingNote"] == "Local engine: no API or per-analysis fee."
+        assert [item["depth"] for item in settings["profiles"]] == [10, 15, 20, 26]
+        assert created["evaluation"]["analysis"]["requestedDepth"] == 20
+
+        changed = client.put(
+            f"/api/sessions/{created['sessionId']}/analysis/settings",
+            json={"profileId": "deep"},
+        )
+
+        assert changed.status_code == 200
+        snapshot = changed.json()
+        assert snapshot["analysisSettings"]["selectedProfileId"] == "deep"
+        assert snapshot["evaluation"]["analysis"]["requestedDepth"] == 26
+        assert snapshot["activity"][-1]["title"] == "Analysis set to Deep"
+        assert engine.profile_ids[-1] == "deep"
+
+
 def test_position_analysis_includes_policy_move_and_requires_engine(
     tmp_path: Path,
 ) -> None:
@@ -606,7 +640,7 @@ def test_engine_failure_returns_valid_snapshot_with_visible_error(
     tmp_path: Path,
 ) -> None:
     class FailingEngine(FixtureEngineService):
-        async def analyse(self, board, *, count=4):
+        async def analyse(self, board, *, count=4, profile=None):
             raise EngineProcessError("engine stopped")
 
     with web_client(tmp_path, engine=FailingEngine()) as (client, _):

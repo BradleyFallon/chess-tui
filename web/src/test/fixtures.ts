@@ -70,6 +70,21 @@ export function workspaceFixture(overrides: Partial<WorkspaceSnapshot> = {}): Wo
     evaluation: {
       status: "ready", perspective: "white", centipawns: 22, mateIn: null,
       previousCentipawns: null, previousMateIn: null, changeCentipawns: null, errorMessage: null,
+      analysis: {
+        engineName: "Stockfish 18", profileId: "analysis", requestedDepth: 20,
+        actualDepth: 20, selectiveDepth: 28, nodes: 125000, nps: 1000000,
+        timeMs: 125, lines: 1,
+      },
+    },
+    analysisSettings: {
+      status: "ready", engineName: "Stockfish 18", selectedProfileId: "analysis",
+      profiles: [
+        { id: "blunder-check", label: "Blunder check", depth: 10, costLabel: "Lowest compute", costDescription: "Depth 10 catches obvious tactical errors quickly." },
+        { id: "quick", label: "Quick", depth: 15, costLabel: "Low compute", costDescription: "Depth 15 is a fast interactive evaluation." },
+        { id: "analysis", label: "Analysis", depth: 20, costLabel: "Moderate compute", costDescription: "Depth 20 provides stronger routine analysis." },
+        { id: "deep", label: "Deep", depth: 26, costLabel: "Highest compute", costDescription: "Depth 26 is the slowest, strongest interactive search." },
+      ],
+      candidateCount: 4, billingNote: "Local engine: no API or per-analysis fee.",
     },
     navigation: { canBack: false, canRestart: false },
     activity: [{ id: 1, sequence: 1, kind: "info", title: "Development session ready", message: "Loaded London System. White follows the deterministic policy.", attachment: null }],

@@ -264,3 +264,28 @@ move = "Qb6"
 id = "after-d4-nf6-bf4-d5-e3-c5-nf3-nc6-c3-qb6-bd3-qxb2"
 after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3", "Nc6", "c3", "Qb6", "Bd3"]
 move = "Qxb2"
+
+[[opponent_replies]]
+id = "after-d4-d5-bf4-c5"
+after = ["d4", "d5", "Bf4"]
+move = "c5"
+
+[[opponent_replies]]
+id = "after-d4-d5-bf4-c5-e3-cxd4"
+after = ["d4", "d5", "Bf4", "c5", "e3"]
+move = "cxd4"
+
+[[opponent_replies]]
+id = "after-d4-d5-bf4-c5-e3-nf6"
+after = ["d4", "d5", "Bf4", "c5", "e3"]
+move = "Nf6"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-d5-e3-c5-nf3-e6"
+after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3"]
+move = "e6"
+
+[[opponent_replies]]
+id = "after-d4-d5-bf4-c5-e3-nc6-nf3-cxd4"
+after = ["d4", "d5", "Bf4", "c5", "e3", "Nc6", "Nf3"]
+move = "cxd4"

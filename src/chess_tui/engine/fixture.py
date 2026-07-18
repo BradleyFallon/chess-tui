@@ -7,7 +7,7 @@ import hashlib
 import chess
 
 from .errors import EngineConfigurationError, EngineProcessError, EngineResultError
-from .models import AnalysedMove, EngineProfile
+from .models import ENGINE_PROTOTYPE_PROFILE, AnalysedMove, EngineProfile
 
 
 class FixtureEngineService:
@@ -34,12 +34,14 @@ class FixtureEngineService:
         board: chess.Board,
         *,
         count: int = 4,
+        profile: EngineProfile | None = None,
     ) -> tuple[AnalysedMove, ...]:
         if self.closed:
             raise EngineProcessError("The fixture engine service is closed.")
         if not 1 <= count <= 4:
             raise EngineConfigurationError("Analysis count must be between 1 and 4.")
-        legal_moves = self._ranked_moves(board, "analysis")
+        selected_profile = profile or ENGINE_PROTOTYPE_PROFILE
+        legal_moves = self._ranked_moves(board, selected_profile.id)
         if not legal_moves:
             raise EngineResultError("The position has no legal moves to analyse.")
 
@@ -66,6 +68,12 @@ class FixtureEngineService:
                     evaluation_cp=evaluation_cp,
                     principal_variation=(move.uci(),),
                     mate_in=mate_in,
+                    engine_name="Deterministic fixture",
+                    profile_id=selected_profile.id,
+                    requested_depth=selected_profile.depth,
+                    actual_depth=selected_profile.depth,
+                    nodes=0,
+                    time_ms=0,
                 )
             )
         return tuple(analysed)

@@ -8,3 +8,5 @@ How can we test for if there are any blunder scenarios with our current move seq
 ---
 
 with each move, put a thing in the chat that says what book openings we are in alignment with. If we can also say what defenses to expect, that too. We should have an inventory of openings and defenses and a way to check if they are applicable to the current board state. Then, later, we should be able to scroll back and review the chat/log and understand how the game developed from opening system into defense systems and when it went from book standards to rule-based. Eventually, we want to be able to ask the chat for llm advice, where the llm will get the info and be asked to advise or help write new rules etc.
+
+we don't need to see "white to move" status on the evaluation bar area. instead we should indicate what is used to evaluate, such as stockfish V14 D25 or something like that

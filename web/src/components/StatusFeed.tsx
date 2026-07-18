@@ -28,6 +28,7 @@ interface Props {
   hintVisible: boolean;
   autoRespond: boolean;
   onAutoRespondChange: (enabled: boolean) => void;
+  onAnalysisProfileChange: (profileId: string) => void;
   onSubmit: (text: string) => void;
   onExecute: (command: TypedCommand) => void;
   onAddOpeningTag: (recordId: number) => void;
@@ -44,6 +45,7 @@ export function StatusFeed({
   hintVisible,
   autoRespond,
   onAutoRespondChange,
+  onAnalysisProfileChange,
   onSubmit,
   onExecute,
   onAddOpeningTag,
@@ -150,6 +152,27 @@ export function StatusFeed({
             <strong>Auto-respond</strong>
             <small>Play the opponent reply as soon as the flow hands over the turn.</small>
           </span>
+        </label>
+        <label className="analysis-option">
+          <span>
+            <strong>Engine analysis</strong>
+            <small>{workspace.analysisSettings.billingNote}</small>
+          </span>
+          <select
+            aria-label="Engine analysis strength"
+            value={workspace.analysisSettings.selectedProfileId}
+            disabled={pending || workspace.analysisSettings.status === "off"}
+            onChange={(event) => onAnalysisProfileChange(event.target.value)}
+          >
+            {workspace.analysisSettings.profiles.map((profile) => (
+              <option value={profile.id} key={profile.id}>
+                {profile.label} · depth {profile.depth} · {profile.costLabel}
+              </option>
+            ))}
+          </select>
+          <small className="analysis-option-detail">
+            {selectedAnalysisProfile(workspace)?.costDescription}
+          </small>
         </label>
       </section>
       <div className="status-feed" role="log" aria-live="polite" ref={feedRef}>
@@ -454,6 +477,7 @@ function PositionAnalysis({ analysis }: { analysis: PositionAnalysisSnapshot }) 
   return <div className="position-analysis">
     <AnalysisGroup title="Book moves" empty="No opening-index moves found.">{analysis.bookMoves.map((move) => <li key={move.uci}><strong>{move.san}</strong><span>{bookMoveLabel(move.source)}</span></li>)}</AnalysisGroup>
     <AnalysisGroup title="Engine best" empty="No engine candidates returned.">{analysis.engineMoves.map((move, index) => <li key={move.uci}><strong>{index + 1}. {move.san}</strong><span>{analysisScore(move.evaluationCp, move.mateIn)}</span></li>)}</AnalysisGroup>
+    {analysis.engine && <p className="analysis-provenance">{analysisRunLabel(analysis.engine)}</p>}
   </div>;
 }
 
@@ -475,6 +499,25 @@ function analysisScore(cp: number | null, mate: number | null): string {
   if (pawns === 0) return "0.00";
   return `${pawns > 0 ? "+" : ""}${pawns.toFixed(2)}`;
 }
+
+function analysisRunLabel(run: PositionAnalysisSnapshot["engine"]): string {
+  if (!run) return "";
+  const depth = run.actualDepth ?? run.requestedDepth;
+  const work = [
+    depth === null ? null : `depth ${depth}`,
+    run.nodes === null ? null : `${run.nodes.toLocaleString()} nodes`,
+    run.timeMs === null ? null : `${run.timeMs} ms`,
+    `${run.lines} lines`,
+  ].filter((item): item is string => item !== null);
+  return `${run.engineName} · ${work.join(" · ")} · local compute, no API fee`;
+}
+
+function selectedAnalysisProfile(workspace: WorkspaceSnapshot) {
+  return workspace.analysisSettings.profiles.find(
+    (profile) => profile.id === workspace.analysisSettings.selectedProfileId,
+  );
+}
+
 function decisionMessage(workspace: WorkspaceSnapshot): string {
   const decision = workspace.decision;
   if (!decision || decision.status === "frontier") return "No active legal rule resolves here. Edit an existing rule or the flow TOML.";

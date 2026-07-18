@@ -73,7 +73,13 @@ shows `engine-off` and never substitutes fixture analysis.
 
 Development Mode displays the Python-owned board, SAN history, deterministic-v3
 decision trace, structure state, authored policy order, Back/Restart navigation,
-and optional Stockfish evaluation. Responses, structure-scoped development,
+and optional Stockfish evaluation. The analysis options select Blunder check,
+Quick, Analysis, or Deep local search at fixed depths 10, 15, 20, or 26.
+Current-position and candidate
+scores identify the UCI engine and report actual depth, elapsed time, and nodes
+when supplied by the engine. Local Stockfish has no API or per-analysis fee;
+deeper and multi-line searches use more local CPU time. Responses,
+structure-scoped development,
 continuations, and exact-position overrides use canonical starting-piece
 references and the closed JSON condition language. The complete flow is
 validated, saved atomically, and replayed after each edit.
@@ -183,6 +189,8 @@ development assignment, first continuation, then frontier.
   manual board/SAN entry. Recorded replies are branch data, never policy rules.
 - The advantage bar and mismatch engine review are White-normalized; mate
   scores remain separate and engine advice never edits policy.
+- Web Development Mode shows the engine identity and measured search work with
+  current-position and candidate-move evaluations.
 - `Ctrl+N` restarts, `I` focuses SAN entry, `Escape` leaves text entry or retries
   a pending result, and `Q` quits from navigation mode.
 

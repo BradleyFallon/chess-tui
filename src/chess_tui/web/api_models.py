@@ -159,6 +159,39 @@ class HealthResponse(ApiModel):
     engine: EngineHealth
 
 
+class AnalysisSettingsRequest(ApiModel):
+    profile_id: Literal["blunder-check", "quick", "analysis", "deep"]
+
+
+class AnalysisProfileSnapshot(ApiModel):
+    id: str
+    label: str
+    depth: int
+    cost_label: str
+    cost_description: str
+
+
+class AnalysisSettingsSnapshot(ApiModel):
+    status: Literal["off", "configured", "ready", "error"]
+    engine_name: str | None = None
+    selected_profile_id: str
+    profiles: list[AnalysisProfileSnapshot] = Field(default_factory=list)
+    candidate_count: int = 4
+    billing_note: str = "Local engine: no API or per-analysis fee."
+
+
+class AnalysisRunSnapshot(ApiModel):
+    engine_name: str
+    profile_id: str
+    requested_depth: int | None = None
+    actual_depth: int | None = None
+    selective_depth: int | None = None
+    nodes: int | None = None
+    nps: int | None = None
+    time_ms: int | None = None
+    lines: int = 1
+
+
 class FlowSourceResponse(ApiModel):
     path: str
     content: str
@@ -357,6 +390,7 @@ class EvaluationSnapshot(ApiModel):
     previous_mate_in: int | None = None
     change_centipawns: int | None = None
     error_message: str | None = None
+    analysis: AnalysisRunSnapshot | None = None
 
 
 class NavigationSnapshot(ApiModel):
@@ -435,6 +469,7 @@ class EngineMoveSnapshot(ApiModel):
 class PositionAnalysisSnapshot(ApiModel):
     book_moves: list[BookMoveSnapshot] = Field(default_factory=list)
     engine_moves: list[EngineMoveSnapshot] = Field(default_factory=list)
+    engine: AnalysisRunSnapshot | None = None
 
 
 class AvailableCommandSnapshot(ApiModel):
@@ -592,6 +627,7 @@ class WorkspaceSnapshot(ApiModel):
     opening: OpeningContextSnapshot
     opening_history: list[OpeningHistoryItemSnapshot] = Field(default_factory=list)
     evaluation: EvaluationSnapshot
+    analysis_settings: AnalysisSettingsSnapshot
     navigation: NavigationSnapshot
     activity: list[ActivitySnapshot] = Field(default_factory=list)
     chat: list[ChatMessageSnapshot] = Field(default_factory=list)

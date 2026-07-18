@@ -31,6 +31,7 @@ export function DevelopPage() {
     reorderStructures,
     addOpeningTag,
     removeOpeningTag,
+    updateAnalysisSettings,
   } = useWorkspace();
   const [autoRespond, setAutoRespond] = useState(
     () => localStorage.getItem(AUTO_RESPOND_KEY) === "true",
@@ -177,7 +178,6 @@ export function DevelopPage() {
         <div className="board-region">
           <EvaluationBar
             evaluation={workspace.evaluation}
-            turn={workspace.position.turn}
           />
           <BoardPanel
             workspace={workspace}
@@ -207,6 +207,7 @@ export function DevelopPage() {
             hintVisible={hintVisible}
             autoRespond={autoRespond}
             onAutoRespondChange={setAutoRespond}
+            onAnalysisProfileChange={(profileId) => void updateAnalysisSettings(profileId)}
             onSubmit={(text) => void sendChat(text)}
             onExecute={(command) => void executeCommand(command)}
             onAddOpeningTag={(recordId) => void addOpeningTag(recordId)}

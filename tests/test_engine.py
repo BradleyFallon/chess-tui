@@ -12,6 +12,7 @@ import pytest
 
 from chess_tui.engine import (
     AnalysedMove,
+    DEFAULT_ANALYSIS_PROFILE,
     ENGINE_PROTOTYPE_PROFILE,
     EngineProfile,
     EngineProcessError,
@@ -37,6 +38,7 @@ def _executable(tmp_path: Path) -> Path:
 
 class FakeEngine:
     def __init__(self, move: chess.Move) -> None:
+        self.id = {"name": "Stockfish Test"}
         self.move = move
         self.play_calls = 0
         self.quit_calls = 0
@@ -187,6 +189,11 @@ def test_stockfish_analysis_is_white_normalized_and_preserves_mate_scores(
         fake.analysis_result = [
             {
                 "score": chess.engine.PovScore(chess.engine.Cp(75), chess.BLACK),
+                "depth": 14,
+                "seldepth": 21,
+                "nodes": 120_000,
+                "nps": 1_000_000,
+                "time": 0.12,
                 "pv": [
                     chess.Move.from_uci("e7e5"),
                     chess.Move.from_uci("g1f3"),
@@ -201,14 +208,20 @@ def test_stockfish_analysis_is_white_normalized_and_preserves_mate_scores(
             _executable(tmp_path), engine_factory=lambda path: cast(Any, fake)
         )
 
-        lines = await service.analyse(board, count=2)
+        lines = await service.analyse(board, count=2, profile=DEFAULT_ANALYSIS_PROFILE)
 
-        assert lines[0] == AnalysedMove(
-            "e7e5",
-            "e5",
-            -75,
-            ("e7e5", "g1f3"),
-        )
+        assert lines[0].uci == "e7e5"
+        assert lines[0].san == "e5"
+        assert lines[0].evaluation_cp == -75
+        assert lines[0].principal_variation == ("e7e5", "g1f3")
+        assert lines[0].engine_name == "Stockfish Test"
+        assert lines[0].profile_id == "analysis"
+        assert lines[0].requested_depth == 20
+        assert lines[0].actual_depth == 14
+        assert lines[0].selective_depth == 21
+        assert lines[0].nodes == 120_000
+        assert lines[0].nps == 1_000_000
+        assert lines[0].time_ms == 120
         assert lines[1].uci == "e7e6"
         assert lines[1].evaluation_cp is None
         assert lines[1].mate_in == -3
@@ -291,7 +304,9 @@ class ScriptedAnalysisEngine:
         board: chess.Board,
         *,
         count: int = 4,
+        profile: EngineProfile | None = None,
     ) -> tuple[AnalysedMove, ...]:
+        del board, count, profile
         return self.analyses.pop(0)
 
     async def close(self) -> None:

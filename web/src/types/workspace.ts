@@ -100,6 +100,21 @@ export interface EvaluationSnapshot {
   perspective: "white"; centipawns: number | null; mateIn: number | null;
   previousCentipawns: number | null; previousMateIn: number | null;
   changeCentipawns: number | null; errorMessage: string | null;
+  analysis: AnalysisRunSnapshot | null;
+}
+
+export interface AnalysisRunSnapshot {
+  engineName: string; profileId: string; requestedDepth: number | null;
+  actualDepth: number | null; selectiveDepth: number | null;
+  nodes: number | null; nps: number | null; timeMs: number | null; lines: number;
+}
+export interface AnalysisProfileSnapshot {
+  id: string; label: string; depth: number; costLabel: string; costDescription: string;
+}
+export interface AnalysisSettingsSnapshot {
+  status: "off" | "configured" | "ready" | "error"; engineName: string | null;
+  selectedProfileId: string; profiles: AnalysisProfileSnapshot[];
+  candidateCount: number; billingNote: string;
 }
 
 export interface OpeningMatchSnapshot {
@@ -142,6 +157,7 @@ export interface EngineMoveSnapshot {
 }
 export interface PositionAnalysisSnapshot {
   bookMoves: BookMoveSnapshot[]; engineMoves: EngineMoveSnapshot[];
+  engine: AnalysisRunSnapshot | null;
 }
 export interface AvailableCommandSnapshot {
   id: CommandId; slash: string; usage: string; description: string;
@@ -183,6 +199,7 @@ export interface WorkspaceSnapshot {
   startingPieces: StartingPieceSnapshot[];
   opening: OpeningContextSnapshot; openingHistory: OpeningHistoryItemSnapshot[];
   evaluation: EvaluationSnapshot;
+  analysisSettings: AnalysisSettingsSnapshot;
   navigation: { canBack: boolean; canRestart: boolean }; activity: ActivitySnapshot[];
   chat: ChatMessageSnapshot[]; availableCommands: AvailableCommandSnapshot[];
   errors: ApiErrorItem[];

@@ -2,10 +2,9 @@ import type { EvaluationSnapshot } from "../types/workspace";
 
 interface EvaluationBarProps {
   evaluation: EvaluationSnapshot;
-  turn: "white" | "black";
 }
 
-export function EvaluationBar({ evaluation, turn }: EvaluationBarProps) {
+export function EvaluationBar({ evaluation }: EvaluationBarProps) {
   const label = evaluationLabel(evaluation);
   const percentage = evaluationPercentage(evaluation);
   return (
@@ -23,10 +22,17 @@ export function EvaluationBar({ evaluation, turn }: EvaluationBarProps) {
         <div className="evaluation-white" style={{ width: `${percentage}%` }} />
         <span className="evaluation-center-marker" aria-hidden="true" />
       </div>
-      <span className="turn-label">{turn} to move</span>
+      <span className="evaluation-provenance">{analysisLabel(evaluation)}</span>
       {evaluation.errorMessage && <p className="inline-error">{evaluation.errorMessage}</p>}
     </section>
   );
+}
+
+function analysisLabel(evaluation: EvaluationSnapshot): string {
+  const analysis = evaluation.analysis;
+  if (!analysis) return evaluation.status === "engine-off" ? "No engine configured" : "White perspective";
+  const depth = analysis.actualDepth ?? analysis.requestedDepth;
+  return `${analysis.engineName}${depth === null ? "" : ` · depth ${depth}`}${analysis.timeMs === null ? "" : ` · ${analysis.timeMs} ms`}`;
 }
 
 export function evaluationLabel(evaluation: EvaluationSnapshot): string {

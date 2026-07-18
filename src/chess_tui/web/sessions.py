@@ -21,10 +21,13 @@ from ..commands import (
     CommandRegistry,
 )
 from ..engine import (
+    ANALYSIS_PROFILES,
+    DEFAULT_ANALYSIS_PROFILE,
     ENGINE_PROTOTYPE_PROFILE,
     AnalysedMove,
     ChessEngineService,
     EngineError,
+    EngineProfile,
     build_white_move_assessment,
     quality_for_loss,
 )
@@ -68,6 +71,9 @@ from ..policy.runtime import (
 )
 from .api_models import (
     ActivitySnapshot,
+    AnalysisProfileSnapshot,
+    AnalysisRunSnapshot,
+    AnalysisSettingsSnapshot,
     AvailableCommandSnapshot,
     AttemptSnapshot,
     BookContinuationSnapshot,
@@ -137,6 +143,7 @@ class DevelopmentSession:
     next_activity_id: int = 1
     next_message_id: int = 1
     next_sequence: int = 1
+    analysis_profile_id: str = DEFAULT_ANALYSIS_PROFILE.id
 
 
 class EvaluationCache:
@@ -145,25 +152,24 @@ class EvaluationCache:
         engine: ChessEngineService | None,
         *,
         engine_identity: str = "engine-off",
-        profile_id: str = "web-analysis-0.1s",
     ) -> None:
         self.engine = engine
         self.engine_identity = engine_identity
-        self.profile_id = profile_id
         self._cache: dict[tuple[str, str, str], tuple[AnalysedMove, ...]] = {}
         self._lock = asyncio.Lock()
         self._status = "off" if engine is None else "configured"
         self.last_error: str | None = None
+        self.last_engine_name: str | None = None
 
     @property
     def health(self) -> EngineHealth:
         return EngineHealth(status=self._status)  # type: ignore[arg-type]
 
-    async def analyse(self, board: chess.Board) -> AnalysedMove:
-        return (await self.analyse_lines(board, count=1))[0]
+    async def analyse(self, board: chess.Board, profile: EngineProfile) -> AnalysedMove:
+        return (await self.analyse_lines(board, count=1, profile=profile))[0]
 
     async def analyse_lines(
-        self, board: chess.Board, *, count: int
+        self, board: chess.Board, *, count: int, profile: EngineProfile
     ) -> tuple[AnalysedMove, ...]:
         if self.engine is None:
             raise RuntimeError("Engine analysis is disabled.")
@@ -171,13 +177,15 @@ class EvaluationCache:
         if legal_count == 0:
             raise RuntimeError("The position has no legal moves to analyse.")
         requested = min(count, legal_count)
-        key = (normalized_position_key(board), self.profile_id, self.engine_identity)
+        key = (normalized_position_key(board), profile.id, self.engine_identity)
         async with self._lock:
             cached = self._cache.get(key, ())
             if len(cached) >= requested:
                 return cached[:requested]
             try:
-                lines = await self.engine.analyse(board, count=requested)
+                lines = await self.engine.analyse(
+                    board, count=requested, profile=profile
+                )
                 if not lines:
                     raise RuntimeError("Engine returned no analysis rows.")
             except EngineError as error:
@@ -187,6 +195,7 @@ class EvaluationCache:
             self._cache[key] = lines
             self._status = "ready"
             self.last_error = None
+            self.last_engine_name = lines[0].engine_name
             return lines
 
 
@@ -407,7 +416,7 @@ class SessionManager:
             )
 
         if command is CommandId.ANALYSE_POSITION:
-            analysis = await self._analyse_position_locked(workspace)
+            analysis = await self._analyse_position_locked(session)
             self._append_activity(
                 session,
                 "info",
@@ -611,12 +620,16 @@ class SessionManager:
             workspace.begin_policy_turn()
 
     async def _analyse_position_locked(
-        self, workspace: FlowWorkspace
+        self, session: DevelopmentSession
     ) -> PositionAnalysisSnapshot:
+        workspace = session.workspace
         board = workspace.board.copy(stack=False)
+        profile = _analysis_profile(session.analysis_profile_id)
         try:
             book_moves = await self._book_moves(workspace, board)
-            engine_lines = await self.evaluations.analyse_lines(board, count=4)
+            engine_lines = await self.evaluations.analyse_lines(
+                board, count=4, profile=profile
+            )
         except OpeningSourceError as error:
             raise WebApiError(
                 ApiErrorCode.INVALID_REQUEST,
@@ -641,6 +654,7 @@ class SessionManager:
                 )
                 for line in engine_lines
             ],
+            engine=_analysis_run(engine_lines[0], lines=len(engine_lines)),
         )
 
     def _command_availability(self, workspace: FlowWorkspace) -> CommandAvailability:
@@ -765,6 +779,21 @@ class SessionManager:
         return await self._compat_command(
             session_id, CommandInvocation(CommandId.ANALYSE_POSITION, "ui")
         )
+
+    async def update_analysis_profile(
+        self, session_id: str, profile_id: str
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        profile = _analysis_profile(profile_id)
+        async with session.lock:
+            session.analysis_profile_id = profile.id
+            self._append_activity(
+                session,
+                "info",
+                f"Analysis set to {profile.label}",
+                f"{profile.cost_description} No API fee is charged.",
+            )
+            return await self._snapshot(session)
 
     async def _book_moves(
         self, workspace: FlowWorkspace, board: chess.Board
@@ -1299,8 +1328,8 @@ class SessionManager:
         workspace = session.workspace
         phase = _phase(workspace)
         decision = _current_decision(workspace, phase)
-        attempt = await self._attempt(workspace)
-        evaluation, evaluation_error = await self._evaluation(workspace)
+        attempt = await self._attempt(session)
+        evaluation, evaluation_error = await self._evaluation(session)
         errors = []
         if evaluation_error:
             from .api_models import ApiErrorItem
@@ -1366,6 +1395,7 @@ class SessionManager:
                 for entry in workspace.get_opening_history()
             ],
             evaluation=evaluation,
+            analysis_settings=self._analysis_settings(session),
             navigation=NavigationSnapshot(
                 can_back=workspace.can_go_back, can_restart=workspace.can_restart
             ),
@@ -1376,8 +1406,10 @@ class SessionManager:
         )
 
     async def _evaluation(
-        self, workspace: FlowWorkspace
+        self, session: DevelopmentSession
     ) -> tuple[EvaluationSnapshot, str | None]:
+        workspace = session.workspace
+        profile = _analysis_profile(session.analysis_profile_id)
         if self.evaluations.engine is None:
             return EvaluationSnapshot(status="engine-off"), None
         outcome = workspace.outcome
@@ -1385,7 +1417,7 @@ class SessionManager:
             if outcome is not None:
                 current = _terminal_analysis(outcome)
             else:
-                current = await self.evaluations.analyse(workspace.board)
+                current = await self.evaluations.analyse(workspace.board, profile)
             previous_board: chess.Board | None = None
             if workspace.attempt is not None:
                 previous_board = workspace.attempt.board_before
@@ -1394,7 +1426,7 @@ class SessionManager:
                     workspace.author.flow.start_fen, tuple(workspace.history[:-1])
                 )
             previous = (
-                await self.evaluations.analyse(previous_board)
+                await self.evaluations.analyse(previous_board, profile)
                 if previous_board is not None
                 else None
             )
@@ -1417,16 +1449,40 @@ class SessionManager:
                 previous_centipawns=previous.evaluation_cp if previous else None,
                 previous_mate_in=previous.mate_in if previous else None,
                 change_centipawns=change,
+                analysis=(
+                    _analysis_run(current) if current.engine_name is not None else None
+                ),
             ),
             None,
         )
 
-    async def _attempt(self, workspace: FlowWorkspace) -> AttemptSnapshot | None:
+    def _analysis_settings(
+        self, session: DevelopmentSession
+    ) -> AnalysisSettingsSnapshot:
+        return AnalysisSettingsSnapshot(
+            status=self.evaluations.health.status,
+            engine_name=self.evaluations.last_engine_name
+            or _configured_engine_name(self.evaluations.engine_identity),
+            selected_profile_id=session.analysis_profile_id,
+            profiles=[
+                AnalysisProfileSnapshot(
+                    id=profile.id,
+                    label=profile.label,
+                    depth=cast(int, profile.depth),
+                    cost_label=profile.cost_label,
+                    cost_description=profile.cost_description,
+                )
+                for profile in ANALYSIS_PROFILES
+            ],
+        )
+
+    async def _attempt(self, session: DevelopmentSession) -> AttemptSnapshot | None:
+        workspace = session.workspace
         attempt = workspace.attempt
         if attempt is None:
             return None
         review = (
-            await self._engine_review(workspace)
+            await self._engine_review(session)
             if attempt.result is AttemptResult.MISMATCH
             else None
         )
@@ -1444,17 +1500,19 @@ class SessionManager:
             engine_review=review,
         )
 
-    async def _engine_review(self, workspace: FlowWorkspace) -> EngineReviewSnapshot:
+    async def _engine_review(self, session: DevelopmentSession) -> EngineReviewSnapshot:
+        workspace = session.workspace
+        profile = _analysis_profile(session.analysis_profile_id)
         if self.evaluations.engine is None:
             return EngineReviewSnapshot(status="engine-off")
         attempt = workspace.attempt
         assert attempt is not None
         try:
-            before = await self.evaluations.analyse(attempt.board_before)
+            before = await self.evaluations.analyse(attempt.board_before, profile)
             after = (
                 _terminal_analysis(workspace.outcome)
                 if workspace.outcome
-                else await self.evaluations.analyse(workspace.board)
+                else await self.evaluations.analyse(workspace.board, profile)
             )
             move = chess.Move.from_uci(attempt.selected_move.move.uci)
             if attempt.selected_move.color == chess.WHITE:
@@ -2199,6 +2257,41 @@ def _terminal_analysis(outcome: chess.Outcome) -> AnalysedMove:
             "", "", None, (), mate_in=0 if outcome.winner is chess.WHITE else -1
         )
     return AnalysedMove("", "", 0, ())
+
+
+def _analysis_profile(profile_id: str) -> EngineProfile:
+    for profile in ANALYSIS_PROFILES:
+        if profile.id == profile_id:
+            return profile
+    raise WebApiError(
+        ApiErrorCode.INVALID_REQUEST,
+        f"Unknown analysis profile {profile_id!r}.",
+        status_code=422,
+    )
+
+
+def _analysis_run(line: AnalysedMove, *, lines: int = 1) -> AnalysisRunSnapshot:
+    return AnalysisRunSnapshot(
+        engine_name=line.engine_name or "Configured UCI engine",
+        profile_id=line.profile_id or DEFAULT_ANALYSIS_PROFILE.id,
+        requested_depth=line.requested_depth,
+        actual_depth=line.actual_depth,
+        selective_depth=line.selective_depth,
+        nodes=line.nodes,
+        nps=line.nps,
+        time_ms=line.time_ms,
+        lines=lines,
+    )
+
+
+def _configured_engine_name(identity: str) -> str | None:
+    if identity == "engine-off":
+        return None
+    if identity.startswith("stockfish:"):
+        return "Stockfish (configured)"
+    if identity.startswith("injected:"):
+        return identity.removeprefix("injected:")
+    return identity
 
 
 def _opening_match_snapshot(match: OpeningMatch) -> OpeningMatchSnapshot:

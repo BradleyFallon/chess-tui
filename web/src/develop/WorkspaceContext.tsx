@@ -37,6 +37,7 @@ interface WorkspaceContextValue {
   reorderStructures: (structureIds: string[]) => Promise<void>;
   addOpeningTag: (recordId: number) => Promise<void>;
   removeOpeningTag: (recordId: number) => Promise<void>;
+  updateAnalysisSettings: (profileId: string) => Promise<void>;
 }
 
 const WorkspaceContext = createContext<WorkspaceContextValue | null>(null);
@@ -151,6 +152,8 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
         operate((id) => workspaceApi.reorderStructures(id, structureIds)),
       addOpeningTag: (recordId) => operate((id) => workspaceApi.addOpeningTag(id, recordId)),
       removeOpeningTag: (recordId) => operate((id) => workspaceApi.removeOpeningTag(id, recordId)),
+      updateAnalysisSettings: (profileId) =>
+        operate((id) => workspaceApi.updateAnalysisSettings(id, profileId)),
     }),
     [effects, error, initialize, loading, operate, operateCommand, pending, workspace],
   );

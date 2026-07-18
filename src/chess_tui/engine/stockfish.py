@@ -17,7 +17,7 @@ from .errors import (
     EngineStartupError,
     EngineTimeoutError,
 )
-from .models import AnalysedMove, EngineProfile
+from .models import ENGINE_PROTOTYPE_PROFILE, AnalysedMove, EngineProfile
 
 EngineFactory = Callable[[str], chess.engine.SimpleEngine]
 ResultT = TypeVar("ResultT")
@@ -46,15 +46,9 @@ class StockfishEngineService:
         executable_path: Path | str,
         *,
         engine_factory: EngineFactory | None = None,
-        analysis_time_limit_seconds: float = 0.1,
     ) -> None:
         self.executable_path = validate_engine_path(executable_path)
-        if analysis_time_limit_seconds <= 0:
-            raise EngineConfigurationError(
-                "analysis_time_limit_seconds must be greater than zero."
-            )
         self._engine_factory = engine_factory or _start_uci_engine
-        self.analysis_time_limit_seconds = analysis_time_limit_seconds
         self._engine: chess.engine.SimpleEngine | None = None
         self._lock = asyncio.Lock()
         self._closed = False
@@ -64,10 +58,6 @@ class StockfishEngineService:
         board: chess.Board,
         profile: EngineProfile,
     ) -> chess.Move:
-        if profile.time_limit_seconds <= 0:
-            raise EngineConfigurationError(
-                "Engine profile time_limit_seconds must be greater than zero."
-            )
         position = board.copy(stack=False)
         if position.outcome() is not None:
             raise EngineResultError("The completed position has no engine move.")
@@ -80,7 +70,7 @@ class StockfishEngineService:
                 result = await _run_blocking(
                     engine.play,
                     position,
-                    chess.engine.Limit(time=profile.time_limit_seconds),
+                    _limit_for_profile(profile),
                 )
             except TimeoutError as error:
                 raise EngineTimeoutError(
@@ -114,10 +104,12 @@ class StockfishEngineService:
         board: chess.Board,
         *,
         count: int = 4,
+        profile: EngineProfile | None = None,
     ) -> tuple[AnalysedMove, ...]:
         if not 1 <= count <= 4:
             raise EngineConfigurationError("Analysis count must be between 1 and 4.")
         position = board.copy(stack=False)
+        selected_profile = profile or ENGINE_PROTOTYPE_PROFILE
         if position.outcome(claim_draw=False) is not None:
             raise EngineResultError("The completed position has no engine analysis.")
 
@@ -129,7 +121,7 @@ class StockfishEngineService:
                 result = await _run_blocking(
                     engine.analyse,
                     position,
-                    chess.engine.Limit(time=self.analysis_time_limit_seconds),
+                    _limit_for_profile(selected_profile),
                     multipv=count,
                 )
             except TimeoutError as error:
@@ -149,7 +141,13 @@ class StockfishEngineService:
                 raise EngineProcessError(
                     f"Stockfish process failed during analysis: {error}"
                 ) from error
-            return _validated_analysis(position, result, count)
+            return _validated_analysis(
+                position,
+                result,
+                count,
+                profile=selected_profile,
+                engine_name=_engine_name(engine),
+            )
 
     async def close(self) -> None:
         async with self._lock:
@@ -196,6 +194,21 @@ def _start_uci_engine(path: str) -> chess.engine.SimpleEngine:
     return chess.engine.SimpleEngine.popen_uci(path)
 
 
+def _limit_for_profile(profile: EngineProfile) -> chess.engine.Limit:
+    return chess.engine.Limit(
+        time=profile.time_limit_seconds,
+        depth=profile.depth,
+    )
+
+
+def _engine_name(engine: chess.engine.SimpleEngine) -> str | None:
+    identity = getattr(engine, "id", None)
+    if not isinstance(identity, dict):
+        return None
+    name = identity.get("name")
+    return name if isinstance(name, str) and name.strip() else None
+
+
 async def _run_blocking(
     function: Callable[..., ResultT],
     *args: object,
@@ -218,6 +231,9 @@ def _validated_analysis(
     board: chess.Board,
     result: chess.engine.InfoDict | list[chess.engine.InfoDict],
     count: int,
+    *,
+    profile: EngineProfile,
+    engine_name: str | None,
 ) -> tuple[AnalysedMove, ...]:
     rows = result if isinstance(result, list) else [result]
     suggestions: list[AnalysedMove] = []
@@ -260,8 +276,26 @@ def _validated_analysis(
                 evaluation_cp=evaluation_cp,
                 principal_variation=tuple(item.uci() for item in pv),
                 mate_in=mate_in,
+                engine_name=engine_name,
+                profile_id=profile.id,
+                requested_depth=profile.depth,
+                actual_depth=_optional_int(info.get("depth")),
+                selective_depth=_optional_int(info.get("seldepth")),
+                nodes=_optional_int(info.get("nodes")),
+                nps=_optional_int(info.get("nps")),
+                time_ms=_time_ms(info.get("time")),
             )
         )
     if not suggestions:
         raise EngineResultError("Stockfish returned no analysis rows.")
     return tuple(suggestions)
+
+
+def _optional_int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _time_ms(value: object) -> int | None:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return None
+    return round(float(value) * 1000)

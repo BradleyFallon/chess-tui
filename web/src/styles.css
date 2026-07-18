@@ -99,7 +99,7 @@ dd { margin: 0; font-weight: 700; text-transform: capitalize; }
 .evaluation-card { padding: 0.4rem 0.65rem; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0.65rem; }
 .evaluation-score { min-width: 4.4rem; justify-self: end; color: var(--text); font-size: 0.9rem; font-weight: 800; font-variant-numeric: tabular-nums; }
 .evaluation-track { position: relative; width: clamp(120px, 42vw, 280px); height: 12px; display: flex; overflow: hidden; border: 1px solid #6b7464; border-radius: 4px; }
-.evaluation-card .turn-label { justify-self: start; white-space: nowrap; }
+.evaluation-provenance { max-width: 20rem; justify-self: start; overflow: hidden; color: var(--muted); font-size: 0.68rem; text-overflow: ellipsis; white-space: nowrap; }
 .evaluation-black, .evaluation-white { transition: width 180ms ease; }
 .evaluation-black { background: #20231f; }
 .evaluation-white { background: #eee8d3; }
@@ -116,6 +116,12 @@ dd { margin: 0; font-weight: 700; text-transform: capitalize; }
 .option-toggle strong { font-size: 0.78rem; }
 .option-toggle small { color: var(--muted); font-size: 0.67rem; line-height: 1.3; }
 .option-toggle:has(input:disabled) { opacity: 0.62; cursor: not-allowed; }
+.analysis-option { margin-top: 0.65rem; display: grid; gap: 0.3rem; }
+.analysis-option > span { display: grid; gap: 0.08rem; }
+.analysis-option strong { font-size: 0.78rem; }
+.analysis-option small { color: var(--muted); font-size: 0.67rem; line-height: 1.3; }
+.analysis-option select { width: 100%; padding: 0.38rem 0.45rem; border: 1px solid #465041; border-radius: 5px; color: var(--text); background: #0e120d; font: inherit; font-size: 0.72rem; }
+.analysis-option-detail { display: block; }
 .status-feed { min-height: 0; flex: 1 1 auto; overflow-y: auto; padding: 0.75rem; display: flex; flex-direction: column; gap: 0.65rem; scroll-behavior: smooth; }
 .status-note { display: grid; grid-template-columns: 0.55rem minmax(0, 1fr); gap: 0.65rem; padding: 0.7rem; border: 1px solid #30392e; border-radius: 7px; background: #181d17; }
 .status-note-marker { width: 0.5rem; height: 0.5rem; margin-top: 0.28rem; border-radius: 50%; background: var(--muted); }
@@ -146,6 +152,7 @@ dd { margin: 0; font-weight: 700; text-transform: capitalize; }
 .position-analysis li strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .position-analysis li span { overflow: hidden; color: var(--muted); text-align: right; text-overflow: ellipsis; white-space: nowrap; }
 .status-note .position-analysis section > p { margin-top: 0; font-size: 0.72rem; }
+.position-analysis .analysis-provenance { margin: 0; color: #f0d39e; font-size: 0.68rem; }
 .status-note .status-edit-help { padding: 0.55rem; border-left: 2px solid var(--accent); background: #121611; }
 .chat-message { max-width: 94%; padding: 0.65rem 0.75rem; border: 1px solid #394436; border-radius: 8px; background: #171c16; }
 .chat-message-user { margin-left: auto; border-color: #75643e; background: #292719; }

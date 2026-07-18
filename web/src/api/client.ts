@@ -97,6 +97,8 @@ export const workspaceApi = {
   addRuleForMismatch: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/add-rule`),
   playNextOpponent: (sessionId: string) => post(`/api/sessions/${sessionId}/opponent/next`),
   analysePosition: (sessionId: string) => post(`/api/sessions/${sessionId}/analysis`),
+  updateAnalysisSettings: (sessionId: string, profileId: string) =>
+    put(`/api/sessions/${sessionId}/analysis/settings`, { profileId }),
   updateRule: (sessionId: string, ruleId: string, update: RuleUpdate) =>
     put(`/api/sessions/${sessionId}/rules/${encodeURIComponent(ruleId)}`, update),
   updateOverride: (sessionId: string, overrideId: string, update: OverrideUpdate) =>

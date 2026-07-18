@@ -21,6 +21,7 @@ class ChessEngineService(Protocol):
         board: chess.Board,
         *,
         count: int = 4,
+        profile: EngineProfile | None = None,
     ) -> tuple[AnalysedMove, ...]: ...
 
     async def close(self) -> None: ...

@@ -16,6 +16,7 @@ from ..commands import CommandFailure, CommandId, CommandInvocation
 from ..engine import ChessEngineService, EngineError, StockfishEngineService
 from ..flow import FlowStorageError, FlowValidationError
 from .api_models import (
+    AnalysisSettingsRequest,
     ApiErrorEnvelope,
     ApiErrorItem,
     ChatRequest,
@@ -283,6 +284,19 @@ def _register_api_routes(application: FastAPI) -> None:
     )
     async def analyse_position(request: Request, session_id: str) -> WorkspaceSnapshot:
         return await _manager(request).analyse_position(session_id)
+
+    @application.put(
+        "/api/sessions/{session_id}/analysis/settings",
+        response_model=WorkspaceSnapshot,
+    )
+    async def update_analysis_settings(
+        request: Request,
+        session_id: str,
+        payload: AnalysisSettingsRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).update_analysis_profile(
+            session_id, payload.profile_id
+        )
 
     @application.put(
         "/api/sessions/{session_id}/rules/{rule_id}",

@@ -479,6 +479,35 @@ test("slash commands show concise help, filter, and execute from the composer", 
   expect(screen.getByTestId("chessboard")).toHaveAttribute("data-hint", "d2");
 });
 
+test("analysis strength can be changed from development options", async () => {
+  const initial = workspaceFixture();
+  const deep = workspaceFixture({
+    analysisSettings: {
+      ...initial.analysisSettings,
+      selectedProfileId: "deep",
+    },
+  });
+  const fetchMock = vi.fn()
+    .mockResolvedValueOnce(jsonResponse(initial))
+    .mockResolvedValueOnce(jsonResponse(deep));
+  vi.stubGlobal("fetch", fetchMock);
+  renderRoute("/develop");
+
+  await userEvent.selectOptions(
+    await screen.findByRole("combobox", { name: "Engine analysis strength" }),
+    "deep",
+  );
+
+  await waitFor(() => expect(fetchMock).toHaveBeenLastCalledWith(
+    "/api/sessions/session-1/analysis/settings",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ profileId: "deep" }),
+    }),
+  ));
+  expect(screen.getByText(/Depth 26 is the slowest/)).toBeInTheDocument();
+});
+
 test("analyse command adds book and engine suggestions to the status feed", async () => {
   const initial = workspaceFixture();
   const analysed = workspaceFixture({
@@ -505,6 +534,11 @@ test("analyse command adds book and engine suggestions to the status feed", asyn
             { uci: "d2d4", san: "d4", evaluationCp: 32, mateIn: null, principalVariation: ["d2d4", "g8f6"] },
             { uci: "g1f3", san: "Nf3", evaluationCp: 20, mateIn: null, principalVariation: ["g1f3"] },
           ],
+          engine: {
+            engineName: "Stockfish 18", profileId: "analysis",
+            requestedDepth: 20, actualDepth: 20, selectiveDepth: 28,
+            nodes: 125000, nps: 1000000, timeMs: 125, lines: 4,
+          },
         } },
       },
     ],

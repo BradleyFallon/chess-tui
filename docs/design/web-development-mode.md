@@ -1432,6 +1432,28 @@ The server should:
 
 The frontend receives structured engine status.
 
+Development Mode must also make evaluation provenance visible. A
+current-position score and a multi-move analysis should identify:
+
+* The UCI engine name and version, when reported
+* The requested analysis profile and depth
+* The actual depth and selective depth, when reported
+* Elapsed search time, nodes, and nodes per second, when reported
+* The number of principal-variation lines requested
+
+The local web application offers session-level Blunder check, Quick, Analysis,
+and Deep profiles at fixed depths 10, 15, 20, and 26. Analysis is the default.
+The selected profile applies consistently to the advantage bar, mismatch
+review, and explicit position analysis. Profile identity is part of the
+analysis cache key. The UI reports the actual elapsed time and node count after
+each search rather than promising a fixed duration for a depth-limited search.
+
+Stockfish is a local process in this architecture. The UI should say that there
+is no API or per-analysis fee and describe deeper or multi-line searches as
+greater local compute cost. It must not imply a precise time or monetary cost
+before a search, because search work varies by position and hardware; measured
+time and node counts should be shown after the result.
+
 Example:
 
 ```json
