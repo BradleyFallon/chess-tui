@@ -417,10 +417,19 @@ def test_cli_web_dispatch_bypasses_textual_and_passes_server_settings(
     flow.write_text(
         "\n".join(
             (
-                "version = 3",
+                "version = 4",
                 'name = "Web"',
                 f'start_fen = "{DEFAULT_STARTING_FEN}"',
                 'side = "white"',
+                'development_order = ["king"]',
+                "interrupt_order = []",
+                "",
+                "[pieces.king]",
+                'ref = "piece:white:king"',
+                "",
+                "[pieces.king.develop]",
+                'to = "e2"',
+                'why = "Exercise the web CLI with a valid v4 Rulebook."',
             )
         ),
         encoding="utf-8",

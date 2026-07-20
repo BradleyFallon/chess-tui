@@ -1,10 +1,10 @@
-# Deterministic Rule Policy v3
+# Deterministic Rule Policy v3 (Historical)
 
 ## Status
 
-This document is authoritative for the persisted opening-flow schema and runtime.
-Version 3 replaces version 2. The loader accepts only `version = 3`; it does not
-translate version 2 files or accept a mixed schema.
+This document is retained only as historical context. Version 3 is rejected by
+the current loader and has no runtime or authoring authority. See
+[opening-rule-engine-v4.md](opening-rule-engine-v4.md) for current behavior.
 
 ## Purpose
 

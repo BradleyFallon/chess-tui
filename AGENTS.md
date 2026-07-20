@@ -2,445 +2,185 @@
 
 Instructions for coding agents working in this repository.
 
-## Project purpose
+## Product
 
-Chess TUI is a chess opening training and development application.
+Chess TUI is an opening training and Rulebook development application with two
+primary modes:
 
-The project is evolving toward two primary user modes:
+- Quiz Mode tests recall without exposing policy before submission.
+- Flow Development Mode explores lines, authors version 4 piece scripts,
+  inspects legal relationships and decisions, navigates by replay, and performs
+  optional Stockfish analysis.
 
-1. **Quiz Mode**
-   Tests whether the user can follow an opening policy from memory without exposing the underlying rules before the move is submitted.
+Both modes and both UIs must use the same Python chess, Rule Engine, persistence,
+opening, and engine services.
 
-2. **Flow Development Mode**
-   Lets the user explore lines, create and edit deterministic opening policy items, inspect structures, lifecycle, and authored order, navigate backward through positions, and analyze flow coverage and effectiveness with Stockfish.
+## Authoritative documents
 
-Both modes must use the same Python chess, policy, flow, persistence, and engine implementations.
+Read these before changing policy or authoring behavior:
 
-## Read before changing code
+- `docs/design/opening-rule-engine-v4.md`
+- `docs/design/web-development-mode.md`
+- `docs/design/rule-authoring-ui.md`
+- `docs/design/piece-development-authoring.md`
+- `docs/design/opening-classification.md`
+- `README.md`
+- `docs/README.md`
+- `pyproject.toml`
 
-Before changing rule-policy or flow-schema behavior, read:
+`docs/design/rule-policy-v3.md` and v2 material are historical only. Version 4
+is the sole accepted Rulebook schema; do not add compatibility parsing,
+migration-on-load, fallback semantics, or legacy runtime models.
 
-* `docs/design/rule-policy-v3.md`
-
-Before changing the local web application or development-mode behavior, read:
-
-* `docs/design/web-development-mode.md`
-* `docs/design/opening-classification.md`
-
-Also review:
-
-* `README.md`
-* `docs/README.md`
-* `pyproject.toml`
-
-The design documents are authoritative for intended behavior. If implementation and design disagree, call out the conflict rather than silently inventing new semantics.
-
-## Architecture boundaries
-
-### Python is authoritative
+## Architecture
 
 Python owns:
 
-* Chess legality
-* Board state
-* Move parsing and SAN generation
-* Original-piece identity
-* Rule-condition evaluation
-* Rule lifecycle
-* Authored section and item-order resolution
-* Mutually exclusive structure selection
-* Exact-position overrides
-* Flow replay and Back behavior
-* TOML parsing, validation, and persistence
-* Stockfish processes and analysis
-* Opening and opponent move sources
-* Workspace and session state
+- chess legality, board state, move parsing, and SAN;
+- original-piece identity and movement/capture history;
+- legal attack and per-attacker recapture analysis;
+- condition evaluation and action resolution;
+- interrupt and development scheduling;
+- typed frontiers, traces, completion, and replay;
+- strict TOML validation, canonical serialization, atomic saves, and backups;
+- opening classification, opponent move sources, Stockfish, and sessions.
 
-Do not duplicate these responsibilities in TypeScript.
-
-### Browser code owns presentation
-
-The web frontend may own:
-
-* Page and component layout
-* Board interaction presentation
-* Forms and editing controls
-* Rule list presentation
-* Drag-and-drop ordering
-* Evaluation visualizations
-* Client-side request state
-* Calling the Python API
-
-The browser must treat Python responses as the source of truth for legal moves, selected rules, lifecycle state, evaluations, and persisted flow data.
-
-### Shared core
-
-The TUI and web application must call the same core Python services.
-
-Do not create a separate rule implementation for the web UI.
+React and Textual own presentation, interaction state, forms, ordering controls,
+and calls to Python. Browser code must not reproduce domain decisions.
 
 Preferred dependency direction:
 
 ```text
-TUI / FastAPI routes
-        ↓
-Workspace and application services
-        ↓
-Policy, flow, engine, opening, and board core
-        ↓
-python-chess / Stockfish / TOML storage
+Textual / FastAPI
+        |
+Workspace and authoring services
+        |
+Rulebook, policy, relations, actions, opening, engine
+        |
+python-chess / Stockfish / TOML
 ```
 
-Screens, routes, and React components should coordinate and display state. They should not contain domain logic that belongs in the core.
+## Rulebook v4 invariants
 
-## Product invariants
-
-### Piece development authoring
-
-* Authored TOML, conditions, and mutation APIs use
-  `piece:<color>:<type>[:<qualifier>]`.
-* Pawns use file qualifiers `a` through `h`; rooks, knights, and bishops use
-  `queenside` or `kingside`; queens and kings have no qualifier.
-* `StartingPieceRef` maps this syntax to internal original-square identity.
-  Do not accept original-square strings in authored data.
-* `undeveloped` means the original piece exists and has never moved. Track
-  developed, captured-undeveloped, and captured-developed separately.
-* A `kind = "development"` rule is a typed authored variant compiled into the
-  existing `PolicyRule` runtime. Do not create a separate development resolver.
-* A development rule retires intrinsically when its assigned piece moves
-  anywhere or is captured. Only one development rule may assign a starting
-  piece.
-* Web Development Mode piece inspection is always active and coexists with move
-  selection. Python owns starting-piece identity, mechanical state, rule
-  status, and order priorities; React renders the returned snapshot.
-
-### Deterministic flow policy
-
-* A flow controls White or Black explicitly.
-* Current persisted opening flows primarily control White.
-* Piece identifiers use explicit colors:
-
-  * `piece:white:knight:kingside`
-  * `piece:white:bishop:queenside`
-  * `piece:black:knight:queenside`
-* Do not use relative identifiers such as `us` and `them`.
-* A broad rule may match many board states.
-* Every move rule specifies exactly one concrete move.
-* The policy resolves to exactly one move or a flow frontier.
-* There are no multiple equally correct flow moves.
-* A move may be strategically reasonable and still be a flow mismatch.
-
-### Rule actions
-
-Abstract rule moves should use original-piece identity and a destination square.
-
-Example:
-
-```toml
-move = { piece = "piece:white:pawn:c", to = "c4" }
-```
-
-SAN should normally be derived from the current board for display.
-
-Do not make the rule engine choose among several candidate moves.
-
-### Legality
-
-* Move legality is always enforced automatically by Python.
-* Legality must not be an authored rule condition.
-* Do not add predicates such as `move_legal`.
-* An active rule whose configured move is currently illegal is skipped.
-* An illegal move does not automatically retire the rule.
-
-### Authored order
-
-* Section order is exact override, response, development, continuation, frontier.
-* Within each policy section, the first authored applicable legal item wins.
-* There is no numeric priority and no specificity ranking.
-* Persisted list order is semantic, visible, and editable.
-
-### Rule lifecycle
-
-Move rules may be:
+The Rulebook is piece-centered:
 
 ```text
-LOCKED
-UNLOCKED
-RETIRED
+one optional default development per controlled piece
+zero or more one-shot interrupt rules per controlled piece
+one authored development_order
+one authored interrupt_order
+ordered action attempts inside each interrupt
 ```
 
-* A rule without `unlock_when` begins unlocked.
-* Unlocking is latched.
-* `when` is live and does not latch.
-* Retirement is permanent on the current line.
-* Retirement is evaluated before unlocking when both become true at the same transition.
-* Successfully executing a move rule retires it.
-* Reusable rules are deferred until explicitly designed.
+Every referenced original piece has one alias and one canonical
+`piece:<color>:<type>[:<qualifier>]` reference. Pawns use file qualifiers;
+rooks, knights, and bishops use `queenside`/`kingside`; kings and queens have no
+qualifier. Original squares are internal and never authored.
 
-### Structures
+Opponent pieces are read-only aliases. Reject development or rules under them.
+Every development and interrupt has a non-empty `why`.
 
-* Structures are mutually exclusive on a line.
-* Availability is live until selection.
-* Before a move is committed, preserve the structures that are available.
-* After the move, select permanently the first authored structure that was
-  available before the move and whose `selected_when` is true afterward.
-* All other structures become rejected.
-* Global policy items omit `structures`.
-* Before selection, a scoped item participates when at least one listed structure is available.
-* After selection, it participates only when the selected structure is listed.
-* For one starting piece, any currently in-scope structure-specific
-  development assignment suppresses its global assignment. The global
-  assignment is a fallback only.
+Development completes when the original piece first moves anywhere. A
+captured-undeveloped piece is terminal but does not satisfy a `.develop`
+prerequisite. Completion and captures are replayed state, not persisted state.
 
-### Resolution order
+Interrupts are one-shot and use optional prerequisites, optional exact SAN
+history, optional live conditions, a required flag, and non-empty ordered
+attempts. Exact-position behavior is an interrupt, never a separate persisted
+rule type.
 
-Policy resolution order is:
+Supported action attempts are move to square, capture the triggering attacker,
+capture a named original piece, and capture a unique enemy piece by type. Zero
+legal candidates fails, one resolves, and multiple candidates are ambiguous.
+Never choose arbitrarily or with an engine.
+
+## Relationship and condition invariants
+
+Attack relations are legal captures of occupied enemy squares. Defense is a
+legal recapture after simulating one specific attacker. Analyze both colors on
+copied boards and never mutate the live board. Sliding rays stop at the first
+occupied square. `python-chess` legality is final, including absolute king
+pins; a pinned slider may still capture along its pin line.
+
+Keep `defenders_by_attacker` even though aggregate predicates use distinct
+defenders across attacks.
+
+Supported conditions are:
 
 ```text
-1. Exact-position override
-2. First applicable response
-3. First applicable development assignment
-4. First applicable continuation
-5. Flow frontier
+moved, unmoved, captured, at, occupied, empty, occupied_by,
+in_check, last_move, all, any, not,
+attacked, attacked_by, undefended, under_defended,
+attack_balance, capturable
 ```
 
-Do not silently change this order.
+Condition results include structured diagnostics. There are no named
+conditions. Legality is automatic and must not become an authored predicate.
 
-Versions 1 and 2 and mixed schemas are intentionally unsupported. Do not add a
-fallback parser, migration-on-load path, mixed-schema model, or compatibility
-resolver.
+## Scheduler and replay
 
-### Original-piece identity
-
-Original pieces are identified by their square in the flow’s `start_fen`.
-
-The runtime must distinguish:
-
-* Whether an original piece has ever moved
-* Where that original piece is currently located
-* Whether that original piece has been captured
-* The current occupancy of a square
-
-A current board position alone may not be sufficient to reconstruct original-piece identity or latched lifecycle state.
-
-### Replay and Back navigation
-
-Deterministic policy state includes:
+Resolution order is:
 
 ```text
-Board
-+ SAN history
-+ original-piece tracker
-+ rule lifecycle
+1. Exact-position interrupts in interrupt_order
+2. Other interrupts in interrupt_order
+3. Default developments in development_order
+4. Typed frontier
 ```
 
-Back navigation must restore all of these.
+Required triggered rules with no resolving attempt stop at
+`unhandled-required-rule`; optional rules continue. Do not skip an ambiguous
+non-skippable action. Other frontier reasons are `ambiguous-action`,
+`development-complete`, and `no-authored-legal-move`.
 
-Do not implement Back as only `board.pop()` unless the complete policy state is also restored correctly.
+Deterministic state is board + SAN history + original-piece tracker + completed
+developments and interrupts. Back, Restart, reload, and editing must replay all
+of it. Navigation does not delete Rulebook data or explored branches.
 
-Back navigation must not automatically delete persisted rules or explored branches. Navigation and destructive editing are separate actions.
+## Persistence
 
-### Persistence
+TOML is the durable representation. Reject unknown fields, duplicate aliases or
+canonical references, malformed/missing order entries, opponent authoring,
+invalid prerequisites and cycles, invalid squares, empty attempts, invalid
+conditions, invalid exact SAN, and missing explanations.
 
-* TOML is the durable flow representation.
-* Writes must remain deterministic and reviewable in Git.
-* Preserve atomic-save behavior and backups.
-* Do not persist transient engine evaluations, source labels, opening frequencies, or runtime lifecycle snapshots in the canonical flow TOML unless a later design explicitly requires it.
-* Manual TOML editing must remain supported.
-* Reload errors must be explicit and must not silently discard a valid in-memory policy.
-
-### Engine behavior
-
-* Stockfish is optional only where the active mode explicitly permits operation without it.
-* An explicitly configured engine failure must remain visible.
-* Never silently replace a failed configured engine with a deterministic fixture bot.
-* Keep blocking UCI operations off the event loop.
-* Serialize access to a shared engine service.
-* Close owned engine processes cleanly.
-* Normalize evaluations consistently and document the evaluation perspective.
-* Keep mate scores separate from ordinary centipawn values.
-
-### Opening classification
-
-* The bundled index built from the pinned `lichess-org/chess-openings` dataset
-  is the sole opening-classification and book-sequence source.
-* Runtime classification is offline and deterministic. Do not download opening
-  data during startup or query an opening API.
-* Opening data describes established names and sequences; flow policy describes
-  authored decisions. Keep those concepts separate while recording when they
-  agree.
-* Python owns opening identity, transpositions, continuations, reachable
-  defenses, and move provenance. React only renders returned context.
-* Opening context belongs to move or branch history. Back, Restart, replay, and
-  branch navigation must reproduce it without deleting explored branches.
-* The bundled dataset contains no frequency information. Do not call reachable
-  defenses likely or invent game counts and popularity percentages.
-
-### Rendering
-
-* Never automatically switch the selected renderer.
-* Preserve the active session when the terminal is resized.
-* If the selected renderer cannot fit, show the requirement and restore the same renderer and state when space becomes available.
-
-## Product modes
-
-### Quiz Mode
-
-Quiz Mode is for memory training.
-
-It should normally hide:
-
-* The expected move before submission
-* Active rule lists
-* Priority
-* Activation and retirement conditions
-* Decision traces
-* Engine-best moves
-* Position evaluation
-
-After submission, it may show the expected move, the responsible rule, its note, and retry or continuation controls.
-
-Quiz Mode must not modify the flow unless the user explicitly enters an authoring action that is designed and confirmed.
-
-### Flow Development Mode
-
-Development Mode is for authoring and analysis.
-
-It may expose:
-
-* Current flow recommendation
-* Active, dormant, and retired rules
-* Rule priorities
-* Rule lifecycle explanations
-* Decision traces
-* Exact overrides
-* Branch and history navigation
-* Stockfish evaluation
-* Engine-best alternatives
-* Coverage and flow diagnostics
-* Rule creation and editing
-
-Development Mode should support experimental play followed by turning an observed move into a deterministic rule.
-
-The primary web authoring surface is piece-centered. Use chess-facing terms
-such as Development assignments, Plans and structures, Special responses,
-Later plans, Exact fixes, Recommended now, Ready, Not ready, Blocked, and
-Completed. Controlled pieces expose authoring actions; opponent pieces are
-read-only but remain available in condition selectors. Keep authored IDs,
-lifecycle, exact conditions, normalized position keys, trace, and TOML in the
-advanced Policy details drawer.
-
-Focused edits follow `Edit -> Validate -> Review -> Apply`. Validation must not
-persist. Apply revalidates, saves atomically, replays the active line, and
-returns a complete snapshot. The visual condition builder and advanced source
-must edit one shared condition AST covering every v3 operator. In particular,
-`unmoved` is distinct from `not moved` because captured-undeveloped pieces are
-not `unmoved`.
-
-Mismatch and frontier attempts both support Accept in this position through
-`accept_attempt_as_override` and `/accept-here`. `/add-rule` is unsupported.
-Creating a broader response only prefills a reviewed draft; it must not apply a
-rule automatically.
-
-## Web application direction
-
-The web application belongs in this repository and shares the Python core.
-
-Recommended structure:
+Mutation contract:
 
 ```text
-src/chess_tui/
-├── flow/
-├── policy/
-├── engine/
-├── opening/
-├── web/
-└── ...
-
-web/
-├── src/
-├── package.json
-└── ...
+edit -> validate without writing -> review -> explicit apply
+     -> revalidate -> atomic save with backup -> replay -> complete snapshot
 ```
 
-The initial web architecture is:
+Invalid candidates must not alter the Rulebook, backup, workspace, history,
+pending attempt, or runtime state. Do not persist transient evaluations,
+relationship snapshots, provenance labels, or completion state.
 
-```text
-React and TypeScript
-        ↓ HTTP / JSON
-Local FastAPI server
-        ↓
-Existing Python core
-```
+## Modes
 
-The local server may serve the built frontend in production.
+Quiz Mode normally hides expected moves, rules, order, conditions, traces, and
+engine evaluation until submission. It does not mutate the Rulebook without an
+explicit designed authoring action.
 
-Do not add cloud accounts, hosted storage, remote synchronization, or a database unless explicitly requested.
+Development Mode may expose the current decision, piece scripts, conditions,
+relationships, action diagnostics, order, trace, frontiers, history, and engine
+analysis. `/accept-here` creates a piece-owned exact-position interrupt through
+the normal validated save-and-replay workflow.
 
-For the initial local application, in-memory development sessions are acceptable. Durable edits belong in the TOML flow file.
+## Opening and engine
 
-## API design expectations
+The bundled pinned `lichess-org/chess-openings` index is the sole offline
+classification and book source. It has no frequency data. Opening identity and
+opponent branches are not Rulebook policy.
 
-Prefer endpoints that return a coherent workspace snapshot after an operation.
-
-A snapshot may contain:
-
-* FEN
-* SAN history
-* Side to move
-* Expected move
-* Selected rule
-* Decision trace
-* Active rules
-* Dormant rules
-* Retired rules
-* Engine evaluation status
-* Current and previous evaluation
-* Available navigation actions
-* Validation or persistence errors
-
-Do not require the frontend to reconstruct policy state by combining several inconsistent responses.
-
-Use ordinary HTTP for the first vertical slice. Add WebSockets or server-sent events only when live engine updates materially require them.
-
-## Repository layout
-
-Important locations:
-
-```text
-src/chess_tui/     Installable Python package
-tests/             Python tests
-flows/             Persisted opening flows
-docs/              Project documentation
-docs/design/       Product and architecture specifications
-scripts/           Development helper scripts
-web/               Browser frontend
-```
-
-Keep domain modules focused:
-
-```text
-flow/       Schema, storage, authoring, replay-related flow services
-policy/     Abstract conditions, lifecycle, original-piece tracking, resolution
-engine/     Stockfish and fixture engine services
-opening/    Book and opponent move sources
-screens/    Textual presentation
-web/        FastAPI routes and local web-session coordination
-```
-
-Avoid circular imports between presentation and core modules.
+Stockfish is optional only where the mode explicitly permits it. Configured
+failures remain visible and never fall back silently. Keep UCI operations off
+the event loop, serialize shared access, close owned processes, normalize score
+perspective consistently, and keep mate separate from centipawns.
 
 ## Development environment
 
-Enter the development environment with:
-
 ```bash
 source ./activate
-```
-
-After modifying dependencies:
-
-```bash
 update-deps
 ```
 
@@ -453,109 +193,44 @@ update-deps
 fix-deps
 ```
 
-When the web frontend exists, document and preserve standard frontend commands such as:
+Frontend:
 
 ```bash
 cd web
 npm install
 npm run dev
 npm run build
-npm test
 ```
-
-Do not assume a globally installed package when it can be declared in the project configuration.
 
 ## Required checks
 
-Before completing a Python change, run:
+Run before completing:
 
 ```bash
-black --check src tests
-ruff check src tests
-pyright
 pytest
+ruff check .
+black --check .
+pyright
 ```
 
-Fix all failures.
-
-If frontend code is changed, also run the frontend’s configured:
+When frontend code changes, also run the scripts declared in
+`web/package.json`:
 
 ```bash
+npm test
 npm run lint
 npm run typecheck
-npm test
 npm run build
 ```
 
-Use the actual scripts declared in `web/package.json`. Do not invent commands that are not configured.
-
-Do not claim checks passed unless they were executed successfully.
-
-## Testing expectations
-
-Add focused tests for new behavior.
-
-### Policy tests should cover
-
-* Parsing and validation
-* Original-piece tracking
-* `moved`, `at`, occupancy, attack, and named-state conditions
-* Latched activation
-* Retirement
-* Retirement on execution
-* Priority resolution
-* Automatic legality filtering
-* Exact override precedence
-* Legacy fallback
-* Flow frontier
-* Replay determinism
-* Back restoration
-* Decision traces
-* Invalid and conflicting schemas
-
-### Web tests should cover
-
-* Session creation
-* Loading a flow
-* Playing moves
-* Back and Restart
-* Snapshot consistency
-* Validation errors
-* Save and reload behavior
-* Engine-off and engine-error states
-* Frontend rendering of returned workspace state
-
-Tests must not require Stockfish to be installed unless explicitly marked as optional integration tests.
-
-Use fixtures or fakes for normal CI.
+Do not claim a check passed unless it was executed successfully. Normal tests
+must not require a network connection or Stockfish binary.
 
 ## Change discipline
 
-* Prefer small vertical slices over broad rewrites.
-* Preserve existing working behavior unless the task explicitly replaces it.
-* Keep migrations backward compatible when practical.
-* Do not combine a full policy rewrite, complete web editor, and flow-wide benchmark system into one change.
-* Avoid speculative abstractions without a current use case.
-* Keep the initial rule condition language closed and validated.
-* Do not introduce arbitrary expression evaluation.
-* Do not hide errors through fallback behavior.
-* Keep documentation synchronized with implemented behavior.
-* Update the project tree and file guide when major modules are added.
-* Report deferred behavior and limitations clearly.
-
-## Current implementation sequence
-
-Unless a task explicitly changes the order, prefer this progression:
-
-1. Commit design documentation.
-2. Establish the local FastAPI and React communication loop.
-3. Display one flow, board state, history, and current policy decision.
-4. Add move submission, Back, and Restart.
-5. Add evaluation display.
-6. Add lifecycle and decision-trace inspection.
-7. Extend and integrate rule-policy version 3.
-8. Add rule ordering and basic rule editing.
-9. Add rule creation from an experimental move.
-10. Add broader flow analysis and coverage testing.
-
-Do not implement Elo-like Flow Power scoring until the rule, navigation, analysis, and coverage foundations are stable.
+Keep domain logic in focused core modules, avoid circular presentation imports,
+preserve manual TOML editing, add focused tests, and update docs with behavior.
+Do not add cloud accounts, hosted storage, remote synchronization, databases,
+relative material pins, static exchange evaluation, engine-selected actions,
+reusable interrupts, promotion actions, or LLM integration without an explicit
+task.

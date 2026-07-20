@@ -25,8 +25,8 @@ function MainMenu() {
         {workspace && (
           <div className="selected-flow">
             <span>Selected flow</span>
-            <strong>{workspace.flow.name}</strong>
-            <small>{workspace.flow.path} · {workspace.flow.policyModel}</small>
+            <strong>{workspace.rulebook.name}</strong>
+            <small>{workspace.rulebook.path} · Opening Rule Engine v{workspace.rulebook.version}</small>
           </div>
         )}
         {error && !workspace && (

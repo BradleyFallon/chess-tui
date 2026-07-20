@@ -296,7 +296,11 @@ class AuthorScreen(Screen[None]):
         self.move_suggestions.display = False
         self.move_input.disabled = False
         decision = turn.decision
-        selected = decision.source_id or "frontier"
+        selected = decision.source_id or (
+            decision.frontier_reason.value
+            if decision.frontier_reason is not None
+            else "frontier"
+        )
         trace = "\n".join(f"• {line}" for line in decision.trace)
         self.panel.update(
             f"POLICY DECISION\n\nSelected: {selected}\nMove: {decision.move_san or 'Frontier'}"

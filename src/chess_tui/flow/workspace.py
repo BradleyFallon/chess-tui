@@ -137,7 +137,7 @@ class FlowWorkspace:
                 if entry.context.move_source
                 in {
                     OpeningMoveProvenance.POLICY_ONLY,
-                    OpeningMoveProvenance.EXACT_OVERRIDE,
+                    OpeningMoveProvenance.EXACT_INTERRUPT,
                 }
                 and entry.context.played_move_in_book is False
             ),
@@ -160,7 +160,11 @@ class FlowWorkspace:
         history = self.attempt.history_before if self.attempt else tuple(self.history)
         self.author.reload()
         self._restore_history(history)
-        return self.begin_policy_turn() if self.is_policy_turn and not self.outcome else None
+        return (
+            self.begin_policy_turn()
+            if self.is_policy_turn and not self.outcome
+            else None
+        )
 
     def begin_policy_turn(self) -> PolicyTurn:
         if self.outcome is not None:
@@ -208,7 +212,10 @@ class FlowWorkspace:
         )
 
     def submit_pending_opponent_move(self) -> ConfirmedAuthorMove | None:
-        return self._submit_opponent(self.controller.confirm_move)
+        return self._submit_opponent(
+            self.controller.confirm_move,
+            move_source=OpeningMoveProvenance.MANUAL,
+        )
 
     def submit_opponent_san(
         self,
@@ -244,20 +251,14 @@ class FlowWorkspace:
     def save_interrupt(
         self, alias: str, rule: InterruptRule
     ) -> PolicyMoveAttempt | None:
-        return self._apply_candidate(
-            self.author.candidate_with_interrupt(alias, rule)
-        )
+        return self._apply_candidate(self.author.candidate_with_interrupt(alias, rule))
 
-    def delete_interrupt(
-        self, alias: str, rule_id: str
-    ) -> PolicyMoveAttempt | None:
+    def delete_interrupt(self, alias: str, rule_id: str) -> PolicyMoveAttempt | None:
         return self._apply_candidate(
             self.author.candidate_without_interrupt(alias, rule_id)
         )
 
-    def reorder_development(
-        self, aliases: tuple[str, ...]
-    ) -> PolicyMoveAttempt | None:
+    def reorder_development(self, aliases: tuple[str, ...]) -> PolicyMoveAttempt | None:
         return self._apply_candidate(
             self.author.candidate_with_development_order(aliases)
         )
@@ -312,7 +313,9 @@ class FlowWorkspace:
             existing_reference.split(".", 1)[1]
             if existing_reference is not None
             and existing_reference.startswith(f"{alias}.")
-            else self._available_interrupt_id(alias, move.uci(), len(attempt.history_before))
+            else self._available_interrupt_id(
+                alias, move.uci(), len(attempt.history_before)
+            )
         )
         rule = InterruptRule(
             piece=ref,
@@ -324,7 +327,23 @@ class FlowWorkspace:
             attempts=(MoveAttempt(chess.square_name(move.to_square)),),
             why=f"Accepted {attempt.selected_move.san} in this exact position.",
         )
-        self._apply_candidate(self.author.candidate_with_interrupt(alias, rule))
+        candidate = self.author.rulebook
+        if existing_reference is not None:
+            existing_alias, existing_id = existing_reference.split(".", 1)
+            if existing_alias != alias or existing_id != rule.id:
+                candidate = self.author.candidate_without_interrupt(
+                    existing_alias, existing_id
+                )
+                candidate = self.author.candidate_with_interrupt(
+                    alias,
+                    rule,
+                    base=candidate,
+                )
+            else:
+                candidate = self.author.candidate_with_interrupt(alias, rule)
+        else:
+            candidate = self.author.candidate_with_interrupt(alias, rule)
+        self._apply_candidate(candidate)
         return rule
 
     def _apply_candidate(self, candidate: Rulebook) -> PolicyMoveAttempt | None:
@@ -369,9 +388,11 @@ class FlowWorkspace:
         result = (
             AttemptResult.FRONTIER
             if expected is None
-            else AttemptResult.CORRECT
-            if expected.uci() == confirmed.move.uci
-            else AttemptResult.MISMATCH
+            else (
+                AttemptResult.CORRECT
+                if expected.uci() == confirmed.move.uci
+                else AttemptResult.MISMATCH
+            )
         )
         self.attempt = PolicyMoveAttempt(
             board_before, history_before, confirmed, turn.decision, result
@@ -394,7 +415,9 @@ class FlowWorkspace:
         if confirmed.color == self.controlled_color:
             raise FlowValidationError("Expected a move by the opponent.")
         try:
-            self.author.record_opponent_reply(board_before, history_before, confirmed.san)
+            self.author.record_opponent_reply(
+                board_before, history_before, confirmed.san
+            )
         except FlowError:
             self.controller.reset(board_before)
             raise
@@ -436,9 +459,9 @@ class FlowWorkspace:
         in_book = self.opening_classifier.compare_move_to_book(board_before, move)
         exact = decision.source_id is not None and self._is_exact(decision.source_id)
         if exact:
-            move_source = OpeningMoveProvenance.EXACT_OVERRIDE
+            move_source = OpeningMoveProvenance.EXACT_INTERRUPT
             policy_rule_id = None
-            exact_override_id = decision.source_id
+            exact_interrupt_id = decision.source_id
         elif decision.source in {DecisionSource.INTERRUPT, DecisionSource.DEVELOPMENT}:
             move_source = (
                 OpeningMoveProvenance.BOOK_AND_POLICY
@@ -446,18 +469,18 @@ class FlowWorkspace:
                 else OpeningMoveProvenance.POLICY_ONLY
             )
             policy_rule_id = decision.source_id
-            exact_override_id = None
+            exact_interrupt_id = None
         else:
             move_source = OpeningMoveProvenance.FRONTIER
             policy_rule_id = None
-            exact_override_id = None
+            exact_interrupt_id = None
         self._append_opening_entry(
             board_before,
             move,
             confirmed.san,
             move_source=move_source,
             policy_rule_id=policy_rule_id,
-            exact_override_id=exact_override_id,
+            exact_interrupt_id=exact_interrupt_id,
         )
         self.attempt = None
         self.policy_turn = None
@@ -481,7 +504,7 @@ class FlowWorkspace:
         *,
         move_source: OpeningMoveProvenance,
         policy_rule_id: str | None = None,
-        exact_override_id: str | None = None,
+        exact_interrupt_id: str | None = None,
         recorded_reply_id: str | None = None,
     ) -> None:
         previous = (
@@ -496,7 +519,7 @@ class FlowWorkspace:
             previous,
             move_source=move_source,
             policy_rule_id=policy_rule_id,
-            exact_override_id=exact_override_id,
+            exact_interrupt_id=exact_interrupt_id,
             recorded_reply_id=recorded_reply_id,
         )
         entry = OpeningHistoryEntry(
@@ -529,9 +552,9 @@ class FlowWorkspace:
                     decision.source_id
                 )
                 if exact:
-                    source = OpeningMoveProvenance.EXACT_OVERRIDE
+                    source = OpeningMoveProvenance.EXACT_INTERRUPT
                     policy_rule_id = None
-                    exact_override_id = decision.source_id
+                    exact_interrupt_id = decision.source_id
                 else:
                     source = (
                         OpeningMoveProvenance.BOOK_AND_POLICY
@@ -539,11 +562,11 @@ class FlowWorkspace:
                         else OpeningMoveProvenance.POLICY_ONLY
                     )
                     policy_rule_id = decision.source_id
-                    exact_override_id = None
+                    exact_interrupt_id = None
             elif controlled:
                 source = OpeningMoveProvenance.FRONTIER
                 policy_rule_id = None
-                exact_override_id = None
+                exact_interrupt_id = None
             else:
                 stored = self._opponent_provenance.get(path)
                 if stored is not None:
@@ -556,7 +579,7 @@ class FlowWorkspace:
                         else OpeningMoveProvenance.MANUAL
                     )
                 policy_rule_id = None
-                exact_override_id = None
+                exact_interrupt_id = None
             board.push(move)
             context = self.opening_classifier.context_after_move(
                 board_before,
@@ -565,7 +588,7 @@ class FlowWorkspace:
                 previous,
                 move_source=source,
                 policy_rule_id=policy_rule_id,
-                exact_override_id=exact_override_id,
+                exact_interrupt_id=exact_interrupt_id,
                 recorded_reply_id=recorded_reply_id,
             )
             entry = OpeningHistoryEntry(

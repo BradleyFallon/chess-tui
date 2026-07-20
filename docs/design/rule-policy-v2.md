@@ -1,7 +1,7 @@
 # Deterministic Rule Policy — Version 2 (Historical)
 
 > Version 2 is obsolete and rejected by the loader. The authoritative design is
-> [rule-policy-v3.md](rule-policy-v3.md). This file is retained only as
+> [opening-rule-engine-v4.md](opening-rule-engine-v4.md). This file is retained only as
 > migration history; do not implement new behavior from it.
 
 > Canonical authored piece references, typed development rules, compilation,

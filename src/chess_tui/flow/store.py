@@ -139,7 +139,9 @@ class FlowStore:
         _unique(aliases, "piece alias")
         refs = [piece.ref for piece in rulebook.pieces]
         if len(refs) != len(set(refs)):
-            raise FlowValidationError("Piece aliases must map to unique canonical refs.")
+            raise FlowValidationError(
+                "Piece aliases must map to unique canonical refs."
+            )
         alias_by_ref = rulebook.alias_by_ref
         for piece in rulebook.pieces:
             if not _ALIAS_PATTERN.fullmatch(piece.id):
@@ -170,7 +172,9 @@ class FlowStore:
             _unique(rule_ids, f"rule id in piece {piece.id!r}")
             for rule in piece.rules:
                 if rule.piece != piece.ref:
-                    raise FlowValidationError(f"Interrupt owner mismatch for {piece.id}.")
+                    raise FlowValidationError(
+                        f"Interrupt owner mismatch for {piece.id}."
+                    )
                 _validate_why(rule.why, f"{piece.id}.{rule.id}")
                 if not rule.attempts:
                     raise FlowValidationError(
@@ -195,9 +199,7 @@ class FlowStore:
             rulebook.development_order, development_refs, "development_order"
         )
         interrupt_refs = tuple(
-            f"{piece.id}.{rule.id}"
-            for piece in rulebook.pieces
-            for rule in piece.rules
+            f"{piece.id}.{rule.id}" for piece in rulebook.pieces for rule in piece.rules
         )
         _validate_exact_order(
             rulebook.interrupt_order, interrupt_refs, "interrupt_order"
@@ -278,7 +280,10 @@ class FlowStore:
     def warnings(self, rulebook: Rulebook) -> tuple[str, ...]:
         warnings: list[str] = []
         for piece in rulebook.pieces:
-            if piece.development is not None and piece.id not in rulebook.development_order:
+            if (
+                piece.development is not None
+                and piece.id not in rulebook.development_order
+            ):
                 warnings.append(
                     f"Controlled piece {piece.id!r} has development but is not ordered."
                 )
@@ -325,8 +330,7 @@ class FlowStore:
             if not isinstance(raw_rules, list):
                 raise TypeError(f"pieces.{alias}.rules must be an array of tables.")
             rules = tuple(
-                self._decode_rule(raw, alias, ref, aliases)
-                for raw in raw_rules
+                self._decode_rule(raw, alias, ref, aliases) for raw in raw_rules
             )
             pieces.append(PieceScript(alias, ref, development, rules))
 
@@ -345,13 +349,9 @@ class FlowStore:
             development_order=_string_tuple(
                 data["development_order"], "development_order"
             ),
-            interrupt_order=_string_tuple(
-                data["interrupt_order"], "interrupt_order"
-            ),
+            interrupt_order=_string_tuple(data["interrupt_order"], "interrupt_order"),
             pieces=tuple(pieces),
-            opening_tags=tuple(
-                self._decode_opening_tag(item) for item in opening_tags
-            ),
+            opening_tags=tuple(self._decode_opening_tag(item) for item in opening_tags),
             opponent_replies=tuple(
                 self._decode_reply(item) for item in opponent_replies
             ),
@@ -489,9 +489,7 @@ def _encode(rulebook: Rulebook) -> str:
                 )
             )
             if development.requires:
-                lines.append(
-                    f"requires = {_toml_value(list(development.requires))}"
-                )
+                lines.append(f"requires = {_toml_value(list(development.requires))}")
             if development.when is not None:
                 lines.append(
                     "when = "
@@ -622,9 +620,7 @@ def _validate_starting_piece(
 ) -> None:
     piece_id = reference.original_piece_id
     if not tracker.has(piece_id):
-        raise FlowValidationError(
-            f"{context}: {reference} is absent from start_fen."
-        )
+        raise FlowValidationError(f"{context}: {reference} is absent from start_fen.")
     expected = {
         "pawn": chess.PAWN,
         "knight": chess.KNIGHT,
@@ -653,9 +649,7 @@ def _validate_exact_order(
         )
 
 
-def _validate_dependency_cycles(
-    dependencies: Mapping[str, tuple[str, ...]]
-) -> None:
+def _validate_dependency_cycles(dependencies: Mapping[str, tuple[str, ...]]) -> None:
     visiting: set[str] = set()
     visited: set[str] = set()
 
@@ -682,9 +676,7 @@ def _requirements(raw: object, owner: str) -> tuple[str, ...]:
         (
             f"{owner}.develop"
             if value == "develop"
-            else f"{owner}.{value}"
-            if "." not in value
-            else value
+            else f"{owner}.{value}" if "." not in value else value
         )
         for value in values
     )
@@ -745,9 +737,7 @@ def _integer(item: Mapping[str, object], key: str) -> int:
     return value
 
 
-def _optional_bool(
-    item: Mapping[str, object], key: str, default: bool
-) -> bool:
+def _optional_bool(item: Mapping[str, object], key: str, default: bool) -> bool:
     value = item.get(key, default)
     if not isinstance(value, bool):
         raise TypeError(f"{key} must be a boolean.")

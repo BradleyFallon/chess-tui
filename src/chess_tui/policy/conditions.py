@@ -16,6 +16,7 @@ from .models import (
     AttackedCondition,
     CapturableCondition,
     CapturedCondition,
+    ColorName,
     Condition,
     ConditionResult,
     EmptyCondition,
@@ -71,7 +72,9 @@ def parse_condition(
         )
     if kind in {"occupied", "empty"}:
         square = _square(payload, context)
-        return OccupiedCondition(square) if kind == "occupied" else EmptyCondition(square)
+        return (
+            OccupiedCondition(square) if kind == "occupied" else EmptyCondition(square)
+        )
     if kind == "occupied_by":
         data = _exact_mapping(payload, {"square", "color", "type"}, context)
         piece_type = _piece_type(data["type"], context)
@@ -91,9 +94,7 @@ def parse_condition(
         return AttackedByCondition(
             target=_subject(data["target"], aliases, context),
             attacker=(
-                _reference(data["piece"], aliases, context)
-                if "piece" in data
-                else None
+                _reference(data["piece"], aliases, context) if "piece" in data else None
             ),
             attacker_type=(
                 _piece_type(data["type"], context) if "type" in data else None
@@ -145,6 +146,7 @@ def condition_to_data(
 ) -> dict[str, object]:
     def subject(value: PieceSubject) -> str:
         return _serialize_subject(value, aliases)
+
     if isinstance(condition, MovedCondition):
         return {"moved": subject(condition.piece)}
     if isinstance(condition, UnmovedCondition):
@@ -152,9 +154,7 @@ def condition_to_data(
     if isinstance(condition, CapturedCondition):
         return {"captured": subject(condition.piece)}
     if isinstance(condition, AtCondition):
-        return {
-            "at": {"piece": subject(condition.piece), "square": condition.square}
-        }
+        return {"at": {"piece": subject(condition.piece), "square": condition.square}}
     if isinstance(condition, OccupiedCondition):
         return {"occupied": condition.square}
     if isinstance(condition, EmptyCondition):
@@ -239,7 +239,9 @@ def referenced_pieces(condition: Condition) -> set[StartingPieceRef]:
     if isinstance(condition, LastMoveCondition):
         return {condition.piece}
     if isinstance(condition, (AllCondition, AnyCondition)):
-        return set().union(*(referenced_pieces(child) for child in condition.conditions))
+        return set().union(
+            *(referenced_pieces(child) for child in condition.conditions)
+        )
     if isinstance(condition, NotCondition):
         return referenced_pieces(condition.condition)
     return set()
@@ -265,16 +267,22 @@ class ConditionEvaluator:
         if isinstance(condition, MovedCondition):
             ref = self._resolve(condition.piece)
             value = self.tracker.get(ref.original_piece_id).has_moved
-            return ConditionResult(value, f"{ref.label} has{' ' if value else ' not '}moved")
+            return ConditionResult(
+                value, f"{ref.label} has{' ' if value else ' not '}moved"
+            )
         if isinstance(condition, UnmovedCondition):
             ref = self._resolve(condition.piece)
             runtime = self.tracker.get(ref.original_piece_id)
             value = not runtime.has_moved and not runtime.captured
-            return ConditionResult(value, f"{ref.label} is{' ' if value else ' not '}unmoved")
+            return ConditionResult(
+                value, f"{ref.label} is{' ' if value else ' not '}unmoved"
+            )
         if isinstance(condition, CapturedCondition):
             ref = self._resolve(condition.piece)
             value = self.tracker.get(ref.original_piece_id).captured
-            return ConditionResult(value, f"{ref.label} is{' ' if value else ' not '}captured")
+            return ConditionResult(
+                value, f"{ref.label} is{' ' if value else ' not '}captured"
+            )
         if isinstance(condition, AtCondition):
             ref = self._resolve(condition.piece)
             runtime = self.tracker.get(ref.original_piece_id)
@@ -283,11 +291,17 @@ class ConditionEvaluator:
                 value, f"{ref.label} is{' ' if value else ' not '}on {condition.square}"
             )
         if isinstance(condition, OccupiedCondition):
-            value = self.board.piece_at(chess.parse_square(condition.square)) is not None
-            return ConditionResult(value, f"{condition.square} is{' ' if value else ' not '}occupied")
+            value = (
+                self.board.piece_at(chess.parse_square(condition.square)) is not None
+            )
+            return ConditionResult(
+                value, f"{condition.square} is{' ' if value else ' not '}occupied"
+            )
         if isinstance(condition, EmptyCondition):
             value = self.board.piece_at(chess.parse_square(condition.square)) is None
-            return ConditionResult(value, f"{condition.square} is{' ' if value else ' not '}empty")
+            return ConditionResult(
+                value, f"{condition.square} is{' ' if value else ' not '}empty"
+            )
         if isinstance(condition, OccupiedByCondition):
             piece = self.board.piece_at(chess.parse_square(condition.square))
             value = (
@@ -369,7 +383,9 @@ class ConditionEvaluator:
             analysis = self.board.copy(stack=False)
             analysis.turn = color
             value = analysis.is_check()
-            return ConditionResult(value, f"{condition.color} is{' ' if value else ' not '}in check")
+            return ConditionResult(
+                value, f"{condition.color} is{' ' if value else ' not '}in check"
+            )
         if isinstance(condition, LastMoveCondition):
             value = (
                 self.last_move is not None
@@ -438,7 +454,7 @@ def _serialize_subject(
     value: PieceSubject,
     aliases: Mapping[StartingPieceRef, str] | None,
 ) -> str:
-    if value == "self":
+    if isinstance(value, str):
         return value
     return aliases.get(value, str(value)) if aliases is not None else str(value)
 
@@ -488,10 +504,10 @@ def _square(value: object, context: str) -> str:
     return value
 
 
-def _color(value: object, context: str):
+def _color(value: object, context: str) -> ColorName:
     if value not in {"white", "black"}:
         raise ValueError(f"{context} has invalid color {value!r}.")
-    return value
+    return value  # type: ignore[return-value]
 
 
 def _piece_type(value: object, context: str) -> PieceTypeName:

@@ -84,9 +84,7 @@ def _register_error_handlers(application: FastAPI) -> None:
     @application.exception_handler(WebApiError)
     async def handle_web_error(request: Request, error: WebApiError) -> JSONResponse:
         del request
-        return _error_response(
-            error.code, str(error), error.status_code, error.details
-        )
+        return _error_response(error.code, str(error), error.status_code, error.details)
 
     @application.exception_handler(RequestValidationError)
     async def handle_request_validation(
@@ -103,9 +101,7 @@ def _register_error_handlers(application: FastAPI) -> None:
     @application.exception_handler(FlowStorageError)
     async def handle_storage(request: Request, error: FlowStorageError) -> JSONResponse:
         del request
-        return _error_response(
-            ApiErrorCode.FLOW_PERSISTENCE_ERROR, str(error), 500
-        )
+        return _error_response(ApiErrorCode.FLOW_PERSISTENCE_ERROR, str(error), 500)
 
     @application.exception_handler(FlowValidationError)
     async def handle_validation(
@@ -231,9 +227,7 @@ def _register_api_routes(application: FastAPI) -> None:
     async def delete_interrupt(
         request: Request, session_id: str, alias: str, rule_id: str
     ) -> WorkspaceSnapshot:
-        return await _manager(request).delete_interrupt(
-            session_id, alias, rule_id
-        )
+        return await _manager(request).delete_interrupt(session_id, alias, rule_id)
 
     @application.put(
         "/api/sessions/{session_id}/orders/development",

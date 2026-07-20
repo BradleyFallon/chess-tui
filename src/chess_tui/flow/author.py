@@ -38,14 +38,20 @@ class RulebookAuthor:
         self.rulebook = candidate
         return candidate
 
-    def candidate_with_piece(self, replacement: PieceScript) -> Rulebook:
-        if replacement.id not in self.rulebook.piece_by_alias:
-            return replace(self.rulebook, pieces=(*self.rulebook.pieces, replacement))
+    def candidate_with_piece(
+        self,
+        replacement: PieceScript,
+        *,
+        base: Rulebook | None = None,
+    ) -> Rulebook:
+        source = base or self.rulebook
+        if replacement.id not in source.piece_by_alias:
+            return replace(source, pieces=(*source.pieces, replacement))
         return replace(
-            self.rulebook,
+            source,
             pieces=tuple(
                 replacement if item.id == replacement.id else item
-                for item in self.rulebook.pieces
+                for item in source.pieces
             ),
         )
 
@@ -62,16 +68,24 @@ class RulebookAuthor:
         return replace(candidate, development_order=tuple(ordered))
 
     def candidate_with_interrupt(
-        self, alias: str, rule: InterruptRule
+        self,
+        alias: str,
+        rule: InterruptRule,
+        *,
+        base: Rulebook | None = None,
     ) -> Rulebook:
-        piece = self._piece(alias)
+        source = base or self.rulebook
+        piece = self._piece(alias, source)
         if rule.piece != piece.ref:
             raise FlowValidationError("Interrupt owner does not match its piece.")
         if any(item.id == rule.id for item in piece.rules):
             rules = tuple(rule if item.id == rule.id else item for item in piece.rules)
         else:
             rules = (*piece.rules, rule)
-        candidate = self.candidate_with_piece(replace(piece, rules=rules))
+        candidate = self.candidate_with_piece(
+            replace(piece, rules=rules),
+            base=source,
+        )
         reference = f"{alias}.{rule.id}"
         if reference not in candidate.interrupt_order:
             candidate = replace(
@@ -79,12 +93,22 @@ class RulebookAuthor:
             )
         return candidate
 
-    def candidate_without_interrupt(self, alias: str, rule_id: str) -> Rulebook:
-        piece = self._piece(alias)
+    def candidate_without_interrupt(
+        self,
+        alias: str,
+        rule_id: str,
+        *,
+        base: Rulebook | None = None,
+    ) -> Rulebook:
+        source = base or self.rulebook
+        piece = self._piece(alias, source)
         if all(item.id != rule_id for item in piece.rules):
             raise FlowValidationError(f"Unknown interrupt {alias}.{rule_id}.")
         candidate = self.candidate_with_piece(
-            replace(piece, rules=tuple(item for item in piece.rules if item.id != rule_id))
+            replace(
+                piece, rules=tuple(item for item in piece.rules if item.id != rule_id)
+            ),
+            base=source,
         )
         reference = f"{alias}.{rule_id}"
         return replace(
@@ -94,9 +118,7 @@ class RulebookAuthor:
             ),
         )
 
-    def candidate_with_development_order(
-        self, order: tuple[str, ...]
-    ) -> Rulebook:
+    def candidate_with_development_order(self, order: tuple[str, ...]) -> Rulebook:
         candidate = replace(self.rulebook, development_order=order)
         self.store.validate(candidate)
         return candidate
@@ -148,9 +170,13 @@ class RulebookAuthor:
         self.rulebook = self.store.add_opponent_reply(self.path, reply)
         return self.rulebook
 
-    def _piece(self, alias: str) -> PieceScript:
+    def _piece(
+        self,
+        alias: str,
+        rulebook: Rulebook | None = None,
+    ) -> PieceScript:
         try:
-            return self.rulebook.piece_by_alias[alias]
+            return (rulebook or self.rulebook).piece_by_alias[alias]
         except KeyError as exc:
             raise FlowValidationError(f"Unknown piece alias {alias!r}.") from exc
 

@@ -1,200 +1,57 @@
-# Deterministic-v3 rule authoring UI
+# Rule Authoring UI
 
-## Status
+Status: current UI contract for Opening Rule Engine v4. The domain semantics are
+defined by [opening-rule-engine-v4.md](opening-rule-engine-v4.md).
 
-Implemented design for local Web Development Mode.
+The browser is a piece-centered authoring surface over Python-owned snapshots.
+It never reconstructs legality, tactical relationships, rule status, scheduling,
+or replay state.
 
-The browser edits the repository's strict version 3 flow through validated
-Python candidate operations. It does not introduce another schema, resolver,
-compatibility mode, feature flag, or frontend policy implementation.
+## Inspector
 
-## Workspace and product language
+Selecting any board piece opens the same inspector. A controlled piece shows
+its default development, zero or more interrupt cards, current relationships,
+and authoring controls. An opponent piece shows its alias, canonical identity,
+current square, attacks, attackers, and defenses, with `authorable = false`.
 
-The normal interface is piece-centered and uses chess/teaching language:
+The sections are Piece, Current decision, Default development, Interrupting
+rules, Current board relationships, Development order, Interrupt order, and
+Policy details.
 
-```text
-Piece
-Current decision
-Current plan
-Development assignments
-Special responses
-Later plans
-Exact fixes
-Change authored order
-Plans and structures
-Condition library
-Policy details
-```
+Development and interrupt cards show Python-provided status and explanation.
+The relationship summary is collapsed initially and expands into legal
+attackers plus per-attacker recapture defenses.
 
-Friendly statuses are shown in normal cards. Authored IDs, numeric ply data,
-exact lifecycle states, condition expressions, normalized position keys,
-legality, warnings, decision traces, and TOML belong in **Policy details**.
-Numeric priority is never shown because authored list order is semantic.
+## Guided interrupt workflow
 
-## Controlled and opponent pieces
+The Add interrupt wizard has five steps:
 
-Every original piece from both colors appears in the Python snapshot.
-`authorable` is true only for the flow's controlled color.
+1. Select a trigger: attempt legality, attacked, attacked by piece/type,
+   under-defended, undefended, capturable enemy, exact position, or advanced
+   condition.
+2. Choose optional or required failure behavior.
+3. Add and order move/capture attempts.
+4. Write the required explanation.
+5. Review validation, attempt diagnostics, preview decision, warnings, and
+   generated TOML before Apply.
 
-A controlled piece exposes all development, response, continuation, and exact
-fix authoring. An opponent piece is read-only: the inspector shows its original
-identity, current square, and mechanical state, explains that it may be used in
-conditions, and does not expose move-authoring controls. Both colors remain
-grouped and selectable in every condition builder.
+The condition builder also exposes every surviving history/position condition
+and keeps `unmoved` distinct from `not(moved)`. Named conditions do not exist.
 
-## Multiple development assignments
+Earlier/Later buttons reorder development, interrupts, and attempts. Keyboard
+focus remains on an equivalent control after an operation. Numeric priorities
+are not shown or accepted.
 
-The inspector renders every assignment for the selected starting piece. Each
-card shows target, human-readable structure scope, readiness, friendly status,
-runtime reason, Edit, and Remove. Selection is keyed by assignment ID; array
-position is never used to choose the edited assignment.
+## Mutation contract
 
-New and edited assignments support:
+Preview validates without persistence. Apply revalidates the complete
+Rulebook, atomically saves with backup, replays the current history, and returns
+one refreshed snapshot. Delete follows the same dependency validation.
 
-* a board target picker with text fallback;
-* global fallback or one-or-more structure scopes;
-* immediate readiness;
-* one or multiple piece-development prerequisites;
-* an advanced condition;
-* a teaching note;
-* validation, review, explicit Apply, and deletion.
+A mismatch or frontier move can use `/accept-here`; the result is an
+exact-position interrupt owned by the moving original piece. “Add interrupt
+rule” is the broader, non-automatic authoring path.
 
-Board markers aggregate every assignment for an undeveloped controlled piece:
-
-```text
-selected ★
-applicable ●
-waiting !
-inactive ○
-all out of scope ◇
-unassigned +
-```
-
-The accessible label includes the current plan and every target, scope, and
-runtime status. A global assignment suppressed by an in-scope scoped assignment
-is shown as a fallback that is out of scope, with Python's exact reason.
-
-## Conditions and named conditions
-
-The visual AST covers every v3 operator:
-
-```text
-moved, unmoved, captured, at, occupied, empty, occupied_by,
-attacked, attacked_by, in_check, last_move, condition, all, any, not
-```
-
-`unmoved` has its own node and round-trips as `{"unmoved": ...}`. It is not
-logical `not moved`: a piece captured before moving satisfies `not moved` but
-does not satisfy `unmoved`. Advanced JSON edits the same AST and must parse back
-to a supported visual node. The named-condition choice is absent when the
-library is empty.
-
-The **Condition library** lists each condition, summary, and references. It
-supports create, edit, explicit rename, and delete. Rename updates all nested
-references atomically. Deleting a referenced condition fails with its dependency
-list, leaving the flow and workspace unchanged.
-
-## Plans and structures
-
-**Current plan** shows the selected structure and rejected alternatives, or the
-currently available and unavailable plans before selection. **Plans and
-structures** supports create, edit, dependency-safe delete, and accessible
-Earlier/Later ordering. Editors expose name, live availability, post-move
-selection condition, and teaching note.
-
-Structure transition semantics are Python-owned:
-
-1. Preserve available structures before the move.
-2. Commit the board, tracker, captures, last move, and lifecycle.
-3. Select the first authored pre-move-available structure whose
-   `selected_when` is true after the move.
-
-Selection is latched. Replay, Back, Restart, exact fixes, and accepted attempts
-use the same transition. Stored-branch overlap warnings identify all matching
-structures and the authored-order winner.
-
-## Responses and continuations
-
-Special responses and Later plans reuse one move-rule editor. The presentation
-language and destination section differ, while both expose every persisted
-field:
-
-```text
-controlled piece and destination
-structure scopes
-historical unlock_when
-live when
-expire_when
-teaching note
-```
-
-Historical unlocking is explained as latched for the line. Existing fields are
-always visible and editable; the API requires the complete draft and does not
-silently retain omitted metadata. Responses and continuations have separate
-Earlier/Later ordering, preserving fixed cross-section precedence:
-
-```text
-exact fix -> response -> development -> continuation -> frontier
-```
-
-When a mismatch/frontier attempt starts **Create broader response**, Python
-prefills only the attempted original piece, destination, and optional condition
-suggestions. Suggestions are labeled choices; none is selected automatically.
-If no suggestion is chosen, the author must define a live trigger. Previous-move
-suggestions use `last_move`.
-
-## Exact fixes and attempts
-
-Exact-fix cards show the numbered SAN prefix, move, and reason. Authors may
-create a fix for the current position, edit it, delete it, or replace the fix
-for the same normalized position. Normalized keys stay in diagnostics.
-
-Mismatch and frontier attempts expose:
-
-```text
-Accept in this position
-Create broader response
-Retry
-```
-
-Mismatches also expose **Use expected move**. **Accept in this position** and
-`/accept-here` call the same `accept_attempt_as_override` operation. Python
-restores the pre-attempt state, identifies the original piece, creates or
-replaces the exact fix, validates and saves atomically, replays, commits the
-attempt, and returns a refreshed snapshot. `/add-rule` is unsupported.
-
-## Validation, review, and persistence
-
-Every mutation follows:
-
-```text
-Edit -> Validate -> Review -> Apply -> Revalidate -> Atomic save -> Replay
-```
-
-Validation serializes and reparses the complete candidate, validates
-dependencies and legality representation, and replays the active line without
-writing. Reviews show natural-language summary, current/preview decision,
-current/preview plan, affected order, dependencies, warnings, and the generated
-condition under Advanced. Apply recreates the candidate; it never trusts stale
-preview output.
-
-Failures preserve the canonical file, backup, valid in-memory flow, board
-history, attempt, selected structure, and lifecycle state.
-
-## Diagnostics and accessibility
-
-The focus-managed **Policy details** drawer covers selected item, structures,
-responses, development, continuations, completed, waiting/blocked, out of
-scope, exact fixes, decision trace, warnings, named conditions, and flow TOML.
-Full section lists ensure ready/not-ready development items are not omitted.
-
-Board target picking has a text alternative and live announcement. Condition
-groups use fieldsets and labels. Ordering uses explicit Earlier/Later controls.
-The diagnostics drawer focuses its close button, traps focus, closes on Escape,
-restores opener focus, and uses dialog semantics.
-
-## Remaining limits
-
-This work does not add promotion actions, arbitrary condition expressions, an
-LLM, autonomous rule generation, accounts, remote synchronization, or
-frontend-owned chess/policy logic.
+Raw conditions, traces, warnings, normalized positions, and generated TOML
+belong in Policy details. They support diagnosis without becoming a second
+authoring model.

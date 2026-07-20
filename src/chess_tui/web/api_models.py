@@ -35,11 +35,19 @@ class SanMoveRequest(ApiModel):
 class ActionAttemptRequest(ApiModel):
     move: str | None = Field(default=None, min_length=2, max_length=2)
     capture: str | None = Field(default=None, min_length=1, max_length=100)
-    capture_type: Literal["pawn", "knight", "bishop", "rook", "queen", "king"] | None = None
+    capture_type: (
+        Literal["pawn", "knight", "bishop", "rook", "queen", "king"] | None
+    ) = None
 
     @model_validator(mode="after")
     def exactly_one_action(self) -> ActionAttemptRequest:
-        if sum(value is not None for value in (self.move, self.capture, self.capture_type)) != 1:
+        if (
+            sum(
+                value is not None
+                for value in (self.move, self.capture, self.capture_type)
+            )
+            != 1
+        ):
             raise ValueError("An attempt requires exactly one action.")
         return self
 

@@ -1,268 +1,241 @@
-from __future__ import annotations
-
-from dataclasses import replace
-from pathlib import Path
-
 import chess
 import pytest
 
-from chess_tui.flow import (
-    DevelopmentAssignment,
-    Flow,
-    FlowAuthor,
-    FlowStore,
-    FlowValidationError,
-    FlowWorkspace,
+from chess_tui.flow import CaptureAttempt, MoveAttempt
+from chess_tui.policy import (
+    AttackBalanceCondition,
+    AttackedByCondition,
+    AttackedCondition,
+    CapturableCondition,
+    ConditionEvaluator,
+    LastMove,
+    OriginalPieceTracker,
+    PositionAnalyzer,
+    StartingPieceRef,
+    UndefendedCondition,
+    UnderDefendedCondition,
+    condition_to_data,
+    parse_condition,
 )
-from chess_tui.policy import StartingPieceRef, parse_condition
-from chess_tui.policy.runtime import PolicyRuntime
+from chess_tui.policy.actions import ActionResolver, ActionStatus
 
 
-def assignment(
-    item_id: str,
-    piece: str,
-    target: str,
-    *,
-    structures: tuple[str, ...] = (),
-) -> DevelopmentAssignment:
-    return DevelopmentAssignment(
-        id=item_id,
-        piece=StartingPieceRef.parse(piece),
-        target=target,
-        structures=structures,
+def ref(value: str) -> StartingPieceRef:
+    return StartingPieceRef.parse(value)
+
+
+def tactical_position():
+    board = chess.Board(None)
+    placements = {
+        "e1": chess.Piece(chess.KING, chess.WHITE),
+        "a1": chess.Piece(chess.ROOK, chess.WHITE),
+        "b1": chess.Piece(chess.KNIGHT, chess.WHITE),
+        "e8": chess.Piece(chess.KING, chess.BLACK),
+        "a8": chess.Piece(chess.ROOK, chess.BLACK),
+        "b8": chess.Piece(chess.KNIGHT, chess.BLACK),
+        "c8": chess.Piece(chess.BISHOP, chess.BLACK),
+    }
+    for square, piece in placements.items():
+        board.set_piece_at(chess.parse_square(square), piece)
+    tracker = OriginalPieceTracker(board)
+    relocate(board, tracker, "a8", "b2", 1)
+    relocate(board, tracker, "b8", "c3", 2)
+    relocate(board, tracker, "c8", "a3", 3)
+    board.turn = chess.WHITE
+    return board, tracker
+
+
+def relocate(board, tracker, source: str, target: str, ply: int) -> None:
+    before = board.copy(stack=False)
+    move = chess.Move.from_uci(source + target)
+    tracker.apply_move(before, move, ply=ply)
+    piece = board.remove_piece_at(move.from_square)
+    assert piece
+    board.remove_piece_at(move.to_square)
+    board.set_piece_at(move.to_square, piece)
+
+
+def evaluator():
+    board, tracker = tactical_position()
+    relations = PositionAnalyzer().analyze(board, tracker)
+    subject = ref("piece:white:knight:queenside")
+    return (
+        board,
+        tracker,
+        relations,
+        subject,
+        ConditionEvaluator(board, tracker, relations=relations, subject=subject),
     )
 
 
-def test_development_assignments_round_trip_without_priority_or_enabled() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Development"
-start_fen="startpos"
-side="white"
-[[development]]
-id="d-pawn"
-piece="piece:white:pawn:d"
-target="d4"
-ready_when={unmoved="piece:white:pawn:d"}
-note="Center."
-""")
-    item = flow.development[0]
-    assert item.piece == StartingPieceRef.parse("piece:white:pawn:d")
-    encoded = FlowStore().encode(flow)
-    assert "priority" not in encoded
-    assert "enabled" not in encoded
-    assert FlowStore().decode(encoded) == flow
-
-
-def test_development_allows_global_and_structure_specific_alternatives() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Alternatives"
-start_fen="startpos"
-side="white"
-[[structures]]
-id="a"
-name="A"
-available_when={moved="piece:white:pawn:d"}
-selected_when={at={piece="piece:white:pawn:c",square="c3"}}
-[[structures]]
-id="b"
-name="B"
-available_when={moved="piece:white:pawn:d"}
-selected_when={at={piece="piece:white:pawn:c",square="c4"}}
-[[development]]
-id="global-c"
-piece="piece:white:pawn:c"
-target="c3"
-[[development]]
-id="a-c"
-piece="piece:white:pawn:c"
-target="c3"
-structures=["a"]
-[[development]]
-id="b-c"
-piece="piece:white:pawn:c"
-target="c4"
-structures=["b"]
-""")
-    assert len(flow.development) == 3
-
-
-def test_scoped_assignment_suppresses_global_fallback() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Fallback"
-start_fen="startpos"
-side="white"
-[[structures]]
-id="active"
-name="Active"
-available_when={unmoved="piece:white:pawn:c"}
-selected_when={at={piece="piece:white:pawn:c",square="c4"}}
-[[development]]
-id="global-c"
-piece="piece:white:pawn:c"
-target="c3"
-[[development]]
-id="active-c"
-piece="piece:white:pawn:c"
-target="c4"
-structures=["active"]
-""")
-
-    decision = PolicyRuntime(flow).resolve(chess.Board())
-
-    global_result = next(
-        item for item in decision.item_resolutions if item.item.id == "global-c"
+def test_relation_backed_conditions_include_structured_details() -> None:
+    _, _, _, subject, evaluate = evaluator()
+    cases = (
+        AttackedCondition("self"),
+        AttackedByCondition("self", attacker=ref("piece:black:rook:queenside")),
+        AttackedByCondition("self", attacker_type="knight"),
+        UnderDefendedCondition("self"),
+        AttackBalanceCondition("self", 1),
     )
-    assert global_result.status.value == "out-of-scope"
-    assert global_result.reason == (
-        "Global fallback suppressed because a structure-specific assignment "
-        "is in scope."
+    for condition in cases:
+        result = evaluate.evaluate(condition)
+        assert result.value
+        assert result.details["target"] == str(subject)
+        assert result.details["attackerCount"] == 2
+        assert result.details["defenderCount"] == 1
+    assert not evaluate.evaluate(UndefendedCondition("self")).value
+
+
+def test_capturable_condition_uses_owning_piece_and_unique_legal_capture() -> None:
+    board, tracker, relations, subject, evaluate = evaluator()
+    result = evaluate.evaluate(CapturableCondition(ref("piece:black:bishop:queenside")))
+    # The knight on b1 captures a3.
+    assert result.value
+    assert result.details["candidateMoves"] == ["b1a3"]
+    resolved = ActionResolver().resolve(
+        CaptureAttempt(target_piece=ref("piece:black:bishop:queenside")),
+        board=board,
+        tracker=tracker,
+        relations=relations,
+        subject=subject,
     )
-    assert decision.source_id == "active-c"
+    assert resolved.status is ActionStatus.RESOLVED
+    assert resolved.move is not None
+    assert resolved.move.uci() == "b1a3"
 
 
-def test_global_fallback_returns_when_no_scoped_assignment_is_in_scope() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Fallback"
-start_fen="startpos"
-side="white"
-[[structures]]
-id="active"
-name="Active"
-available_when={moved="piece:white:pawn:e"}
-selected_when={at={piece="piece:white:pawn:c",square="c4"}}
-[[development]]
-id="global-c"
-piece="piece:white:pawn:c"
-target="c3"
-[[development]]
-id="active-c"
-piece="piece:white:pawn:c"
-target="c4"
-structures=["active"]
-""")
+def test_move_capture_attacker_capture_type_and_failed_action() -> None:
+    board, tracker, relations, subject, evaluate = evaluator()
+    resolver = ActionResolver()
+    move = resolver.resolve(
+        MoveAttempt("d2"),
+        board=board,
+        tracker=tracker,
+        relations=relations,
+        subject=subject,
+    )
+    assert move.status is ActionStatus.RESOLVED
 
-    decision = PolicyRuntime(flow).resolve(chess.Board())
+    trigger = evaluate.evaluate(AttackedCondition("self"))
+    attacker = resolver.resolve(
+        CaptureAttempt(triggering_attacker=True),
+        board=board,
+        tracker=tracker,
+        relations=relations,
+        subject=subject,
+        trigger=trigger,
+    )
+    assert attacker.status is ActionStatus.RESOLVED
+    assert attacker.move is not None
+    assert attacker.move.uci() == "b1c3"
 
-    assert decision.source_id == "global-c"
+    bishop = resolver.resolve(
+        CaptureAttempt(target_type="bishop"),
+        board=board,
+        tracker=tracker,
+        relations=relations,
+        subject=subject,
+    )
+    assert bishop.status is ActionStatus.RESOLVED
 
-
-def test_authored_order_resolves_multiple_in_scope_scoped_assignments() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Scoped authored order"
-start_fen="startpos"
-side="white"
-[[structures]]
-id="first"
-name="First"
-available_when={unmoved="piece:white:pawn:c"}
-selected_when={at={piece="piece:white:pawn:c",square="c4"}}
-[[structures]]
-id="second"
-name="Second"
-available_when={unmoved="piece:white:pawn:c"}
-selected_when={at={piece="piece:white:pawn:c",square="c3"}}
-[[development]]
-id="first-c"
-piece="piece:white:pawn:c"
-target="c4"
-structures=["first"]
-[[development]]
-id="second-c"
-piece="piece:white:pawn:c"
-target="c3"
-structures=["second"]
-""")
-
-    decision = PolicyRuntime(flow).resolve(chess.Board())
-
-    assert decision.source_id == "first-c"
+    queen = resolver.resolve(
+        CaptureAttempt(target_type="queen"),
+        board=board,
+        tracker=tracker,
+        relations=relations,
+        subject=subject,
+    )
+    assert queen.status is ActionStatus.FAILED
 
 
-def test_more_than_one_global_assignment_for_a_piece_is_invalid() -> None:
-    flow = Flow(
-        version=3,
-        name="Invalid",
-        start_fen="startpos",
-        side="white",
-        development=(
-            assignment("one", "piece:white:pawn:d", "d4"),
-            assignment("two", "piece:white:pawn:d", "d3"),
+def test_capture_type_ambiguity_fails_loudly() -> None:
+    board = chess.Board(None)
+    for square, piece in {
+        "e1": chess.Piece(chess.KING, chess.WHITE),
+        "b1": chess.Piece(chess.KNIGHT, chess.WHITE),
+        "e8": chess.Piece(chess.KING, chess.BLACK),
+        "c8": chess.Piece(chess.BISHOP, chess.BLACK),
+        "f8": chess.Piece(chess.BISHOP, chess.BLACK),
+    }.items():
+        board.set_piece_at(chess.parse_square(square), piece)
+    tracker = OriginalPieceTracker(board)
+    relocate(board, tracker, "b1", "c3", 1)
+    relocate(board, tracker, "c8", "b5", 2)
+    relocate(board, tracker, "f8", "d5", 3)
+    board.turn = chess.WHITE
+    relations = PositionAnalyzer().analyze(board, tracker)
+    result = ActionResolver().resolve(
+        CaptureAttempt(target_type="bishop"),
+        board=board,
+        tracker=tracker,
+        relations=relations,
+        subject=ref("piece:white:knight:queenside"),
+    )
+    assert result.status is ActionStatus.AMBIGUOUS
+    assert {move.uci() for move in result.candidates} == {"c3b5", "c3d5"}
+
+
+def test_illegal_capture_caused_by_king_pin_is_filtered() -> None:
+    board = chess.Board("4r1k1/8/8/8/8/8/4R2b/4K3 w - - 0 1")
+    tracker = OriginalPieceTracker(board)
+    relations = PositionAnalyzer().analyze(board, tracker)
+    subject = tracker.piece_id_at(chess.E2)
+    assert subject is not None
+    assert [item.capture.uci() for item in relations.get(subject).attacks] == ["e2e8"]
+
+
+def test_self_requires_an_owning_subject() -> None:
+    board, tracker = tactical_position()[:2]
+    with pytest.raises(ValueError, match="owning piece"):
+        ConditionEvaluator(board, tracker).evaluate(AttackedCondition("self"))
+
+
+def test_surviving_history_position_and_boolean_conditions_round_trip() -> None:
+    board = chess.Board()
+    tracker = OriginalPieceTracker(board)
+    before = board.copy(stack=False)
+    move = board.parse_san("e4")
+    board.push(move)
+    tracker.apply_move(before, move, ply=1)
+    aliases = {
+        "e-pawn": ref("piece:white:pawn:e"),
+        "d-pawn": ref("piece:white:pawn:d"),
+    }
+    evaluator = ConditionEvaluator(
+        board,
+        tracker,
+        subject=aliases["e-pawn"],
+        last_move=LastMove(
+            aliases["e-pawn"].original_piece_id,
+            "e4",
         ),
     )
-    with pytest.raises(FlowValidationError, match="more than one global"):
-        FlowStore().validate(flow)
-
-
-def test_assignment_is_retired_by_original_piece_movement_or_capture() -> None:
-    flow = Flow(
-        version=3,
-        name="Lifecycle",
-        start_fen="startpos",
-        side="white",
-        development=(assignment("d4", "piece:white:pawn:d", "d4"),),
-    )
-    runtime, board = PolicyRuntime.replay(flow, ("d4", "Nf6"))
-    result = runtime.resolve(board).item_resolutions[0]
-    assert result.status.value == "retired"
-    assert result.retirement_reason == "White d-pawn already moved."
-
-    captured = Flow(
-        version=3,
-        name="Captured",
-        start_fen="rnbqkbnr/pppp1ppp/8/8/1b6/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-        side="white",
-        development=(assignment("knight", "piece:white:knight:queenside", "c3"),),
-    )
-    runtime, board = PolicyRuntime.replay(captured, ("Nc3", "Bxc3"))
-    tracked = runtime.tracker.get(
-        StartingPieceRef.parse("piece:white:knight:queenside").original_piece_id
-    )
-    assert tracked.captured
-    assert board.turn == chess.WHITE
-
-
-def test_author_reorders_development_by_authored_list_order(tmp_path: Path) -> None:
-    path = tmp_path / "flow.toml"
-    flow = Flow(
-        version=3,
-        name="Order",
-        start_fen="startpos",
-        side="white",
-        development=(
-            assignment("d4", "piece:white:pawn:d", "d4"),
-            assignment("e4", "piece:white:pawn:e", "e4"),
+    cases = (
+        ({"moved": "self"}, True),
+        ({"unmoved": "d-pawn"}, True),
+        ({"captured": "self"}, False),
+        ({"at": {"piece": "self", "square": "e4"}}, True),
+        ({"occupied": "e4"}, True),
+        ({"empty": "e2"}, True),
+        (
+            {
+                "occupied_by": {
+                    "square": "e4",
+                    "color": "white",
+                    "type": "pawn",
+                }
+            },
+            True,
         ),
+        ({"in_check": "black"}, False),
+        ({"last_move": {"piece": "e-pawn", "to": "e4"}}, True),
+        ({"all": [{"moved": "self"}, {"empty": "e2"}]}, True),
+        ({"any": [{"captured": "self"}, {"occupied": "e4"}]}, True),
+        ({"not": {"captured": "self"}}, True),
     )
-    FlowStore().save(path, flow)
-    author = FlowAuthor(path)
-    candidate = author.candidate_with_development_order(("e4", "d4"))
-    assert [item.id for item in candidate.development] == ["e4", "d4"]
-    assert PolicyRuntime(candidate).resolve(chess.Board()).source_id == "e4"
-
-
-def test_workspace_can_add_edit_and_delete_assignment(tmp_path: Path) -> None:
-    path = tmp_path / "flow.toml"
-    FlowStore().save(
-        path,
-        Flow(version=3, name="Edit", start_fen="startpos", side="white"),
-    )
-    workspace = FlowWorkspace(path)
-    original = assignment("d4", "piece:white:pawn:d", "d4")
-    workspace.save_development_rule(original)
-    assert workspace.author.flow.development == (original,)
-
-    updated = replace(
-        original,
-        target="d3",
-        ready_when=parse_condition({"empty": "d3"}),
-    )
-    workspace.save_development_rule(updated)
-    assert workspace.author.flow.development[0].target == "d3"
-
-    workspace.delete_development_rule("d4")
-    assert not workspace.author.flow.development
+    alias_by_ref = {piece: alias for alias, piece in aliases.items()}
+    for source, expected in cases:
+        condition = parse_condition(source, aliases=aliases)
+        assert evaluator.evaluate(condition).value is expected
+        serialized = condition_to_data(condition, aliases=alias_by_ref)
+        assert parse_condition(serialized, aliases=aliases) == condition

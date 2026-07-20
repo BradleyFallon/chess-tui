@@ -117,12 +117,6 @@ class PolicyRuntime:
             self.exact_positions.setdefault(normalized_position_key(board), ())
             self.exact_positions[normalized_position_key(board)] += (reference,)
 
-    @property
-    def flow(self) -> Rulebook:
-        """Rulebook accessor retained for workspace naming consistency."""
-
-        return self.rulebook
-
     def resolve(self, board: chess.Board) -> PolicyDecision:
         if board.turn != _color(self.rulebook.side):
             raise ValueError(
@@ -138,15 +132,10 @@ class PolicyRuntime:
         selected_why: str | None = None
         frontier: FrontierReason | None = None
 
-        exact_refs = set(
-            self.exact_positions.get(normalized_position_key(board), ())
-        )
-        ordered_refs = (
-            tuple(ref for ref in self.rulebook.interrupt_order if ref in exact_refs)
-            + tuple(
-                ref for ref in self.rulebook.interrupt_order if ref not in exact_refs
-            )
-        )
+        exact_refs = set(self.exact_positions.get(normalized_position_key(board), ()))
+        ordered_refs = tuple(
+            ref for ref in self.rulebook.interrupt_order if ref in exact_refs
+        ) + tuple(ref for ref in self.rulebook.interrupt_order if ref not in exact_refs)
         exact_phase_complete = False
         for reference in ordered_refs:
             is_exact = reference in exact_refs
@@ -171,8 +160,10 @@ class PolicyRuntime:
                 selected_san = result.move_san
                 selected_reference = reference
                 selected_why = rule.why
-            elif result.status is InterruptStatus.AMBIGUOUS and can_select and (
-                is_exact or rule.required
+            elif (
+                result.status is InterruptStatus.AMBIGUOUS
+                and can_select
+                and (is_exact or rule.required)
             ):
                 frontier = FrontierReason.AMBIGUOUS_ACTION
                 selected_reference = reference
@@ -336,7 +327,9 @@ class PolicyRuntime:
                 resolved = result
                 break
         if resolved is not None:
-            status = InterruptStatus.SELECTED if can_select else InterruptStatus.APPLICABLE
+            status = (
+                InterruptStatus.SELECTED if can_select else InterruptStatus.APPLICABLE
+            )
             return InterruptResolution(
                 reference,
                 rule,
@@ -477,7 +470,9 @@ class PolicyRuntime:
                 None,
                 f"{move.uci()} is not currently legal.",
             )
-        status = DevelopmentStatus.SELECTED if can_select else DevelopmentStatus.AVAILABLE
+        status = (
+            DevelopmentStatus.SELECTED if can_select else DevelopmentStatus.AVAILABLE
+        )
         return DevelopmentResolution(
             f"{alias}.develop",
             instruction,

@@ -23,7 +23,7 @@ class CommandId(str, Enum):
     NEXT_OPPONENT = "next_opponent"
     RETRY_POLICY = "retry_policy"
     CONTINUE_POLICY = "continue_policy"
-    ACCEPT_ATTEMPT_AS_OVERRIDE = "accept_attempt_as_override"
+    ACCEPT_ATTEMPT_HERE = "accept_attempt_here"
     GO_BACK = "go_back"
     RESTART = "restart"
     HINT_POLICY_MOVE = "hint_policy_move"

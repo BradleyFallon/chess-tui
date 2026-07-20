@@ -30,8 +30,8 @@ COMMANDS: tuple[CommandDefinition, ...] = (
         CommandId.INSPECT_RULE,
         "/rule",
         "/rule <rule-id>",
-        "Inspect one policy rule or exact override.",
-        (CommandArgument("rule_id", "Rule or override identifier."),),
+        "Inspect one development instruction or interrupt rule.",
+        (CommandArgument("rule_id", "Instruction or interrupt identifier."),),
     ),
     CommandDefinition(
         CommandId.LIST_RULES,
@@ -107,10 +107,10 @@ COMMANDS: tuple[CommandDefinition, ...] = (
         "Discard the mismatch and play the selected policy move.",
     ),
     CommandDefinition(
-        CommandId.ACCEPT_ATTEMPT_AS_OVERRIDE,
+        CommandId.ACCEPT_ATTEMPT_HERE,
         "/accept-here",
         "/accept-here",
-        "Accept the attempted move as an exact fix for this position.",
+        "Accept the attempted move as an exact-position interrupt.",
     ),
     CommandDefinition(
         CommandId.GO_BACK,
@@ -176,7 +176,7 @@ class CommandRegistry:
             return context.phase == "policy-result"
         if command is CommandId.CONTINUE_POLICY:
             return context.mismatch
-        if command is CommandId.ACCEPT_ATTEMPT_AS_OVERRIDE:
+        if command is CommandId.ACCEPT_ATTEMPT_HERE:
             return context.authorable_attempt
         if command is CommandId.GO_BACK:
             return context.can_back

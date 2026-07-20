@@ -18,7 +18,7 @@ from .errors import OpeningDataError
 class OpeningMoveProvenance(str, Enum):
     BOOK_AND_POLICY = "book-and-policy"
     POLICY_ONLY = "policy-only"
-    EXACT_OVERRIDE = "exact-override"
+    EXACT_INTERRUPT = "exact-interrupt"
     RECORDED_BRANCH = "recorded-branch"
     BOOK = "book"
     ENGINE = "engine"
@@ -58,7 +58,7 @@ class OpeningContext:
     reachable_defenses: tuple[str, ...]
     move_source: OpeningMoveProvenance | None
     policy_rule_id: str | None = None
-    exact_override_id: str | None = None
+    exact_interrupt_id: str | None = None
     recorded_reply_id: str | None = None
 
 
@@ -218,7 +218,7 @@ class OpeningClassifier:
         *,
         move_source: OpeningMoveProvenance,
         policy_rule_id: str | None = None,
-        exact_override_id: str | None = None,
+        exact_interrupt_id: str | None = None,
         recorded_reply_id: str | None = None,
     ) -> OpeningContext:
         current = self.matches_for(board_after)
@@ -247,7 +247,7 @@ class OpeningClassifier:
             reachable_defenses=self.reachable_defenses(board_after),
             move_source=move_source,
             policy_rule_id=policy_rule_id,
-            exact_override_id=exact_override_id,
+            exact_interrupt_id=exact_interrupt_id,
             recorded_reply_id=recorded_reply_id,
         )
 

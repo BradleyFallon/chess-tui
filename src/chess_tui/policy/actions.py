@@ -77,7 +77,9 @@ class ActionResolver:
             else:
                 current_attackers = {item.attacker for item in facts.attackers}
                 capture_relations = tuple(
-                    item for item in capture_relations if item.target in current_attackers
+                    item
+                    for item in capture_relations
+                    if item.target in current_attackers
                 )
         elif attempt.target_piece is not None:
             capture_relations = tuple(
@@ -129,7 +131,7 @@ class ActionResolver:
                 None,
                 f"Action is ambiguous: {moves}.",
             )
-        move = candidates[0]
+        move = next(iter(candidates))
         return ActionResolution(
             attempt,
             ActionStatus.RESOLVED,
@@ -143,7 +145,9 @@ class ActionResolver:
 def _triggering_attackers(trigger: ConditionResult | None) -> set[str]:
     if trigger is None:
         return set()
-    values = trigger.details.get("matchingAttackers", trigger.details.get("attackers", []))
+    values = trigger.details.get(
+        "matchingAttackers", trigger.details.get("attackers", [])
+    )
     if not isinstance(values, list):
         return set()
     return {value for value in values if isinstance(value, str)}

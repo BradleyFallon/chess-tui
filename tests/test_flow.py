@@ -1,486 +1,278 @@
-from __future__ import annotations
-
+from dataclasses import replace
 from pathlib import Path
 
 import chess
 import pytest
 
-from chess_tui.flow import FlowStore, FlowValidationError, OpeningTag
-from chess_tui.policy import (
-    ConditionEvaluator,
-    LastMove,
-    OriginalPieceId,
-    OriginalPieceTracker,
-    parse_condition,
+from chess_tui.flow import (
+    DevelopmentInstruction,
+    FlowStore,
+    FlowValidationError,
+    InterruptRule,
+    MoveAttempt,
+    PieceScript,
+    Rulebook,
 )
-from chess_tui.policy.runtime import DecisionSource, PolicyRuntime
-
-FIXTURE = Path(__file__).parents[1] / "flows" / "london.toml"
-
-
-def test_loads_strict_v3_flow_and_round_trips_in_authored_order() -> None:
-    store = FlowStore()
-    flow = store.load(FIXTURE)
-    assert flow.version == 3
-    assert flow.side == "white"
-    assert [item.id for item in flow.responses] == [
-        "advance-against-early-c5",
-        "retreat-attacked-london-bishop",
-    ]
-    assert [item.id for item in flow.development[:3]] == [
-        "develop-d-pawn",
-        "develop-dark-bishop",
-        "develop-e-pawn",
-    ]
-    assert flow.overrides[0].after_san == ("d4", "e5")
-    assert store.decode(store.encode(flow)) == flow
+from chess_tui.policy import (
+    AttackedCondition,
+    StartingPieceRef,
+)
+from chess_tui.policy.runtime import (
+    DecisionSource,
+    FrontierReason,
+    PolicyRuntime,
+)
 
 
-def test_opening_tags_round_trip_and_validate() -> None:
-    store = FlowStore()
-    flow = store.decode("""
-version=3
-name="Tagged"
-start_fen="startpos"
-side="white"
-opening_tags=[
-  {eco="A40", name="Queen's Pawn Game"},
-  {eco="D00", name="Queen's Pawn Game: Accelerated London System"},
-]
-""")
-    assert flow.opening_tags == (
-        OpeningTag("A40", "Queen's Pawn Game"),
-        OpeningTag("D00", "Queen's Pawn Game: Accelerated London System"),
+def ref(value: str) -> StartingPieceRef:
+    return StartingPieceRef.parse(value)
+
+
+def development(piece: StartingPieceRef, target: str, *, requires=()):
+    return DevelopmentInstruction(
+        piece, target, tuple(requires), None, f"Move to {target}."
     )
-    assert store.decode(store.encode(flow)) == flow
-
-    with pytest.raises(FlowValidationError, match="must be unique"):
-        store.decode("""
-version=3
-name="Duplicate"
-start_fen="startpos"
-side="white"
-opening_tags=[
-  {eco="D00", name="Queen's Pawn Game"},
-  {eco="D00", name="Queen's Pawn Game"},
-]
-""")
 
 
-@pytest.mark.parametrize("version", [1, 2, 4])
-def test_rejects_every_non_v3_version_without_fallback(version: int) -> None:
-    with pytest.raises(FlowValidationError, match="expected 3"):
+def rulebook(
+    pieces: tuple[PieceScript, ...],
+    *,
+    development_order: tuple[str, ...] = (),
+    interrupt_order: tuple[str, ...] = (),
+    start_fen: str = "startpos",
+) -> Rulebook:
+    return Rulebook(
+        version=4,
+        name="Test",
+        start_fen=start_fen,
+        side="white",
+        development_order=development_order,
+        interrupt_order=interrupt_order,
+        pieces=pieces,
+    )
+
+
+def test_london_rulebook_is_v4_and_round_trips() -> None:
+    store = FlowStore()
+    loaded = store.load(Path("flows/london.toml"))
+    assert loaded.version == 4
+    assert loaded.development_order[:3] == ("d-pawn", "london-bishop", "e-pawn")
+    assert store.decode(store.encode(loaded)) == loaded
+    assert "structures" not in store.encode(loaded)
+    assert "[[overrides]]" not in store.encode(loaded)
+
+
+def test_atomic_save_preserves_previous_source_as_backup(tmp_path: Path) -> None:
+    store = FlowStore()
+    rulebook = store.load(Path("flows/london.toml"))
+    path = tmp_path / "rulebook.toml"
+    path.write_text("previous source\n", encoding="utf-8")
+
+    store.save(path, rulebook)
+
+    assert path.with_suffix(".toml.bak").read_text(encoding="utf-8") == (
+        "previous source\n"
+    )
+    assert store.load(path) == rulebook
+    assert not list(tmp_path.glob(".rulebook.toml.*.tmp"))
+
+
+def test_version_3_is_rejected_without_compatibility() -> None:
+    with pytest.raises(FlowValidationError, match="Version 3 is not accepted"):
         FlowStore().decode(
-            f'version={version}\nname="Old"\nstart_fen="startpos"\nside="white"\n'
+            'version = 3\nname = "Old"\nstart_fen = "startpos"\n'
+            'side = "white"\ndevelopment_order = []\ninterrupt_order = []\n'
+            "[pieces]\n"
         )
-
-
-def test_rejects_v2_fields_instead_of_translating_them() -> None:
-    with pytest.raises(FlowValidationError, match="Unknown fields"):
-        FlowStore().decode("""
-version=3
-name="No compatibility"
-start_fen="startpos"
-side="white"
-[[rules]]
-id="old"
-priority=10
-move={piece="piece:white:pawn:d",to="d4"}
-""")
 
 
 @pytest.mark.parametrize(
-    "condition, expected",
+    "source, message",
     [
-        ({"moved": "piece:white:pawn:d"}, False),
-        ({"unmoved": "piece:white:pawn:d"}, True),
-        ({"captured": "piece:white:pawn:d"}, False),
-        ({"at": {"piece": "piece:white:pawn:d", "square": "d2"}}, True),
-        ({"occupied": "d2"}, True),
-        ({"empty": "e4"}, True),
-        ({"occupied_by": {"square": "d2", "color": "white", "type": "pawn"}}, True),
-        ({"attacked": "piece:white:king"}, False),
         (
-            {
-                "attacked_by": {
-                    "target": "piece:white:pawn:d",
-                    "attacker": "piece:black:pawn:d",
-                }
-            },
-            False,
+            'version = 4\nname = "Bad"\nstart_fen = "startpos"\nside = "white"\n'
+            "development_order = []\ninterrupt_order = []\nunknown = true\n[pieces]\n",
+            "Unknown fields",
         ),
-        ({"in_check": "white"}, False),
-        ({"all": [{"occupied": "d2"}, {"empty": "d4"}]}, True),
-        ({"any": [{"empty": "d2"}, {"occupied": "e2"}]}, True),
-        ({"not": {"empty": "d2"}}, True),
+        (
+            'version = 4\nname = "Bad"\nstart_fen = "startpos"\nside = "white"\n'
+            "development_order = []\ninterrupt_order = []\n"
+            '[pieces.p]\nref = "piece:white:pawn:d"\n'
+            '[[pieces.p.rules]]\nid = "x"\ntry = []\nwhy = "No."\n',
+            "non-empty try",
+        ),
     ],
 )
-def test_evaluates_v3_condition_language(condition: dict, expected: bool) -> None:
-    board = chess.Board()
-    tracker = OriginalPieceTracker(board)
-    result = ConditionEvaluator(board, tracker, {}).evaluate(parse_condition(condition))
-    assert result.value is expected
-    assert result.explanation
+def test_strict_schema_rejections(source: str, message: str) -> None:
+    with pytest.raises(FlowValidationError, match=message):
+        FlowStore().decode(source)
 
 
-def test_last_move_and_named_condition_reference_evaluate() -> None:
-    board = chess.Board()
-    tracker = OriginalPieceTracker(board)
-    conditions = {
-        "ready": parse_condition(
-            {"at": {"piece": "piece:white:pawn:d", "square": "d2"}}
-        )
-    }
-    last_move = LastMove(OriginalPieceId.parse("black:c7"), "c5")
-    evaluator = ConditionEvaluator(board, tracker, conditions, last_move)
-    assert evaluator.evaluate(parse_condition({"condition": "ready"})).value
-    assert evaluator.evaluate(
-        parse_condition(
-            {
-                "last_move": {
-                    "piece": "piece:black:pawn:c",
-                    "to": "c5",
-                }
-            }
-        )
-    ).value
-
-
-def test_unmoved_is_false_after_capture_before_move_but_not_moved_is_true() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Captured before moving"
-start_fen="4k3/8/8/1b6/8/8/4P3/4K3 w - - 0 1"
-side="white"
-""")
-    runtime, board = PolicyRuntime.replay(flow, ("Kf1", "Bxe2+"))
-    evaluator = ConditionEvaluator(board, runtime.tracker, {})
-
-    assert not evaluator.evaluate(
-        parse_condition({"unmoved": "piece:white:pawn:e"})
-    ).value
-    assert evaluator.evaluate(
-        parse_condition({"not": {"moved": "piece:white:pawn:e"}})
-    ).value
-
-
-def test_last_move_unlocks_an_immediate_response_and_latches() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Immediate response"
-start_fen="startpos"
-side="white"
-[[responses]]
-id="meet-c5"
-move={piece="piece:white:pawn:d",to="d5"}
-unlock_when={last_move={piece="piece:black:pawn:c",to="c5"}}
-when={at={piece="piece:white:pawn:d",square="d4"}}
-[[development]]
-id="d4"
-piece="piece:white:pawn:d"
-target="d4"
-""")
-    runtime, board = PolicyRuntime.replay(flow, ("d4", "c5"))
+def test_exact_interrupt_precedes_other_interrupts() -> None:
+    pawn = ref("piece:white:pawn:d")
+    exact = InterruptRule(
+        pawn, "exact", (), ("d4", "e5"), None, True, (MoveAttempt("e5"),), "Exact."
+    )
+    broad = InterruptRule(
+        pawn, "broad", (), None, None, False, (MoveAttempt("d5"),), "Broad."
+    )
+    book = rulebook(
+        (PieceScript("d-pawn", pawn, development(pawn, "d4"), (broad, exact)),),
+        development_order=("d-pawn",),
+        interrupt_order=("d-pawn.broad", "d-pawn.exact"),
+    )
+    runtime, board = PolicyRuntime.replay(book, ("d4", "e5"))
     decision = runtime.resolve(board)
-    assert decision.source is DecisionSource.RESPONSE
-    assert decision.source_id == "meet-c5"
-    assert decision.move_san == "d5"
-    assert runtime.rule_states["meet-c5"].unlocked
-
-
-def test_rejects_condition_cycles_unknown_scopes_and_overlapping_development() -> None:
-    with pytest.raises(FlowValidationError, match="cycle"):
-        FlowStore().decode("""
-version=3
-name="Cycle"
-start_fen="startpos"
-side="white"
-[[conditions]]
-id="a"
-when={condition="b"}
-[[conditions]]
-id="b"
-when={condition="a"}
-""")
-
-    with pytest.raises(FlowValidationError, match="unknown structures"):
-        FlowStore().decode("""
-version=3
-name="Scope"
-start_fen="startpos"
-side="white"
-[[responses]]
-id="one"
-structures=["missing"]
-move={piece="piece:white:pawn:d",to="d4"}
-""")
-
-    with pytest.raises(FlowValidationError, match="overlapping"):
-        FlowStore().decode("""
-version=3
-name="Overlap"
-start_fen="startpos"
-side="white"
-[[structures]]
-id="shell"
-name="Shell"
-available_when={occupied="d2"}
-selected_when={at={piece="piece:white:pawn:c",square="c3"}}
-[[development]]
-id="one"
-piece="piece:white:pawn:c"
-target="c3"
-structures=["shell"]
-[[development]]
-id="two"
-piece="piece:white:pawn:c"
-target="c4"
-structures=["shell"]
-""")
-
-
-def test_rejects_structure_selected_in_initial_position() -> None:
-    with pytest.raises(FlowValidationError, match="initial position"):
-        FlowStore().decode("""
-version=3
-name="Initial selection"
-start_fen="startpos"
-side="white"
-[[structures]]
-id="bad"
-name="Bad"
-available_when={occupied="d2"}
-selected_when={at={piece="piece:white:pawn:d",square="d2"}}
-""")
-
-
-def test_static_authoring_warnings_are_non_fatal() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Warnings"
-start_fen="startpos"
-side="white"
-[[conditions]]
-id="unused-condition"
-when={empty="e4"}
-[[structures]]
-id="unused-structure"
-name="Unused"
-available_when={empty="e4"}
-selected_when={at={piece="piece:white:pawn:e",square="e4"}}
-""")
-    warnings = FlowStore().warnings(flow)
-    assert any("unused-condition" in item for item in warnings)
-    assert any("unused-structure" in item for item in warnings)
-
-
-def test_resolution_uses_override_then_sections_then_authored_order() -> None:
-    flow = FlowStore().load(FIXTURE)
-    runtime, board = PolicyRuntime.replay(flow, ("d4", "e5"))
-    decision = runtime.resolve(board)
-    assert decision.source is DecisionSource.EXACT_OVERRIDE
+    assert decision.source is DecisionSource.INTERRUPT
+    assert decision.source_id == "d-pawn.exact"
     assert decision.move_san == "dxe5"
 
-    decision = PolicyRuntime(flow).resolve(chess.Board())
-    assert decision.source is DecisionSource.DEVELOPMENT
-    assert decision.source_id == "develop-d-pawn"
-    assert decision.move_san == "d4"
 
-    empty = FlowStore().decode(
-        'version=3\nname="Empty"\nstart_fen="startpos"\nside="white"\n'
+def test_interrupt_precedes_development_and_attempts_use_authored_order() -> None:
+    knight = ref("piece:white:knight:kingside")
+    interrupt = InterruptRule(
+        knight,
+        "opportunity",
+        (),
+        None,
+        None,
+        False,
+        (MoveAttempt("h3"), MoveAttempt("f3")),
+        "Use first legal attempt.",
     )
-    assert PolicyRuntime(empty).resolve(chess.Board()).source is DecisionSource.FRONTIER
-
-
-def test_illegal_earlier_rule_waits_and_next_rule_wins() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Fallback"
-start_fen="startpos"
-side="white"
-[[responses]]
-id="blocked-bishop"
-move={piece="piece:white:bishop:queenside",to="f4"}
-[[responses]]
-id="pawn"
-move={piece="piece:white:pawn:d",to="d4"}
-""")
-    decision = PolicyRuntime(flow).resolve(chess.Board())
-    assert decision.source_id == "pawn"
-    blocked = next(
-        item for item in decision.item_resolutions if item.rule.id == "blocked-bishop"
+    book = rulebook(
+        (PieceScript("knight", knight, development(knight, "e2"), (interrupt,)),),
+        development_order=("knight",),
+        interrupt_order=("knight.opportunity",),
     )
-    assert blocked.status.value == "waiting"
-    assert not blocked.legal
+    decision = PolicyRuntime(book).resolve(chess.Board())
+    assert decision.source is DecisionSource.INTERRUPT
+    assert decision.move_san == "Nh3"
+    assert len(decision.interrupt_resolutions[0].attempts) == 1
 
 
-def test_unlock_latches_expiration_wins_and_execution_retires() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Lifecycle"
-start_fen="startpos"
-side="white"
-[[responses]]
-id="latched"
-move={piece="piece:white:pawn:c",to="c4"}
-unlock_when={at={piece="piece:black:knight:queenside",square="c6"}}
-when={unmoved="piece:white:pawn:c"}
-[[responses]]
-id="retirement-wins"
-move={piece="piece:white:pawn:e",to="e4"}
-unlock_when={moved="piece:white:pawn:d"}
-expire_when={moved="piece:white:pawn:d"}
-""")
-    runtime, _ = PolicyRuntime.replay(flow, ("d4", "Nc6", "Nf3", "Nb8"))
-    assert runtime.rule_states["latched"].unlocked
-    runtime, _ = PolicyRuntime.replay(flow, ("d4",))
-    losing = runtime.rule_states["retirement-wins"]
-    assert losing.retired
-    assert losing.unlocked_at_ply is None
-
-    one_shot = FlowStore().decode("""
-version=3
-name="One shot"
-start_fen="startpos"
-side="white"
-[[responses]]
-id="d4"
-move={piece="piece:white:pawn:d",to="d4"}
-""")
-    runtime, _ = PolicyRuntime.replay(one_shot, ("d4",))
-    assert runtime.rule_states["d4"].retired
-
-
-def test_structure_selection_is_ordered_latched_and_scopes_items() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Structures"
-start_fen="startpos"
-side="white"
-[[structures]]
-id="first"
-name="First"
-available_when={unmoved="piece:white:pawn:d"}
-selected_when={moved="piece:white:pawn:d"}
-[[structures]]
-id="second"
-name="Second"
-available_when={unmoved="piece:white:pawn:d"}
-selected_when={moved="piece:white:pawn:d"}
-[[development]]
-id="d4"
-piece="piece:white:pawn:d"
-target="d4"
-[[development]]
-id="first-c3"
-piece="piece:white:pawn:c"
-target="c3"
-structures=["first"]
-[[development]]
-id="second-c4"
-piece="piece:white:pawn:c"
-target="c4"
-structures=["second"]
-""")
-    runtime, board = PolicyRuntime.replay(flow, ("d4", "Nf6"))
-    assert runtime.selected_structure_id == "first"
-    decision = runtime.resolve(board)
-    assert decision.source_id == "first-c3"
-    second = next(
-        item for item in decision.item_resolutions if item.rule.id == "second-c4"
+def test_optional_interrupt_without_action_is_skipped() -> None:
+    pawn = ref("piece:white:pawn:d")
+    interrupt = InterruptRule(
+        pawn, "skip", (), None, None, False, (MoveAttempt("d5"),), "Not legal yet."
     )
-    assert second.status.value == "out-of-scope"
-
-
-def test_structure_selection_preserves_pre_move_availability() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Pre-move availability"
-start_fen="startpos"
-side="white"
-[[structures]]
-id="active-c4"
-name="Active c4"
-available_when={unmoved="piece:white:pawn:c"}
-selected_when={at={piece="piece:white:pawn:c",square="c4"}}
-[[development]]
-id="play-c4"
-piece="piece:white:pawn:c"
-target="c4"
-structures=["active-c4"]
-""")
-
-    runtime, _ = PolicyRuntime.replay(flow, ("c4",))
-
-    assert runtime.selected_structure_id == "active-c4"
-
-
-def test_structure_overlap_warnings_identify_branch_candidates_and_winner() -> None:
-    flow = FlowStore().decode("""
-version=3
-name="Overlap"
-start_fen="startpos"
-side="white"
-[[structures]]
-id="first"
-name="First"
-available_when={unmoved="piece:white:pawn:c"}
-selected_when={at={piece="piece:white:pawn:c",square="c4"}}
-[[structures]]
-id="second"
-name="Second"
-available_when={unmoved="piece:white:pawn:c"}
-selected_when={at={piece="piece:white:pawn:c",square="c4"}}
-[[development]]
-id="first-c"
-piece="piece:white:pawn:c"
-target="c4"
-structures=["first"]
-[[development]]
-id="second-c"
-piece="piece:white:pawn:c"
-target="c3"
-structures=["second"]
-[[opponent_replies]]
-id="after-c4-e5"
-after=["c4"]
-move="e5"
-""")
-
-    warnings = FlowStore().warnings(flow)
-
-    assert any(
-        "structures first, second all match" in warning
-        and "'first' wins by authored order" in warning
-        for warning in warnings
+    book = rulebook(
+        (PieceScript("pawn", pawn, development(pawn, "d4"), (interrupt,)),),
+        development_order=("pawn",),
+        interrupt_order=("pawn.skip",),
     )
-    assert any(
-        "simultaneously in-scope" in warning
-        and "first-c→c4" in warning
-        and "second-c→c3" in warning
-        for warning in warnings
+    assert PolicyRuntime(book).resolve(chess.Board()).move_san == "d4"
+
+
+def test_required_trigger_without_action_returns_typed_frontier() -> None:
+    bishop = ref("piece:white:bishop:queenside")
+    interrupt = InterruptRule(
+        bishop,
+        "required",
+        (),
+        None,
+        AttackedCondition("self"),
+        True,
+        (MoveAttempt("c3"),),
+        "Respond.",
     )
+    start = "4k3/8/8/8/8/8/2r5/2B1K3 w - - 0 1"
+    book = rulebook(
+        (PieceScript("bishop", bishop, None, (interrupt,)),),
+        interrupt_order=("bishop.required",),
+        start_fen=start,
+    )
+    decision = PolicyRuntime(book).resolve(chess.Board(start))
+    assert decision.frontier_reason is FrontierReason.UNHANDLED_REQUIRED_RULE
 
 
-def test_tracker_handles_capture_castling_en_passant_and_promotion() -> None:
-    runtime, board = PolicyRuntime.replay(
-        FlowStore().decode(
-            'version=3\nname="Track"\nstart_fen="startpos"\nside="white"\n'
+def test_illegal_earlier_development_allows_later_legal_instruction() -> None:
+    bishop = ref("piece:white:bishop:queenside")
+    pawn = ref("piece:white:pawn:d")
+    book = rulebook(
+        (
+            PieceScript("bishop", bishop, development(bishop, "f4"), ()),
+            PieceScript("pawn", pawn, development(pawn, "d4"), ()),
         ),
-        ("e4", "a6", "e5", "d5", "exd6", "Nf6", "Nf3", "e6", "Be2", "Be7", "O-O"),
+        development_order=("bishop", "pawn"),
     )
-    white_pawn = runtime.tracker.get(OriginalPieceId.parse("white:e2"))
-    black_pawn = runtime.tracker.get(OriginalPieceId.parse("black:d7"))
-    rook = runtime.tracker.get(OriginalPieceId.parse("white:h1"))
-    assert chess.square_name(white_pawn.current_square or 0) == "d6"
-    assert black_pawn.captured and black_pawn.current_square is None
-    assert rook.has_moved and chess.square_name(rook.current_square or 0) == "f1"
-    assert board.king(chess.WHITE) == chess.G1
+    decision = PolicyRuntime(book).resolve(chess.Board())
+    assert decision.source_id == "pawn.develop"
+    assert decision.development_resolutions[0].status.value == "waiting-for-legality"
 
-    promotion_flow = FlowStore().decode(
-        'version=3\nname="Promotion"\n'
-        'start_fen="8/P7/8/8/8/8/7p/k6K w - - 0 1"\nside="white"\n'
+
+def test_prerequisites_and_captured_undeveloped_do_not_complete_development() -> None:
+    bishop = ref("piece:white:bishop:queenside")
+    pawn = ref("piece:white:pawn:d")
+    start = "4k3/8/8/8/8/8/3P4/2B1K3 w - - 0 1"
+    book = rulebook(
+        (
+            PieceScript("pawn", pawn, development(pawn, "d4"), ()),
+            PieceScript(
+                "bishop",
+                bishop,
+                development(bishop, "f4", requires=("pawn.develop",)),
+                (),
+            ),
+        ),
+        development_order=("pawn", "bishop"),
+        start_fen=start,
     )
-    promoted, _ = PolicyRuntime.replay(promotion_flow, ("a8=Q",))
-    pawn = next(item for item in promoted.tracker.pieces if str(item.id) == "white:a7")
-    assert pawn.piece_type == chess.QUEEN and pawn.has_moved
+    runtime, board = PolicyRuntime.replay(book, ("d4", "Kf7"))
+    assert runtime.resolve(board).source_id == "bishop.develop"
+
+
+def test_interrupt_move_completes_development_and_is_one_shot() -> None:
+    knight = ref("piece:white:knight:kingside")
+    interrupt = InterruptRule(
+        knight, "first", (), None, None, False, (MoveAttempt("h3"),), "Move."
+    )
+    book = rulebook(
+        (PieceScript("knight", knight, development(knight, "f3"), (interrupt,)),),
+        development_order=("knight",),
+        interrupt_order=("knight.first",),
+    )
+    runtime, board = PolicyRuntime.replay(book, ("Nh3", "a6"))
+    assert "knight.first" in runtime.completed_interrupts
+    assert runtime.resolve(board).frontier_reason is FrontierReason.DEVELOPMENT_COMPLETE
+
+
+def test_no_authored_legal_move_frontier() -> None:
+    bishop = ref("piece:white:bishop:queenside")
+    book = rulebook(
+        (PieceScript("bishop", bishop, development(bishop, "f4"), ()),),
+        development_order=("bishop",),
+    )
+    decision = PolicyRuntime(book).resolve(chess.Board())
+    assert decision.frontier_reason is FrontierReason.NO_AUTHORED_LEGAL_MOVE
+
+
+def test_dependency_cycles_and_incomplete_orders_are_rejected() -> None:
+    pawn = ref("piece:white:pawn:d")
+    book = rulebook(
+        (
+            PieceScript(
+                "pawn",
+                pawn,
+                DevelopmentInstruction(pawn, "d4", ("pawn.rule",), None, "Develop."),
+                (
+                    InterruptRule(
+                        pawn,
+                        "rule",
+                        ("pawn.develop",),
+                        None,
+                        None,
+                        False,
+                        (MoveAttempt("d4"),),
+                        "Rule.",
+                    ),
+                ),
+            ),
+        ),
+        development_order=("pawn",),
+        interrupt_order=("pawn.rule",),
+    )
+    with pytest.raises(FlowValidationError, match="cycle"):
+        FlowStore().validate(book)
+    with pytest.raises(FlowValidationError, match="interrupt_order"):
+        FlowStore().validate(replace(book, interrupt_order=()))

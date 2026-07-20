@@ -22,7 +22,7 @@ def test_author_board_controller_commits_legal_san() -> None:
     assert confirmed.move.uci == "d2d4"
 
 
-def test_textual_flow_screen_starts_with_v3_policy(tmp_path: Path) -> None:
+def test_textual_flow_screen_starts_with_v4_rulebook(tmp_path: Path) -> None:
     async def run() -> None:
         path = tmp_path / "flow.toml"
         shutil.copy2(FIXTURE, path)
@@ -38,7 +38,7 @@ def test_textual_flow_screen_starts_with_v3_policy(tmp_path: Path) -> None:
             await pilot.pause()
             assert screen.phase is FlowPhase.POLICY_TEST
             assert screen.workspace.policy_turn
-            assert screen.workspace.policy_turn.decision.source_id == "develop-d-pawn"
+            assert screen.workspace.policy_turn.decision.source_id == "d-pawn.develop"
 
     import asyncio
 

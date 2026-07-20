@@ -1,275 +1,105 @@
-import { useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { Link } from "react-router-dom";
 
 import { BoardPanel } from "../components/BoardPanel";
-import { EvaluationBar } from "../components/EvaluationBar";
 import { PieceAuthoringPanel } from "../components/PieceAuthoringPanel";
-import { StatusFeed } from "../components/StatusFeed";
-import type { ConditionExpression, RuleDraft } from "../types/workspace";
 import { useWorkspace } from "./WorkspaceContext";
 
-const AUTO_RESPOND_KEY = "chess-flow-development-auto-respond";
-
 export function DevelopPage() {
-  const {
-    workspace,
-    loading,
-    pending,
-    error,
-    effects,
-    initialize,
-    sendChat,
-    executeCommand,
-    validateRuleDraft,
-    applyRuleDraft,
-    deleteMoveRule,
-    validateDevelopmentRule,
-    applyDevelopmentRule,
-    deleteDevelopmentRule,
-    reorderDevelopmentRules,
-    reorderPolicySection,
-    validateStructureDraft,
-    applyStructureDraft,
-    deleteStructure,
-    reorderStructures,
-    validateNamedCondition,
-    applyNamedCondition,
-    deleteNamedCondition,
-    validateExactFix,
-    applyExactFix,
-    deleteExactFix,
-    addOpeningTag,
-    removeOpeningTag,
-    updateAnalysisSettings,
-  } = useWorkspace();
-  const [autoRespond, setAutoRespond] = useState(
-    () => localStorage.getItem(AUTO_RESPOND_KEY) === "true",
+  const context = useWorkspace();
+  const { workspace, loading, pending, error, initialize } = context;
+  const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
+
+  if (loading) return <main className="center-page"><h1>Loading Rulebook…</h1></main>;
+  if (!workspace) return (
+    <main className="center-page">
+      <h1>Rulebook unavailable</h1>
+      <p className="inline-error">{error?.message}</p>
+      <button onClick={() => void initialize()}>Try again</button>
+    </main>
   );
-  const autoRespondedPosition = useRef<string | null>(null);
-  const [selectedPieceRef, setSelectedPieceRef] = useState<string | null>(null);
-  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
-  const [targetPicking, setTargetPicking] = useState(false);
-  const [pickedTarget, setPickedTarget] = useState<string | null>(null);
-  const [responsePrefill, setResponsePrefill] = useState<RuleDraft | null>(null);
-  const [responseSuggestions, setResponseSuggestions] = useState<
-    Array<{ label: string; expression: ConditionExpression }>
-  >([]);
-
-  useEffect(() => {
-    localStorage.setItem(AUTO_RESPOND_KEY, String(autoRespond));
-  }, [autoRespond]);
-
-  useEffect(() => {
-    if (!autoRespond || workspace?.phase !== "opponent-ready") {
-      autoRespondedPosition.current = null;
-      return;
-    }
-    if (pending) return;
-    const position = `${workspace.sessionId}:${workspace.position.fen}`;
-    if (autoRespondedPosition.current === position) return;
-    autoRespondedPosition.current = position;
-    void executeCommand({ command: "next_opponent", source: "ui" });
-  }, [
-    autoRespond,
-    executeCommand,
-    pending,
-    workspace?.phase,
-    workspace?.position.fen,
-    workspace?.sessionId,
-  ]);
-
-  useEffect(() => {
-    if (workspace?.phase !== "opponent-ready" || pending) return;
-
-    const playBlackOnEnter = (event: KeyboardEvent) => {
-      if (event.key !== "Enter" || event.repeat || event.metaKey || event.ctrlKey || event.altKey) return;
-      const target = event.target;
-      const emptyMoveComposer =
-        target instanceof HTMLInputElement
-        && target.dataset.moveComposer === "true"
-        && !target.value.trim();
-      if (
-        (target instanceof HTMLInputElement && !target.disabled && !emptyMoveComposer)
-        || target instanceof HTMLTextAreaElement
-        || target instanceof HTMLButtonElement
-        || (target instanceof HTMLElement && target.isContentEditable)
-      ) return;
-      event.preventDefault();
-      void executeCommand({ command: "next_opponent", source: "ui" });
-    };
-
-    window.addEventListener("keydown", playBlackOnEnter);
-    return () => window.removeEventListener("keydown", playBlackOnEnter);
-  }, [executeCommand, pending, workspace?.phase]);
-
-  if (loading) return <LoadingScreen />;
-  if (!workspace) {
-    return (
-      <main className="center-page">
-        <h1>Development workspace unavailable</h1>
-        <p className="inline-error">{error?.message ?? "The workspace could not be loaded."}</p>
-        <button onClick={() => void initialize()}>Try again</button>
-      </main>
-    );
-  }
-  const hintMoveUci = effects.find((effect) => effect.kind === "highlight-move")?.uci ?? null;
-  const hintVisible = hintMoveUci !== null;
-  const selectedPiece = workspace.startingPieces.find(
-    (piece) => piece.ref === selectedPieceRef,
-  ) ?? null;
+  const effectiveAlias = selectedAlias
+    ?? workspace.pieceScripts.find((piece) => piece.authorable)?.alias
+    ?? workspace.pieceScripts[0]?.alias
+    ?? null;
+  const selected = workspace.pieceScripts.find((piece) => piece.alias === effectiveAlias) ?? null;
   return (
     <main className="develop-page">
       <header className="app-header">
-        <div>
-          <Link className="brand" to="/">Chess Flow</Link>
-          <span className="header-separator">/</span>
-          <span>Develop</span>
-        </div>
-        <div className="flow-title">
-          <strong>{workspace.flow.name}</strong>
-          {workspace.flow.openingTags.length > 0 && (
-            <div className="flow-tags" aria-label="Opening labels">
-              {workspace.flow.openingTags.map((tag) => (
-                <button
-                  className="flow-tag"
-                  key={`${tag.eco}-${tag.name}`}
-                  type="button"
-                  disabled={pending || tag.recordId === null}
-                  onClick={() => {
-                    if (tag.recordId !== null) void removeOpeningTag(tag.recordId);
-                  }}
-                  title={`Remove ${tag.name} label`}
-                >
-                  {shortOpeningName(tag.name)}
-                  <span aria-hidden="true">×</span>
-                </button>
-              ))}
-            </div>
-          )}
-          <span>{workspace.flow.path}</span>
-        </div>
+        <div><Link className="brand" to="/">Chess Flow</Link><span className="header-separator">/</span><span>Opening Rule Engine</span></div>
+        <div className="flow-title"><strong>{workspace.rulebook.name}</strong><span>Rulebook v{workspace.rulebook.version} · {workspace.rulebook.path}</span></div>
         <div className="header-actions">
-          <button onClick={() => void executeCommand({ command: "go_back", source: "ui" })} disabled={pending || !workspace.navigation.canBack}>Back</button>
-          <button onClick={() => void executeCommand({ command: "restart", source: "ui" })} disabled={pending || !workspace.navigation.canRestart}>Restart</button>
+          <button disabled={pending || !workspace.navigation.canBack} onClick={() => void context.back()}>Back</button>
+          <button disabled={pending || !workspace.navigation.canRestart} onClick={() => void context.restart()}>Restart</button>
+          <button disabled={pending} onClick={() => void context.analyse()}>Analyze</button>
         </div>
       </header>
-      {error && (
-        <div className="global-error" role="alert">
-          <strong>{error.code}</strong>
-          <span>{error.message}</span>
-        </div>
-      )}
-      <div className="workspace-grid">
+      {error && <div className="global-error" role="alert"><strong>{error.code}</strong><span>{error.message}</span></div>}
+      <div className="workspace-grid v4-grid">
         <PieceAuthoringPanel
-          key={`${selectedPiece?.ref ?? "no-piece"}:${responsePrefill ? "prefill" : "idle"}`}
+          key={selected?.alias ?? "none"}
           workspace={workspace}
-          piece={selectedPiece}
-          selectedAssignmentId={selectedAssignmentId}
+          piece={selected}
           pending={pending}
-          pickedTarget={pickedTarget}
-          responsePrefill={responsePrefill}
-          responseSuggestions={responseSuggestions}
-          onConsumeResponsePrefill={() => {
-            setResponsePrefill(null);
-            setResponseSuggestions([]);
-          }}
-          onSelectAssignment={setSelectedAssignmentId}
-          onBeginTargetPick={() => {
-            setPickedTarget(null);
-            setTargetPicking(true);
-          }}
-          onCancelTargetPick={() => {
-            setTargetPicking(false);
-            setPickedTarget(null);
-          }}
-          onValidateDevelopment={validateDevelopmentRule}
-          onApplyDevelopment={applyDevelopmentRule}
-          onDeleteDevelopment={deleteDevelopmentRule}
-          onReorderDevelopment={reorderDevelopmentRules}
-          onValidateRule={validateRuleDraft}
-          onApplyRule={applyRuleDraft}
-          onDeleteMoveRule={deleteMoveRule}
-          onReorderSection={(section, ids) => reorderPolicySection(section, ids)}
-          onValidateExactFix={validateExactFix}
-          onApplyExactFix={applyExactFix}
-          onDeleteExactFix={deleteExactFix}
-          onValidateStructure={validateStructureDraft}
-          onApplyStructure={applyStructureDraft}
-          onDeleteStructure={deleteStructure}
-          onReorderStructures={reorderStructures}
-          onValidateNamedCondition={validateNamedCondition}
-          onApplyNamedCondition={applyNamedCondition}
-          onDeleteNamedCondition={deleteNamedCondition}
-          onInspectPiece={(pieceRef) => setSelectedPieceRef(pieceRef)}
-          onExplain={() => void executeCommand({ command: "explain_decision", source: "ui" })}
+          onPreviewDevelopment={context.previewDevelopment}
+          onApplyDevelopment={context.applyDevelopment}
+          onDeleteDevelopment={context.deleteDevelopment}
+          onPreviewInterrupt={context.previewInterrupt}
+          onApplyInterrupt={context.applyInterrupt}
+          onDeleteInterrupt={context.deleteInterrupt}
+          onReorderDevelopment={context.reorderDevelopment}
+          onReorderInterrupts={context.reorderInterrupts}
+          onSelectPiece={setSelectedAlias}
         />
-        <div className="board-region">
-          <EvaluationBar
-            evaluation={workspace.evaluation}
-          />
-          <BoardPanel
-            workspace={workspace}
-            pending={pending}
-            hintMoveUci={hintMoveUci}
-            selectedPieceRef={selectedPieceRef}
-            onInspectPiece={(pieceRef) => {
-              setSelectedPieceRef(pieceRef);
-              setSelectedAssignmentId(null);
-              setTargetPicking(false);
-              setPickedTarget(null);
-            }}
-            targetPicking={targetPicking}
-            pickedTarget={pickedTarget}
-            onPickTarget={(square) => {
-              setPickedTarget(square);
-              setTargetPicking(false);
-            }}
-            onMove={(uci) => {
-              void executeCommand({ command: "play_move", source: "ui", notation: "uci", move: uci });
-            }}
-          />
+        <div className="board-and-history">
+          <BoardPanel workspace={workspace} pending={pending} selectedAlias={effectiveAlias} onInspect={setSelectedAlias} onMove={(uci) => void context.move(uci)} />
+          <section className="panel history-panel">
+            <span className="eyebrow">History</span>
+            <p>{workspace.position.historySan.join(" ") || "Start position"}</p>
+            <p>Turn: {workspace.position.turn}</p>
+            {workspace.evaluation.status === "ready" && <p>Evaluation: {workspace.evaluation.mateIn !== null ? `M${workspace.evaluation.mateIn}` : `${(workspace.evaluation.centipawns ?? 0) / 100}`}</p>}
+          </section>
         </div>
-        <div className="side-region">
-          <StatusFeed
-            workspace={workspace}
-            pending={pending}
-            hintVisible={hintVisible}
-            autoRespond={autoRespond}
-            onAutoRespondChange={setAutoRespond}
-            onAnalysisProfileChange={(profileId) => void updateAnalysisSettings(profileId)}
-            onSubmit={(text) => void sendChat(text)}
-            onExecute={(command) => void executeCommand(command)}
-            onAcceptHere={() => void executeCommand({ command: "accept_attempt_as_override", source: "ui" })}
-            onCreateBroaderResponse={() => {
-              const prefill = workspace.attempt?.authoringPrefill;
-              if (!prefill) return;
-              setSelectedPieceRef(prefill.piece);
-              setResponseSuggestions(prefill.suggestions);
-              setResponsePrefill({
-                id: null,
-                section: "response",
-                piece: prefill.piece,
-                target: prefill.target,
-                structures: [],
-                note: null,
-                unlockWhen: null,
-                when: null,
-                expireWhen: null,
-              });
-            }}
-            onAddOpeningTag={(recordId) => void addOpeningTag(recordId)}
-            onRemoveOpeningTag={(recordId) => void removeOpeningTag(recordId)}
-          />
-        </div>
+        <DecisionPanel workspace={workspace} pending={pending} onRetry={context.retry} onContinue={context.continuePolicy} onAccept={context.acceptHere} />
       </div>
     </main>
   );
 }
 
-function LoadingScreen() {
-  return <main className="center-page"><p>Loading Development Mode…</p></main>;
-}
-
-function shortOpeningName(name: string): string {
-  return name.includes(":") ? name.split(":").at(-1)?.trim() ?? name : name;
+function DecisionPanel({ workspace, pending, onRetry, onContinue, onAccept }: {
+  workspace: NonNullable<ReturnType<typeof useWorkspace>["workspace"]>;
+  pending: boolean;
+  onRetry: () => Promise<void>;
+  onContinue: () => Promise<void>;
+  onAccept: () => Promise<void>;
+}) {
+  return (
+    <aside className="panel decision-panel">
+      <span className="eyebrow">Current decision</span>
+      {workspace.decision?.status === "ready" ? (
+        <>
+          <h2>{workspace.decision.moveSan}</h2>
+          <code>{workspace.decision.instructionRef}</code>
+          <p>{workspace.decision.why}</p>
+        </>
+      ) : workspace.decision?.frontier ? (
+        <>
+          <h2>Frontier</h2>
+          <strong>{workspace.decision.frontier.reason}</strong>
+          <p>{workspace.decision.frontier.explanation}</p>
+        </>
+      ) : <p>Choose an opponent move on the board.</p>}
+      {workspace.attempt && (
+        <section className="attempt-card">
+          <h3>{workspace.attempt.result}</h3>
+          <p>You played {workspace.attempt.moveSan}; expected {workspace.attempt.expectedSan ?? "a frontier"}.</p>
+          <button disabled={pending} onClick={() => void onRetry()}>Retry</button>
+          {workspace.attempt.expectedUci && <button disabled={pending} onClick={() => void onContinue()}>Use expected move</button>}
+          <button disabled={pending} onClick={() => void onAccept()}>Accept in this position</button>
+          <p>Add interrupt rule is available from the owning piece for broader behavior.</p>
+        </section>
+      )}
+      <details><summary>Decision trace</summary><ol>{workspace.decision?.trace.map((line) => <li key={line}>{line}</li>)}</ol></details>
+    </aside>
+  );
 }

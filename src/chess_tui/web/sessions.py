@@ -22,8 +22,15 @@ from ..flow import (
     FlowWorkspace,
     InterruptRule,
     MoveAttempt,
+    PieceScript,
+    Rulebook,
 )
-from ..policy import PositionAnalyzer, StartingPieceRef, condition_to_data, parse_condition
+from ..policy import (
+    PositionAnalyzer,
+    StartingPieceRef,
+    condition_to_data,
+    parse_condition,
+)
 from ..policy.runtime import (
     DecisionSource,
     PolicyDecision,
@@ -79,11 +86,11 @@ class EvaluationService:
     def health(self) -> EngineHealth:
         return EngineHealth(status=self.status)  # type: ignore[arg-type]
 
-    async def analyse(
-        self, board: chess.Board, profile_id: str
-    ) -> AnalysisRunSnapshot:
+    async def analyse(self, board: chess.Board, profile_id: str) -> AnalysisRunSnapshot:
         if self.engine is None:
-            return AnalysisRunSnapshot(status="off", message="Engine is not configured.")
+            return AnalysisRunSnapshot(
+                status="off", message="Engine is not configured."
+            )
         profile = next(item for item in ANALYSIS_PROFILES if item.id == profile_id)
         async with self._lock:
             try:
@@ -120,7 +127,9 @@ class SessionManager:
         self.evaluations = EvaluationService(engine)
         self.sessions: dict[str, DevelopmentSession] = {}
 
-    async def create_session(self, requested_flow_path: str | None) -> WorkspaceSnapshot:
+    async def create_session(
+        self, requested_flow_path: str | None
+    ) -> WorkspaceSnapshot:
         path = self._resolve_flow_path(requested_flow_path)
         workspace = FlowWorkspace(path)
         workspace.restart()
@@ -312,12 +321,16 @@ class SessionManager:
         try:
             candidate = build()
             source = workspace.author.store.encode(candidate)
-            reparsed = workspace.author.store.decode(source, context="candidate Rulebook")
+            reparsed = workspace.author.store.decode(
+                source, context="candidate Rulebook"
+            )
             runtime, board = PolicyRuntime.replay(
                 reparsed,
-                workspace.attempt.history_before
-                if workspace.attempt
-                else tuple(workspace.history),
+                (
+                    workspace.attempt.history_before
+                    if workspace.attempt
+                    else tuple(workspace.history)
+                ),
             )
             preview = (
                 runtime.resolve(board)
@@ -347,14 +360,16 @@ class SessionManager:
             if decision is not None
             else PositionAnalyzer().analyze(analysis_board, workspace.runtime.tracker)
         )
-        development_results = {
-            item.reference: item
-            for item in decision.development_resolutions
-        } if decision else {}
-        interrupt_results = {
-            item.reference: item
-            for item in decision.interrupt_resolutions
-        } if decision else {}
+        development_results = (
+            {item.reference: item for item in decision.development_resolutions}
+            if decision
+            else {}
+        )
+        interrupt_results = (
+            {item.reference: item for item in decision.interrupt_resolutions}
+            if decision
+            else {}
+        )
         aliases = rulebook.alias_by_ref
         piece_snapshots: list[PieceScriptSnapshot] = []
         for piece in rulebook.pieces:
@@ -513,7 +528,7 @@ def _development_from_request(
     session: DevelopmentSession, payload: DevelopmentDraftRequest
 ) -> DevelopmentInstruction:
     rulebook = session.workspace.author.rulebook
-    piece = rulebook.piece_by_alias[payload.alias]
+    piece = _piece_by_alias(rulebook, payload.alias)
     aliases = {item.id: item.ref for item in rulebook.pieces}
     return DevelopmentInstruction(
         piece=piece.ref,
@@ -521,7 +536,7 @@ def _development_from_request(
         requires=tuple(payload.requires),
         when=(
             parse_condition(payload.when, aliases=aliases)
-            if payload.when
+            if payload.when is not None
             else None
         ),
         why=payload.why,
@@ -532,7 +547,7 @@ def _interrupt_from_request(
     session: DevelopmentSession, payload: InterruptDraftRequest
 ) -> InterruptRule:
     rulebook = session.workspace.author.rulebook
-    piece = rulebook.piece_by_alias[payload.alias]
+    piece = _piece_by_alias(rulebook, payload.alias)
     aliases = {item.id: item.ref for item in rulebook.pieces}
     attempts = tuple(_attempt_from_request(item, aliases) for item in payload.attempts)
     return InterruptRule(
@@ -568,6 +583,13 @@ def _attempt_from_request(
             f"Unknown capture target {payload.capture!r}."
         ) from exc
     return CaptureAttempt(target_piece=target)
+
+
+def _piece_by_alias(rulebook: Rulebook, alias: str) -> PieceScript:
+    try:
+        return rulebook.piece_by_alias[alias]
+    except KeyError as exc:
+        raise FlowValidationError(f"Unknown piece alias {alias!r}.") from exc
 
 
 def _new_rule_id(rules: tuple[InterruptRule, ...]) -> str:
@@ -660,9 +682,9 @@ def _interrupt_snapshot(alias, rule, result, aliases, completed):
                 status=(
                     evaluation.status.value if evaluation else "not-evaluated"
                 ),  # type: ignore[arg-type]
-                candidates=[
-                    move.uci() for move in evaluation.candidates
-                ] if evaluation else [],
+                candidates=(
+                    [move.uci() for move in evaluation.candidates] if evaluation else []
+                ),
                 reason=evaluation.reason if evaluation else None,
             )
         )
@@ -670,9 +692,7 @@ def _interrupt_snapshot(alias, rule, result, aliases, completed):
     status = (
         result.status.value
         if result
-        else "completed"
-        if reference in completed
-        else "trigger-false"
+        else "completed" if reference in completed else "trigger-false"
     )
     return InterruptRuleSnapshot(
         reference=reference,
@@ -690,9 +710,7 @@ def _interrupt_snapshot(alias, rule, result, aliases, completed):
 
 
 def _relations_snapshot(facts, aliases):
-    alias_by_id = {
-        ref.original_piece_id: alias for ref, alias in aliases.items()
-    }
+    alias_by_id = {ref.original_piece_id: alias for ref, alias in aliases.items()}
     return PieceRelationSnapshot(
         attacks=[
             AttackSnapshot(

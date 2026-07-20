@@ -1,14 +1,17 @@
 # Chess TUI
 
-In Web Development Mode, click any board piece to inspect its original
-starting-piece identity. Controlled pieces expose complete deterministic-v3
-authoring for development assignments, responses, continuations, and exact
-fixes; opponent pieces are read-only condition references. Plans/structures,
-named conditions, and authored ordering are managed in the same panel. Guided
-editors and a complete visual condition builder keep raw expressions and
-runtime lifecycle detail in the advanced Policy details drawer. Every change
-is validated, reviewed, saved atomically, and replayed through the
-deterministic Python policy runtime.
+Chess TUI contains a Python-owned Opening Rule Engine for training and
+developing deterministic opening Rulebooks. Version 4 organizes policy around
+original pieces: one default development instruction per controlled piece,
+piece-owned interrupt rules with ordered attempts, and separately authored
+development and interrupt order.
+
+In Web Development Mode, click any board piece to inspect its persistent
+starting-piece identity and legal attack/defense relationships. Controlled
+pieces expose guided development and interrupt authoring; opponent pieces are
+read-only condition and capture references. Every change is previewed,
+revalidated, saved atomically with backup, and replayed through the shared
+Python runtime.
 
 Authored piece references use readable identifiers such as
 `piece:white:pawn:d`, `piece:white:bishop:queenside`, and
@@ -84,15 +87,14 @@ scores identify the UCI engine and report actual depth, elapsed time, and nodes
 when supplied by the engine. Local Stockfish has no API or per-analysis fee;
 deeper and multi-line searches use more local CPU time.
 
-The browser provides complete deterministic-v3 authoring for named conditions,
-plans/structures, special responses, multiple structure-scoped development
-assignments, continuations, exact fixes, and authored ordering. Controlled
-pieces expose move authoring; opponent pieces are read-only references for the
-condition builder. Every editor uses canonical starting-piece references and
-the same visual condition AST, including distinct `unmoved`, `captured`, and
-`last_move` operators. Drafts validate without persistence, show an impact
-review, then revalidate, save atomically, replay, and return a complete snapshot
-on Apply.
+The browser provides complete v4 authoring for default development,
+interrupting rules, ordered action attempts, exact-position interrupts, and
+semantic scheduling order. Controlled pieces expose move authoring; opponent
+pieces are read-only references for conditions and captures. The visual
+condition tree includes legal relationship predicates and preserves `unmoved`
+as distinct from logical `not moved`. Drafts validate without persistence,
+show an impact review, then revalidate, save atomically, replay, and return a
+complete snapshot on Apply.
 The right-side timeline keeps application activity separate from user/assistant
 conversation while displaying both in deterministic sequence order. Python
 publishes the commands available in each snapshot and handles SAN, `/analyse`,
@@ -182,17 +184,16 @@ data in ChessFlow.
 
 ## Flow controls
 
-Flow mode runs a strict version 3 deterministic policy. Authored section and
-item order replace numeric priority. Structures select mutually exclusive plans;
-move rules have latched unlock, live applicability, permanent expiration, and
-one-shot execution. Resolution is exact override, first response, first
-development assignment, first continuation, then frontier.
+Flow mode runs a strict version 4 Opening Rulebook. Resolution is
+exact-position interrupts, other interrupts in `interrupt_order`, default
+development in `development_order`, then a typed frontier. Interrupts are
+one-shot and their attempts resolve deterministically from legal moves.
 
 - Play on the board or type SAN. A correct controlled-side move commits
   immediately and advances to the opponent; a mismatch supports `R`/`Escape`
   to retry and `Enter` to use the selected policy move.
 - The Textual side panel shows the selected rule, note, and full decision trace.
-  Edit v3 policy items in local Web Development Mode or directly in TOML, then use
+  Edit v4 piece scripts in local Web Development Mode or directly in TOML, then use
   `Ctrl+R` to validate and deterministically replay the active line.
 - On the opponent turn, normal mode automatically plays the first indexed book
   or Stockfish response. `--select-black` restores interactive selection and
@@ -204,9 +205,10 @@ development assignment, first continuation, then frontier.
 - `Ctrl+N` restarts, `I` focuses SAN entry, `Escape` leaves text entry or retries
   a pending result, and `Q` quits from navigation mode.
 
-Versions 1 and 2 are rejected. Saves are atomic and preserve the previous file
-as `<flow>.bak`; Back and Restart rebuild original-piece and lifecycle state by
-replaying SAN without deleting rules, overrides, or explored branches.
+Versions other than 4 are rejected with no compatibility loader. Saves are
+atomic and preserve the previous file as `<flow>.bak`; Back and Restart rebuild
+original-piece and completion state by replaying SAN without deleting rules or
+explored branches.
 
 ## Runtime contract
 

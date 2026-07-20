@@ -43,17 +43,19 @@ function ConditionFields({ value, pieces, onChange }: { value: ConditionExpressi
   if ("capturable" in value) return <PieceSelect label="Capturable piece" value={value.capturable} refs={refs.slice(1)} onChange={(capturable) => onChange({ capturable })} />;
   if ("attack_balance" in value) return <label>At least<input type="number" min={0} value={value.attack_balance.at_least} onChange={(event) => onChange({ attack_balance: { ...value.attack_balance, at_least: Number(event.target.value) } })} /></label>;
   if ("all" in value || "any" in value) {
-    const key = "all" in value ? "all" : "any";
-    const children = value[key];
+    const isAll = "all" in value;
+    const children: ConditionExpression[] = isAll ? value.all : value.any;
     return (
       <div className="condition-group">
         {children.map((child, index) => (
           <ConditionBuilder key={index} value={child} pieces={pieces} onChange={(next) => {
             if (!next) return;
-            onChange({ [key]: children.map((item, childIndex) => childIndex === index ? next : item) } as ConditionExpression);
+            onChange(isAll
+              ? { all: children.map((item, childIndex) => childIndex === index ? next : item) }
+              : { any: children.map((item, childIndex) => childIndex === index ? next : item) });
           }} />
         ))}
-        <button type="button" onClick={() => onChange({ [key]: [...children, { attacked: "self" }] } as ConditionExpression)}>Add child</button>
+        <button type="button" onClick={() => onChange(isAll ? { all: [...children, { attacked: "self" }] } : { any: [...children, { attacked: "self" }] })}>Add child</button>
       </div>
     );
   }

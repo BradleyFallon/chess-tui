@@ -33,9 +33,7 @@ class PieceRelationFacts:
     square: chess.Square | None
     attacks: tuple[AttackRelation, ...]
     attackers: tuple[AttackRelation, ...]
-    defenders_by_attacker: Mapping[
-        OriginalPieceId, tuple[DefenseRelation, ...]
-    ]
+    defenders_by_attacker: Mapping[OriginalPieceId, tuple[DefenseRelation, ...]]
     distinct_defenders: tuple[OriginalPieceId, ...]
     king_pinned: bool
     pinned_by: OriginalPieceId | None
