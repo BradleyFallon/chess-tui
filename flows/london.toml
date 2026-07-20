@@ -1,7 +1,9 @@
-version = 3
-name = "London System"
+version = 4
+name = "Accelerated London"
 start_fen = "startpos"
 side = "white"
+development_order = ["d-pawn", "london-bishop", "e-pawn", "c-pawn", "queenside-knight", "kingside-knight", "kingside-bishop", "queen", "king"]
+interrupt_order = ["d-pawn.accept-englund", "d-pawn.advance-against-early-c5", "london-bishop.escape-attack", "queenside-knight.handle-pressure", "d-pawn.take-bishop", "c-pawn.challenge-center"]
 
 [[opening_tags]]
 eco = "A40"
@@ -11,189 +13,126 @@ name = "Queen's Pawn Game"
 eco = "D00"
 name = "Queen's Pawn Game: Accelerated London System"
 
-[[conditions]]
-id = "london-before-nf3"
-when = { all = [{ at = { piece = "piece:white:pawn:d", square = "d4" } }, { at = { piece = "piece:white:bishop:queenside", square = "f4" } }, { at = { piece = "piece:white:pawn:e", square = "e3" } }] }
+[pieces.d-pawn]
+ref = "piece:white:pawn:d"
 
-[[conditions]]
-id = "london-core"
-when = { all = [{ condition = "london-before-nf3" }, { at = { piece = "piece:white:knight:kingside", square = "f3" } }] }
+[pieces.d-pawn.develop]
+to = "d4"
+why = "Claim the center and clear the London bishop's diagonal."
 
-[[structures]]
-id = "active-c4"
-name = "Active c4 London"
-available_when = { all = [{ at = { piece = "piece:black:pawn:d", square = "d5" } }, { at = { piece = "piece:black:bishop:queenside", square = "f5" } }] }
-selected_when = { at = { piece = "piece:white:pawn:c", square = "c4" } }
-note = "Meet an early ...Bf5 with active queenside pressure."
-
-[[structures]]
-id = "traditional"
-name = "Traditional London"
-available_when = { all = [{ at = { piece = "piece:black:pawn:d", square = "d5" } }, { not = { at = { piece = "piece:black:bishop:queenside", square = "f5" } } }] }
-selected_when = { at = { piece = "piece:white:pawn:c", square = "c3" } }
-note = "Build the familiar d4-e3-c3 triangle."
-
-[[structures]]
-id = "kingside-fianchetto"
-name = "London versus a kingside fianchetto"
-available_when = { at = { piece = "piece:black:pawn:g", square = "g6" } }
-selected_when = { at = { piece = "piece:white:pawn:c", square = "c3" } }
-note = "Keep the compact London shell against ...g6 setups."
-
-[[responses]]
-id = "advance-against-early-c5"
-move = { piece = "piece:white:pawn:d", to = "d5" }
-unlock_when = { last_move = { piece = "piece:black:pawn:c", to = "c5" } }
-when = { at = { piece = "piece:white:pawn:d", square = "d4" } }
-expire_when = { not = { at = { piece = "piece:white:pawn:d", square = "d4" } } }
-note = "Claim space when Black challenges immediately with ...c5."
-
-[[responses]]
-id = "retreat-attacked-london-bishop"
-move = { piece = "piece:white:bishop:queenside", to = "g3" }
-when = { attacked = "piece:white:bishop:queenside" }
-note = "Preserve the London bishop when it is attacked."
-
-[[development]]
-id = "develop-d-pawn"
-piece = "piece:white:pawn:d"
-target = "d4"
-note = "Control the center."
-
-[[development]]
-id = "develop-dark-bishop"
-piece = "piece:white:bishop:queenside"
-target = "f4"
-ready_when = { moved = "piece:white:pawn:d" }
-note = "Develop the dark-squared bishop outside the pawn chain."
-
-[[development]]
-id = "develop-e-pawn"
-piece = "piece:white:pawn:e"
-target = "e3"
-ready_when = { all = [{ moved = "piece:white:pawn:d" }, { moved = "piece:white:bishop:queenside" }] }
-note = "Support d4 and prepare normal development."
-
-[[development]]
-id = "develop-kingside-knight"
-piece = "piece:white:knight:kingside"
-target = "f3"
-ready_when = { condition = "london-before-nf3" }
-note = "Develop the king's knight and guard e5."
-
-[[development]]
-id = "develop-light-bishop"
-piece = "piece:white:bishop:kingside"
-target = "d3"
-ready_when = { condition = "london-core" }
-note = "Natural development."
-
-[[development]]
-id = "build-active-c4"
-piece = "piece:white:pawn:c"
-target = "c4"
-structures = ["active-c4"]
-ready_when = { all = [{ condition = "london-core" }, { at = { piece = "piece:white:bishop:kingside", square = "d3" } }] }
-note = "Use c4 when Black's bishop commits outside the pawn chain."
-
-[[development]]
-id = "build-c3-shell"
-piece = "piece:white:pawn:c"
-target = "c3"
-structures = ["traditional", "kingside-fianchetto"]
-ready_when = { all = [{ condition = "london-core" }, { at = { piece = "piece:white:bishop:kingside", square = "d3" } }] }
-note = "Build the London pawn chain."
-
-[[continuations]]
-id = "castle-kingside"
-move = { piece = "piece:white:king", to = "g1" }
-structures = ["active-c4", "traditional", "kingside-fianchetto"]
-when = { all = [{ unmoved = "piece:white:king" }, { unmoved = "piece:white:rook:kingside" }, { empty = "f1" }, { empty = "g1" }] }
-note = "Castle after the selected London structure is established."
-
-[[overrides]]
-id = "after-d4-e5"
+[[pieces.d-pawn.rules]]
+id = "accept-englund"
 after = ["d4", "e5"]
-move = { piece = "piece:white:pawn:d", to = "e5" }
-note = "Capture the offered pawn."
+required = true
+try = [{ move = "e5" }]
+why = "Accept the offered Englund pawn."
 
-[[overrides]]
-id = "qa4-check-after-c4"
-after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3", "c5", "Bd3", "Qb6", "c3", "c4"]
-move = { piece = "piece:white:queen", to = "a4" }
-note = "Use the check to meet Black's queenside expansion."
+[[pieces.d-pawn.rules]]
+id = "advance-against-early-c5"
+when = { all = [{ last_move = { piece = "black-c-pawn", to = "c5" } }, { at = { piece = "self", square = "d4" } }] }
+try = [{ move = "d5" }]
+why = "Claim space when Black challenges the center immediately with c5."
 
-[[overrides]]
-id = "qb4-after-bd7"
-after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3", "c5", "Bd3", "Qb6", "c3", "c4", "Qa4+", "Bd7"]
-move = { piece = "piece:white:queen", to = "b4" }
-note = "Keep pressure on the queenside after ...Bd7."
+[[pieces.d-pawn.rules]]
+id = "take-bishop"
+requires = ["d-pawn.develop"]
+try = [{ capture_type = "bishop" }]
+why = "Capture a uniquely available enemy bishop with the developed d-pawn."
 
-[[overrides]]
-id = "allow-c2c3-ply-8"
-after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3", "Nc6"]
-move = { piece = "piece:white:pawn:c", to = "c3" }
-note = "Added from chat to allow c3 here."
+[pieces.london-bishop]
+ref = "piece:white:bishop:queenside"
 
-[[opponent_replies]]
-id = "after-d4-d5-bf4-nf6-e3-e6-nf3-c5-bd3-qb6"
-after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3", "c5", "Bd3"]
-move = "Qb6"
+[pieces.london-bishop.develop]
+to = "f4"
+why = "Develop outside the pawn chain as soon as the move becomes legal."
 
-[[opponent_replies]]
-id = "after-d4-d5-bf4-nf6-e3-e6-nf3-c5-bd3-qb6-c3-c4"
-after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3", "c5", "Bd3", "Qb6", "c3"]
-move = "c4"
+[[pieces.london-bishop.rules]]
+id = "escape-attack"
+when = { attacked = "self" }
+required = true
+try = [{ capture = "attacker" }, { move = "g3" }]
+why = "Preserve the London bishop when a concrete legal attack threatens it."
 
-[[opponent_replies]]
-id = "after-d4-d5-bf4-nf6-e3-e6-nf3-c5-bd3-qb6-c3-c4-qa4-bd7"
-after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3", "c5", "Bd3", "Qb6", "c3", "c4", "Qa4+"]
-move = "Bd7"
+[pieces.e-pawn]
+ref = "piece:white:pawn:e"
 
-[[opponent_replies]]
-id = "after-d4-d5-bf4-nf6-e3-e6-nf3-c5-bd3-qb6-c3-c4-qa4-bd7-qb4-bxb4"
-after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3", "c5", "Bd3", "Qb6", "c3", "c4", "Qa4+", "Bd7", "Qb4"]
-move = "Bxb4"
+[pieces.e-pawn.develop]
+to = "e3"
+requires = ["london-bishop.develop"]
+why = "Support d4 after the London bishop develops."
 
-[[opponent_replies]]
-id = "after-d4-d5-bf4-nf6"
-after = ["d4", "d5", "Bf4"]
-move = "Nf6"
+[pieces.c-pawn]
+ref = "piece:white:pawn:c"
 
-[[opponent_replies]]
-id = "after-d4-d5-bf4-nf6-e3-e6"
-after = ["d4", "d5", "Bf4", "Nf6", "e3"]
-move = "e6"
+[pieces.c-pawn.develop]
+to = "c3"
+requires = ["e-pawn.develop"]
+why = "Build the compact London center."
 
-[[opponent_replies]]
-id = "after-d4-d5-bf4-nf6-e3-e6-nf3-c5"
-after = ["d4", "d5", "Bf4", "Nf6", "e3", "e6", "Nf3"]
-move = "c5"
+[[pieces.c-pawn.rules]]
+id = "challenge-center"
+when = { all = [{ at = { piece = "black-d-pawn", square = "d5" } }, { at = { piece = "black-queenside-knight", square = "c6" } }] }
+try = [{ move = "c4" }]
+why = "Challenge d5 when Black's configured queenside setup permits c4."
 
-[[opponent_replies]]
-id = "after-d4-e5"
-after = ["d4"]
-move = "e5"
+[pieces.queenside-knight]
+ref = "piece:white:knight:queenside"
 
-[[opponent_replies]]
-id = "after-d4-e5-dxe5-d6"
-after = ["d4", "e5", "dxe5"]
-move = "d6"
+[pieces.queenside-knight.develop]
+to = "d2"
+requires = ["c-pawn.develop"]
+why = "Support the compact c3 center."
 
-[[opponent_replies]]
-id = "after-d4-nf6-bf4-e6"
-after = ["d4", "Nf6", "Bf4"]
-move = "e6"
+[[pieces.queenside-knight.rules]]
+id = "handle-pressure"
+when = { under_defended = "self" }
+required = true
+try = [{ capture = "attacker" }, { capture_type = "bishop" }, { move = "b3" }, { move = "e2" }]
+why = "Resolve excessive legal pressure before continuing normal development."
 
-[[opponent_replies]]
-id = "after-d4-nf6-bf4-e6-e3-d5"
-after = ["d4", "Nf6", "Bf4", "e6", "e3"]
-move = "d5"
+[pieces.kingside-knight]
+ref = "piece:white:knight:kingside"
 
-[[opponent_replies]]
-id = "after-d4-nf6-bf4-e6-e3-d5-nf3-bd6"
-after = ["d4", "Nf6", "Bf4", "e6", "e3", "d5", "Nf3"]
-move = "Bd6"
+[pieces.kingside-knight.develop]
+to = "f3"
+requires = ["e-pawn.develop"]
+why = "Develop the kingside knight and guard the center."
+
+[pieces.kingside-bishop]
+ref = "piece:white:bishop:kingside"
+
+[pieces.kingside-bishop.develop]
+to = "d3"
+requires = ["kingside-knight.develop"]
+why = "Develop toward the kingside and prepare castling."
+
+[pieces.queen]
+ref = "piece:white:queen"
+
+[pieces.queen.develop]
+to = "b3"
+requires = ["c-pawn.develop"]
+why = "Develop toward pressure on d5 and b7."
+
+[pieces.king]
+ref = "piece:white:king"
+
+[pieces.king.develop]
+to = "g1"
+requires = ["kingside-bishop.develop"]
+why = "Castle after clearing the kingside."
+
+[pieces.black-c-pawn]
+ref = "piece:black:pawn:c"
+
+[pieces.black-d-pawn]
+ref = "piece:black:pawn:d"
+
+[pieces.black-queenside-knight]
+ref = "piece:black:knight:queenside"
+
+[pieces.black-queenside-bishop]
+ref = "piece:black:bishop:queenside"
 
 [[opponent_replies]]
 id = "after-d4-d5"
@@ -206,19 +145,9 @@ after = ["d4"]
 move = "Nf6"
 
 [[opponent_replies]]
-id = "after-d4-nf6-bf4-e6-e3-c5"
-after = ["d4", "Nf6", "Bf4", "e6", "e3"]
-move = "c5"
-
-[[opponent_replies]]
-id = "after-d4-nf6-bf4-e6-e3-c5-nf3-d5"
-after = ["d4", "Nf6", "Bf4", "e6", "e3", "c5", "Nf3"]
-move = "d5"
-
-[[opponent_replies]]
-id = "after-d4-nf6-bf4-d5"
-after = ["d4", "Nf6", "Bf4"]
-move = "d5"
+id = "after-d4-e5"
+after = ["d4"]
+move = "e5"
 
 [[opponent_replies]]
 id = "after-d4-g6"
@@ -226,66 +155,21 @@ after = ["d4"]
 move = "g6"
 
 [[opponent_replies]]
-id = "after-d4-g6-bf4-h6"
-after = ["d4", "g6", "Bf4"]
-move = "h6"
+id = "after-d4-d5-bf4-nf6"
+after = ["d4", "d5", "Bf4"]
+move = "Nf6"
 
 [[opponent_replies]]
-id = "after-d4-g6-bf4-h6-e3-f6"
-after = ["d4", "g6", "Bf4", "h6", "e3"]
-move = "f6"
-
-[[opponent_replies]]
-id = "after-d4-g6-bf4-h6-e3-f6-nf3-e6"
-after = ["d4", "g6", "Bf4", "h6", "e3", "f6", "Nf3"]
+id = "after-d4-nf6-bf4-e6"
+after = ["d4", "Nf6", "Bf4"]
 move = "e6"
 
 [[opponent_replies]]
-id = "after-d4-nf6-bf4-d5-e3-c5"
-after = ["d4", "Nf6", "Bf4", "d5", "e3"]
-move = "c5"
-
-[[opponent_replies]]
-id = "after-d4-nf6-bf4-d5-e3-c5-nf3-nc6"
-after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3"]
-move = "Nc6"
-
-[[opponent_replies]]
-id = "after-d4-d5-bf4-c5-e3-nc6"
-after = ["d4", "d5", "Bf4", "c5", "e3"]
-move = "Nc6"
-
-[[opponent_replies]]
-id = "after-d4-nf6-bf4-d5-e3-c5-nf3-nc6-c3-qb6"
-after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3", "Nc6", "c3"]
-move = "Qb6"
-
-[[opponent_replies]]
-id = "after-d4-nf6-bf4-d5-e3-c5-nf3-nc6-c3-qb6-bd3-qxb2"
-after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3", "Nc6", "c3", "Qb6", "Bd3"]
-move = "Qxb2"
+id = "after-d4-nf6-bf4-d5"
+after = ["d4", "Nf6", "Bf4"]
+move = "d5"
 
 [[opponent_replies]]
 id = "after-d4-d5-bf4-c5"
 after = ["d4", "d5", "Bf4"]
 move = "c5"
-
-[[opponent_replies]]
-id = "after-d4-d5-bf4-c5-e3-cxd4"
-after = ["d4", "d5", "Bf4", "c5", "e3"]
-move = "cxd4"
-
-[[opponent_replies]]
-id = "after-d4-d5-bf4-c5-e3-nf6"
-after = ["d4", "d5", "Bf4", "c5", "e3"]
-move = "Nf6"
-
-[[opponent_replies]]
-id = "after-d4-nf6-bf4-d5-e3-c5-nf3-e6"
-after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3"]
-move = "e6"
-
-[[opponent_replies]]
-id = "after-d4-d5-bf4-c5-e3-nc6-nf3-cxd4"
-after = ["d4", "d5", "Bf4", "c5", "e3", "Nc6", "Nf3"]
-move = "cxd4"

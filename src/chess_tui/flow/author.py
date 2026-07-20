@@ -1,4 +1,4 @@
-"""Application service for persisted version 3 flow data and board interaction."""
+"""Rulebook v4 authoring service and shared board interaction."""
 
 from __future__ import annotations
 
@@ -12,203 +12,116 @@ from ..board import ParsedFen, parse_fen
 from ..game import BoardInteraction, ChessMove
 from .errors import FlowValidationError
 from .models import (
-    AuthoredPolicyItem,
-    DevelopmentAssignment,
-    ExactOverride,
-    Flow,
+    DevelopmentInstruction,
+    InterruptRule,
     OpeningTag,
     OpponentReply,
-    Structure,
+    PieceScript,
+    Rulebook,
 )
 from .position import normalized_position_key, parse_legal_san, replay_san
 from .store import FlowStore
 
 
-class FlowAuthor:
+class RulebookAuthor:
     def __init__(self, path: Path, store: FlowStore | None = None) -> None:
         self.path = path
         self.store = store or FlowStore()
-        self.flow = self.store.load(path)
+        self.rulebook = self.store.load(path)
 
-    def reload(self) -> Flow:
-        self.flow = self.store.load(self.path)
-        return self.flow
+    def reload(self) -> Rulebook:
+        self.rulebook = self.store.load(self.path)
+        return self.rulebook
 
-    def save_candidate(self, candidate: Flow) -> Flow:
+    def save_candidate(self, candidate: Rulebook) -> Rulebook:
         self.store.save(self.path, candidate)
-        self.flow = candidate
+        self.rulebook = candidate
         return candidate
 
-    def candidate_with_rule(self, replacement: AuthoredPolicyItem) -> Flow:
-        if isinstance(replacement, DevelopmentAssignment):
-            if all(item.id != replacement.id for item in self.flow.development):
-                raise FlowValidationError(
-                    f"Unknown development id: {replacement.id!r}."
-                )
-            return replace(
-                self.flow,
-                development=tuple(
-                    replacement if item.id == replacement.id else item
-                    for item in self.flow.development
-                ),
-            )
-        if any(item.id == replacement.id for item in self.flow.responses):
-            return replace(
-                self.flow,
-                responses=tuple(
-                    replacement if item.id == replacement.id else item
-                    for item in self.flow.responses
-                ),
-            )
-        if any(item.id == replacement.id for item in self.flow.continuations):
-            return replace(
-                self.flow,
-                continuations=tuple(
-                    replacement if item.id == replacement.id else item
-                    for item in self.flow.continuations
-                ),
-            )
-        raise FlowValidationError(f"Unknown move-rule id: {replacement.id!r}.")
-
-    def candidate_with_added_response(self, response: AuthoredPolicyItem) -> Flow:
-        if isinstance(response, DevelopmentAssignment):
-            raise FlowValidationError("A development assignment is not a response.")
-        if any(item.id == response.id for item in self.flow.policy_items):
-            raise FlowValidationError(f"Duplicate rule id: {response.id!r}.")
-        return replace(self.flow, responses=(*self.flow.responses, response))
-
-    def candidate_without_response(self, rule_id: str) -> Flow:
-        if all(item.id != rule_id for item in self.flow.responses):
-            raise FlowValidationError(f"Unknown response id: {rule_id!r}.")
+    def candidate_with_piece(self, replacement: PieceScript) -> Rulebook:
+        if replacement.id not in self.rulebook.piece_by_alias:
+            return replace(self.rulebook, pieces=(*self.rulebook.pieces, replacement))
         return replace(
-            self.flow,
-            responses=tuple(item for item in self.flow.responses if item.id != rule_id),
+            self.rulebook,
+            pieces=tuple(
+                replacement if item.id == replacement.id else item
+                for item in self.rulebook.pieces
+            ),
         )
 
-    def candidate_with_added_development_rule(
-        self, development_rule: DevelopmentAssignment
-    ) -> Flow:
-        if any(item.id == development_rule.id for item in self.flow.policy_items):
-            raise FlowValidationError(f"Duplicate rule id: {development_rule.id!r}.")
-        return replace(
-            self.flow, development=(*self.flow.development, development_rule)
-        )
+    def candidate_with_development(
+        self, alias: str, development: DevelopmentInstruction | None
+    ) -> Rulebook:
+        piece = self._piece(alias)
+        candidate = self.candidate_with_piece(replace(piece, development=development))
+        ordered = list(candidate.development_order)
+        if development is None and alias in ordered:
+            ordered.remove(alias)
+        elif development is not None and alias not in ordered:
+            ordered.append(alias)
+        return replace(candidate, development_order=tuple(ordered))
 
-    def candidate_without_development_rule(self, rule_id: str) -> Flow:
-        existing = next(
-            (item for item in self.flow.development if item.id == rule_id), None
+    def candidate_with_interrupt(
+        self, alias: str, rule: InterruptRule
+    ) -> Rulebook:
+        piece = self._piece(alias)
+        if rule.piece != piece.ref:
+            raise FlowValidationError("Interrupt owner does not match its piece.")
+        if any(item.id == rule.id for item in piece.rules):
+            rules = tuple(rule if item.id == rule.id else item for item in piece.rules)
+        else:
+            rules = (*piece.rules, rule)
+        candidate = self.candidate_with_piece(replace(piece, rules=rules))
+        reference = f"{alias}.{rule.id}"
+        if reference not in candidate.interrupt_order:
+            candidate = replace(
+                candidate, interrupt_order=(*candidate.interrupt_order, reference)
+            )
+        return candidate
+
+    def candidate_without_interrupt(self, alias: str, rule_id: str) -> Rulebook:
+        piece = self._piece(alias)
+        if all(item.id != rule_id for item in piece.rules):
+            raise FlowValidationError(f"Unknown interrupt {alias}.{rule_id}.")
+        candidate = self.candidate_with_piece(
+            replace(piece, rules=tuple(item for item in piece.rules if item.id != rule_id))
         )
-        if existing is None:
-            raise FlowValidationError(f"Unknown development rule id: {rule_id!r}.")
+        reference = f"{alias}.{rule_id}"
         return replace(
-            self.flow,
-            development=tuple(
-                item for item in self.flow.development if item.id != rule_id
+            candidate,
+            interrupt_order=tuple(
+                item for item in candidate.interrupt_order if item != reference
             ),
         )
 
     def candidate_with_development_order(
-        self, ordered_rule_ids: tuple[str, ...]
-    ) -> Flow:
-        expected_ids = {item.id for item in self.flow.development}
-        if (
-            len(ordered_rule_ids) != len(expected_ids)
-            or set(ordered_rule_ids) != expected_ids
-        ):
+        self, order: tuple[str, ...]
+    ) -> Rulebook:
+        candidate = replace(self.rulebook, development_order=order)
+        self.store.validate(candidate)
+        return candidate
+
+    def candidate_with_interrupt_order(self, order: tuple[str, ...]) -> Rulebook:
+        candidate = replace(self.rulebook, interrupt_order=order)
+        self.store.validate(candidate)
+        return candidate
+
+    def candidate_with_added_opening_tag(self, tag: OpeningTag) -> Rulebook:
+        if tag in self.rulebook.opening_tags:
             raise FlowValidationError(
-                "Development order must contain every development rule exactly once."
+                f"Rulebook is already labeled {tag.name!r} ({tag.eco})."
             )
-        by_id = {item.id: item for item in self.flow.development}
-        return replace(
-            self.flow,
-            development=tuple(by_id[item_id] for item_id in ordered_rule_ids),
-        )
+        return replace(self.rulebook, opening_tags=(*self.rulebook.opening_tags, tag))
 
-    def candidate_with_policy_order(
-        self,
-        section: str,
-        ordered_item_ids: tuple[str, ...],
-    ) -> Flow:
-        if section not in {"response", "development", "continuation"}:
-            raise FlowValidationError(f"Unknown policy section {section!r}.")
-        field = {
-            "response": "responses",
-            "development": "development",
-            "continuation": "continuations",
-        }[section]
-        items = getattr(self.flow, field)
-        expected_ids = {item.id for item in items}
-        if (
-            len(ordered_item_ids) != len(expected_ids)
-            or set(ordered_item_ids) != expected_ids
-        ):
+    def candidate_without_opening_tag(self, tag: OpeningTag) -> Rulebook:
+        if tag not in self.rulebook.opening_tags:
             raise FlowValidationError(
-                f"{section.title()} order must contain every item exactly once."
+                f"Rulebook is not labeled {tag.name!r} ({tag.eco})."
             )
-        by_id = {item.id: item for item in items}
         return replace(
-            self.flow,
-            **{field: tuple(by_id[item_id] for item_id in ordered_item_ids)},
-        )
-
-    def candidate_with_override(self, replacement: ExactOverride) -> Flow:
-        if all(item.id != replacement.id for item in self.flow.overrides):
-            raise FlowValidationError(f"Unknown override id: {replacement.id!r}.")
-        return replace(
-            self.flow,
-            overrides=tuple(
-                replacement if item.id == replacement.id else item
-                for item in self.flow.overrides
-            ),
-        )
-
-    def candidate_with_structure(self, replacement: Structure) -> Flow:
-        if all(item.id != replacement.id for item in self.flow.structures):
-            raise FlowValidationError(f"Unknown structure id: {replacement.id!r}.")
-        return replace(
-            self.flow,
-            structures=tuple(
-                replacement if item.id == replacement.id else item
-                for item in self.flow.structures
-            ),
-        )
-
-    def candidate_with_structure_order(
-        self, ordered_structure_ids: tuple[str, ...]
-    ) -> Flow:
-        expected_ids = {item.id for item in self.flow.structures}
-        if (
-            len(ordered_structure_ids) != len(expected_ids)
-            or set(ordered_structure_ids) != expected_ids
-        ):
-            raise FlowValidationError(
-                "Structure order must contain every structure exactly once."
-            )
-        by_id = {item.id: item for item in self.flow.structures}
-        return replace(
-            self.flow,
-            structures=tuple(by_id[item_id] for item_id in ordered_structure_ids),
-        )
-
-    def candidate_with_added_override(self, override: ExactOverride) -> Flow:
-        if any(item.id == override.id for item in self.flow.overrides):
-            raise FlowValidationError(f"Duplicate override id: {override.id!r}.")
-        return replace(self.flow, overrides=(*self.flow.overrides, override))
-
-    def candidate_with_added_opening_tag(self, tag: OpeningTag) -> Flow:
-        if tag in self.flow.opening_tags:
-            raise FlowValidationError(
-                f"Flow is already labeled {tag.name!r} ({tag.eco})."
-            )
-        return replace(self.flow, opening_tags=(*self.flow.opening_tags, tag))
-
-    def candidate_without_opening_tag(self, tag: OpeningTag) -> Flow:
-        if tag not in self.flow.opening_tags:
-            raise FlowValidationError(f"Flow is not labeled {tag.name!r} ({tag.eco}).")
-        return replace(
-            self.flow,
+            self.rulebook,
             opening_tags=tuple(
-                existing for existing in self.flow.opening_tags if existing != tag
+                item for item in self.rulebook.opening_tags if item != tag
             ),
         )
 
@@ -217,25 +130,29 @@ class FlowAuthor:
         board: chess.Board,
         after_san: tuple[str, ...],
         move_san: str,
-    ) -> Flow:
-        replayed = replay_san(self.flow.start_fen, after_san)
+    ) -> Rulebook:
+        replayed = replay_san(self.rulebook.start_fen, after_san)
         if normalized_position_key(replayed) != normalized_position_key(board):
             raise FlowValidationError(
-                "Opponent reply SAN history does not resolve to the authored position."
+                "Opponent reply history does not resolve to the authored position."
             )
-        controlled = chess.WHITE if self.flow.side == "white" else chess.BLACK
+        controlled = chess.WHITE if self.rulebook.side == "white" else chess.BLACK
         if board.turn == controlled:
-            raise FlowValidationError(
-                "Opponent replies must target the uncontrolled side."
-            )
+            raise FlowValidationError("Opponent replies target the uncontrolled side.")
         parse_legal_san(board, move_san, context="Opponent reply")
         reply = OpponentReply(
             id=_branch_id(after_san + (move_san,)),
             after_san=after_san,
             move_san=move_san,
         )
-        self.flow = self.store.add_opponent_reply(self.path, reply)
-        return self.flow
+        self.rulebook = self.store.add_opponent_reply(self.path, reply)
+        return self.rulebook
+
+    def _piece(self, alias: str) -> PieceScript:
+        try:
+            return self.rulebook.piece_by_alias[alias]
+        except KeyError as exc:
+            raise FlowValidationError(f"Unknown piece alias {alias!r}.") from exc
 
 
 @dataclass(frozen=True, slots=True)

@@ -831,6 +831,7 @@ def test_piece_authoring_snapshot_groups_rules_and_uses_friendly_statuses(
         assert len(snapshot["startingPieces"]) == 32
         by_ref = {item["ref"]: item for item in snapshot["startingPieces"]}
         bishop = by_ref["piece:white:bishop:queenside"]
+        assert bishop["authorable"] is True
         response = next(
             item
             for item in bishop["relatedRules"]
@@ -840,7 +841,9 @@ def test_piece_authoring_snapshot_groups_rules_and_uses_friendly_statuses(
         assert response["triggerSummary"] == "White queenside bishop is attacked"
         assert response["friendlyStatus"] == "not-triggered"
         assert bishop["developmentRules"][0]["friendlyStatus"] == "not-ready"
-        assert by_ref["piece:black:bishop:queenside"]["developmentRules"] == []
+        opponent = by_ref["piece:black:bishop:queenside"]
+        assert opponent["authorable"] is False
+        assert opponent["developmentRules"] == []
 
         d_pawn = by_ref["piece:white:pawn:d"]
         exact = next(
@@ -860,10 +863,13 @@ def test_structured_response_draft_validates_then_applies_without_cross_section_
         original = path.read_text(encoding="utf-8")
         draft = {
             "id": None,
+            "section": "response",
             "piece": "piece:white:pawn:a",
             "target": "a3",
+            "structures": [],
             "note": "Create luft when the d-pawn is still home.",
-            "trigger": {"not": {"moved": "piece:white:pawn:d"}},
+            "unlockWhen": None,
+            "when": {"not": {"moved": "piece:white:pawn:d"}},
             "expireWhen": None,
         }
         preview = client.post(
@@ -872,9 +878,11 @@ def test_structured_response_draft_validates_then_applies_without_cross_section_
         assert preview.status_code == 200
         body = preview.json()
         assert body["valid"]
-        assert body["conditionExpression"] == draft["trigger"]
+        assert body["conditionExpression"] == draft["when"]
         assert body["triggerSummary"] == "White d-pawn has not moved"
         assert body["previewDecision"].startswith("a3")
+        assert body["ruleId"] in body["newlyApplicable"]
+        assert "develop-d-pawn" in body["newlyShadowed"]
         assert path.read_text(encoding="utf-8") == original
 
         applied = client.post(f"/api/sessions/{session_id}/rules", json=draft)
@@ -910,9 +918,13 @@ def test_invalid_response_draft_preserves_saved_flow(tmp_path: Path) -> None:
         original = path.read_text(encoding="utf-8")
         invalid = {
             "id": None,
+            "section": "response",
             "piece": "piece:white:pawn:a",
             "target": "z9",
-            "trigger": {"unknown": True},
+            "structures": [],
+            "note": None,
+            "unlockWhen": None,
+            "when": {"unknown": True},
             "expireWhen": None,
         }
         preview = client.post(
@@ -928,7 +940,7 @@ def test_invalid_response_draft_preserves_saved_flow(tmp_path: Path) -> None:
         assert path.read_text(encoding="utf-8") == original
 
 
-def test_response_edit_preserves_hidden_scope_and_unlock_metadata(
+def test_response_edit_replaces_all_visible_scope_and_lifecycle_fields(
     tmp_path: Path,
 ) -> None:
     with web_client(tmp_path) as (client, path):
@@ -937,10 +949,13 @@ def test_response_edit_preserves_hidden_scope_and_unlock_metadata(
         before = FlowStore().load(path).responses[0]
         draft = {
             "id": before.id,
+            "section": "response",
             "piece": "piece:white:pawn:d",
             "target": "d5",
+            "structures": [],
             "note": "Updated through the guided editor.",
-            "trigger": {"at": {"piece": "piece:white:pawn:d", "square": "d4"}},
+            "unlockWhen": None,
+            "when": {"at": {"piece": "piece:white:pawn:d", "square": "d4"}},
             "expireWhen": {
                 "not": {"at": {"piece": "piece:white:pawn:d", "square": "d4"}}
             },
@@ -950,9 +965,340 @@ def test_response_edit_preserves_hidden_scope_and_unlock_metadata(
 
         assert applied.status_code == 200
         saved = FlowStore().load(path).responses[0]
-        assert saved.structures == before.structures
-        assert saved.unlock_when == before.unlock_when
+        assert before.unlock_when is not None
+        assert saved.structures == ()
+        assert saved.unlock_when is None
         assert saved.note == draft["note"]
+
+
+def test_multiple_scoped_development_assignments_are_returned_and_editable_by_id(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        structure = client.post(
+            f"/api/sessions/{session_id}/structure-drafts",
+            json={
+                "id": None,
+                "name": "Alternative c-pawn",
+                "note": None,
+                "availableWhen": {"unmoved": "piece:white:pawn:c"},
+                "selectedWhen": {"at": {"piece": "piece:white:pawn:c", "square": "c3"}},
+            },
+        )
+        assert structure.status_code == 200
+        draft = {
+            "id": None,
+            "piece": "piece:white:pawn:c",
+            "target": "c4",
+            "structures": ["alternative-c-pawn"],
+            "note": "Use more space in this plan.",
+            "readyWhen": {"moved": "piece:white:pawn:d"},
+        }
+
+        applied = client.post(
+            f"/api/sessions/{session_id}/development-rules", json=draft
+        )
+
+        assert applied.status_code == 200
+        c_pawn = next(
+            item
+            for item in applied.json()["startingPieces"]
+            if item["ref"] == "piece:white:pawn:c"
+        )
+        assert len(c_pawn["developmentRules"]) == 3
+        created_rule = next(
+            item
+            for item in c_pawn["developmentRules"]
+            if item["structures"] == ["alternative-c-pawn"]
+        )
+        assert created_rule["structureNames"] == ["Alternative c-pawn"]
+        assert created_rule["scopeSummary"] == "Plans: Alternative c-pawn"
+
+        edit = {
+            **draft,
+            "id": created_rule["id"],
+            "target": "c3",
+            "note": "Edited by exact assignment id.",
+        }
+        edited = client.post(f"/api/sessions/{session_id}/development-rules", json=edit)
+        assert edited.status_code == 200
+        saved = next(
+            item
+            for item in FlowStore().load(path).development
+            if item.id == created_rule["id"]
+        )
+        assert saved.target == "c3"
+        assert saved.note == edit["note"]
+
+
+def test_named_condition_crud_rename_updates_references_atomically(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        original = path.read_text(encoding="utf-8")
+        draft = {
+            "id": "center-ready",
+            "originalId": None,
+            "condition": {"moved": "piece:white:pawn:d"},
+        }
+
+        preview = client.post(
+            f"/api/sessions/{session_id}/named-conditions/validate", json=draft
+        )
+        assert preview.status_code == 200
+        assert preview.json()["valid"]
+        assert path.read_text(encoding="utf-8") == original
+
+        applied = client.post(
+            f"/api/sessions/{session_id}/named-conditions", json=draft
+        )
+        assert applied.status_code == 200
+        assert any(
+            item["id"] == "center-ready" for item in applied.json()["namedConditions"]
+        )
+        deleted = client.delete(
+            f"/api/sessions/{session_id}/named-conditions/center-ready"
+        )
+        assert deleted.status_code == 200
+
+        renamed = client.post(
+            f"/api/sessions/{session_id}/named-conditions",
+            json={
+                "id": "london-before-knight",
+                "originalId": "london-before-nf3",
+                "condition": {
+                    "at": {
+                        "piece": "piece:white:pawn:d",
+                        "square": "d4",
+                    }
+                },
+            },
+        )
+        assert renamed.status_code == 200
+        source = path.read_text(encoding="utf-8")
+        assert "london-before-nf3" not in source
+        assert 'condition = "london-before-knight"' in source
+        blocked = client.delete(
+            f"/api/sessions/{session_id}/named-conditions/london-before-knight"
+        )
+        assert blocked.status_code == 422
+        assert "referenced by" in blocked.json()["error"]["message"]
+
+
+def test_structure_draft_crud_reorder_and_dependency_failure(tmp_path: Path) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        original = path.read_text(encoding="utf-8")
+        draft = {
+            "id": None,
+            "name": "Queenside Expansion",
+            "note": "A teaching plan.",
+            "availableWhen": {"unmoved": "piece:white:pawn:a"},
+            "selectedWhen": {"at": {"piece": "piece:white:pawn:a", "square": "a3"}},
+        }
+        preview = client.post(
+            f"/api/sessions/{session_id}/structure-drafts/validate", json=draft
+        )
+        assert preview.status_code == 200 and preview.json()["valid"]
+        assert path.read_text(encoding="utf-8") == original
+
+        applied = client.post(
+            f"/api/sessions/{session_id}/structure-drafts", json=draft
+        )
+        assert applied.status_code == 200
+        structure = next(
+            item
+            for item in applied.json()["rules"]["structures"]
+            if item["name"] == "Queenside Expansion"
+        )
+        assert structure["id"] == "queenside-expansion"
+        ids = [item["id"] for item in applied.json()["rules"]["structures"]]
+        reordered = client.put(
+            f"/api/sessions/{session_id}/structures/order",
+            json={"structureIds": [ids[-1], *ids[:-1]]},
+        )
+        assert reordered.status_code == 200
+        assert FlowStore().load(path).structures[0].id == structure["id"]
+
+        removed = client.delete(
+            f"/api/sessions/{session_id}/structures/{structure['id']}"
+        )
+        assert removed.status_code == 200
+        blocked = client.delete(f"/api/sessions/{session_id}/structures/traditional")
+        assert blocked.status_code == 422
+        assert "referenced by policy items" in blocked.json()["error"]["message"]
+
+
+def test_back_and_restart_reconstruct_pre_move_structure_selection(
+    tmp_path: Path,
+) -> None:
+    with web_client(tmp_path) as (client, path):
+        path.write_text(
+            """
+version=3
+name="Structure replay"
+start_fen="startpos"
+side="white"
+[[structures]]
+id="active-c4"
+name="Active c4"
+available_when={unmoved="piece:white:pawn:c"}
+selected_when={at={piece="piece:white:pawn:c",square="c4"}}
+[[development]]
+id="play-c4"
+piece="piece:white:pawn:c"
+target="c4"
+structures=["active-c4"]
+[[opponent_replies]]
+id="after-c4-e5"
+after=["c4"]
+move="e5"
+""".strip() + "\n",
+            encoding="utf-8",
+        )
+        created = session(client)
+        session_id = created["sessionId"]
+
+        selected = move(client, session_id, "c2c4")
+        assert (
+            next(
+                item
+                for item in selected["rules"]["structures"]
+                if item["id"] == "active-c4"
+            )["status"]
+            == "selected"
+        )
+
+        backed = client.post(f"/api/sessions/{session_id}/back", json={})
+        assert backed.status_code == 200
+        assert (
+            next(
+                item
+                for item in backed.json()["rules"]["structures"]
+                if item["id"] == "active-c4"
+            )["status"]
+            == "available"
+        )
+
+        replayed = move(client, session_id, "c2c4")
+        assert (
+            next(
+                item
+                for item in replayed["rules"]["structures"]
+                if item["id"] == "active-c4"
+            )["status"]
+            == "selected"
+        )
+        restarted = client.post(f"/api/sessions/{session_id}/restart", json={})
+        assert restarted.status_code == 200
+        assert (
+            next(
+                item
+                for item in restarted.json()["rules"]["structures"]
+                if item["id"] == "active-c4"
+            )["status"]
+            == "available"
+        )
+
+
+def test_continuation_full_field_crud_and_reordering(tmp_path: Path) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        original = path.read_text(encoding="utf-8")
+        draft = {
+            "id": None,
+            "section": "continuation",
+            "piece": "piece:white:pawn:a",
+            "target": "a3",
+            "structures": ["active-c4"],
+            "note": "Create luft later.",
+            "unlockWhen": {"condition": "london-core"},
+            "when": {"last_move": {"piece": "piece:black:pawn:h", "to": "h6"}},
+            "expireWhen": {"captured": "piece:white:pawn:a"},
+        }
+        preview = client.post(
+            f"/api/sessions/{session_id}/rules/drafts/validate", json=draft
+        )
+        assert preview.status_code == 200 and preview.json()["valid"]
+        assert preview.json()["scopeSummary"] == "Plans: Active c4 London"
+        assert path.read_text(encoding="utf-8") == original
+
+        applied = client.post(f"/api/sessions/{session_id}/rules", json=draft)
+        assert applied.status_code == 200
+        continuation = FlowStore().load(path).continuations[-1]
+        assert continuation.structures == ("active-c4",)
+        assert continuation.unlock_when is not None
+        assert continuation.when is not None
+        assert continuation.expire_when is not None
+        a_pawn = next(
+            item
+            for item in applied.json()["startingPieces"]
+            if item["ref"] == "piece:white:pawn:a"
+        )
+        assert any(
+            item["id"] == continuation.id and item["role"] == "continuation"
+            for item in a_pawn["relatedRules"]
+        )
+
+        ids = [item.id for item in FlowStore().load(path).continuations]
+        reordered = client.put(
+            f"/api/sessions/{session_id}/policy-order/continuation",
+            json={"itemIds": list(reversed(ids))},
+        )
+        assert reordered.status_code == 200
+        deleted = client.delete(
+            f"/api/sessions/{session_id}/move-rules/continuation/{continuation.id}"
+        )
+        assert deleted.status_code == 200
+        assert all(
+            item.id != continuation.id for item in FlowStore().load(path).continuations
+        )
+
+
+def test_exact_fix_draft_replaces_same_position_and_deletes(tmp_path: Path) -> None:
+    with web_client(tmp_path) as (client, path):
+        created = session(client)
+        session_id = created["sessionId"]
+        before_count = len(FlowStore().load(path).overrides)
+        first = {
+            "id": None,
+            "afterSan": [],
+            "note": "Open with the king pawn here.",
+            "move": {"piece": "piece:white:pawn:e", "to": "e4"},
+        }
+        preview = client.post(
+            f"/api/sessions/{session_id}/exact-fixes/validate", json=first
+        )
+        assert preview.status_code == 200 and preview.json()["valid"]
+        assert len(FlowStore().load(path).overrides) == before_count
+        applied = client.post(f"/api/sessions/{session_id}/exact-fixes", json=first)
+        assert applied.status_code == 200
+        created_id = applied.json()["rules"]["selected"]["id"]
+        assert len(FlowStore().load(path).overrides) == before_count + 1
+
+        replacement = {
+            **first,
+            "note": "Use the queen pawn instead.",
+            "move": {"piece": "piece:white:pawn:d", "to": "d4"},
+        }
+        replaced = client.post(
+            f"/api/sessions/{session_id}/exact-fixes", json=replacement
+        )
+        assert replaced.status_code == 200
+        saved = FlowStore().load(path)
+        assert len(saved.overrides) == before_count + 1
+        exact = next(item for item in saved.overrides if item.id == created_id)
+        assert exact.move.to_square == "d4"
+
+        deleted = client.delete(f"/api/sessions/{session_id}/exact-fixes/{created_id}")
+        assert deleted.status_code == 200
+        assert len(FlowStore().load(path).overrides) == before_count
 
 
 def test_frontier_attempt_can_be_accepted_here_and_prefills_broader_response(

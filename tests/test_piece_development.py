@@ -88,6 +88,101 @@ structures=["b"]
     assert len(flow.development) == 3
 
 
+def test_scoped_assignment_suppresses_global_fallback() -> None:
+    flow = FlowStore().decode("""
+version=3
+name="Fallback"
+start_fen="startpos"
+side="white"
+[[structures]]
+id="active"
+name="Active"
+available_when={unmoved="piece:white:pawn:c"}
+selected_when={at={piece="piece:white:pawn:c",square="c4"}}
+[[development]]
+id="global-c"
+piece="piece:white:pawn:c"
+target="c3"
+[[development]]
+id="active-c"
+piece="piece:white:pawn:c"
+target="c4"
+structures=["active"]
+""")
+
+    decision = PolicyRuntime(flow).resolve(chess.Board())
+
+    global_result = next(
+        item for item in decision.item_resolutions if item.item.id == "global-c"
+    )
+    assert global_result.status.value == "out-of-scope"
+    assert global_result.reason == (
+        "Global fallback suppressed because a structure-specific assignment "
+        "is in scope."
+    )
+    assert decision.source_id == "active-c"
+
+
+def test_global_fallback_returns_when_no_scoped_assignment_is_in_scope() -> None:
+    flow = FlowStore().decode("""
+version=3
+name="Fallback"
+start_fen="startpos"
+side="white"
+[[structures]]
+id="active"
+name="Active"
+available_when={moved="piece:white:pawn:e"}
+selected_when={at={piece="piece:white:pawn:c",square="c4"}}
+[[development]]
+id="global-c"
+piece="piece:white:pawn:c"
+target="c3"
+[[development]]
+id="active-c"
+piece="piece:white:pawn:c"
+target="c4"
+structures=["active"]
+""")
+
+    decision = PolicyRuntime(flow).resolve(chess.Board())
+
+    assert decision.source_id == "global-c"
+
+
+def test_authored_order_resolves_multiple_in_scope_scoped_assignments() -> None:
+    flow = FlowStore().decode("""
+version=3
+name="Scoped authored order"
+start_fen="startpos"
+side="white"
+[[structures]]
+id="first"
+name="First"
+available_when={unmoved="piece:white:pawn:c"}
+selected_when={at={piece="piece:white:pawn:c",square="c4"}}
+[[structures]]
+id="second"
+name="Second"
+available_when={unmoved="piece:white:pawn:c"}
+selected_when={at={piece="piece:white:pawn:c",square="c3"}}
+[[development]]
+id="first-c"
+piece="piece:white:pawn:c"
+target="c4"
+structures=["first"]
+[[development]]
+id="second-c"
+piece="piece:white:pawn:c"
+target="c3"
+structures=["second"]
+""")
+
+    decision = PolicyRuntime(flow).resolve(chess.Board())
+
+    assert decision.source_id == "first-c"
+
+
 def test_more_than_one_global_assignment_for_a_piece_is_invalid() -> None:
     flow = Flow(
         version=3,

@@ -1,10 +1,9 @@
-"""Typed building blocks for deterministic version 3 flow policies."""
+"""Typed primitives shared by the Opening Rule Engine v4."""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from enum import Enum
-from typing import Literal, TypeAlias
+from dataclasses import dataclass, field
+from typing import Literal, Mapping, TypeAlias
 
 ColorName: TypeAlias = Literal["white", "black"]
 PieceTypeName: TypeAlias = Literal["pawn", "knight", "bishop", "rook", "queen", "king"]
@@ -49,8 +48,7 @@ class StartingPieceRef:
                 f"Invalid starting-piece reference {value!r}; expected "
                 "'piece:white:bishop:queenside'."
             )
-        color = parts[1]
-        piece_type = parts[2]
+        color, piece_type = parts[1:3]
         qualifier = parts[3] if len(parts) == 4 else None
         if color not in {"white", "black"}:
             raise ValueError(
@@ -89,7 +87,7 @@ class StartingPieceRef:
         rank = "1" if piece_id.color == "white" else "8"
         pawn_rank = "2" if piece_id.color == "white" else "7"
         square = piece_id.start_square
-        if len(square) == 2 and square[1] == pawn_rank:
+        if square[1] == pawn_rank:
             return cls(piece_id.color, "pawn", square[0])  # type: ignore[arg-type]
         back_rank: dict[str, tuple[PieceTypeName, PieceQualifier | None]] = {
             f"a{rank}": ("rook", "queenside"),
@@ -144,30 +142,27 @@ class StartingPieceRef:
         return f"piece:{self.color}:{self.piece_type}{suffix}"
 
 
-@dataclass(frozen=True, slots=True)
-class MoveAction:
-    piece: OriginalPieceId
-    to_square: str
+PieceSubject: TypeAlias = StartingPieceRef | Literal["self"]
 
 
 @dataclass(frozen=True, slots=True)
 class MovedCondition:
-    piece: OriginalPieceId
+    piece: PieceSubject
 
 
 @dataclass(frozen=True, slots=True)
 class UnmovedCondition:
-    piece: OriginalPieceId
+    piece: PieceSubject
 
 
 @dataclass(frozen=True, slots=True)
 class CapturedCondition:
-    piece: OriginalPieceId
+    piece: PieceSubject
 
 
 @dataclass(frozen=True, slots=True)
 class AtCondition:
-    piece: OriginalPieceId
+    piece: PieceSubject
     square: str
 
 
@@ -190,13 +185,35 @@ class OccupiedByCondition:
 
 @dataclass(frozen=True, slots=True)
 class AttackedCondition:
-    piece: OriginalPieceId
+    target: PieceSubject
 
 
 @dataclass(frozen=True, slots=True)
 class AttackedByCondition:
-    target: OriginalPieceId
-    attacker: OriginalPieceId
+    target: PieceSubject
+    attacker: StartingPieceRef | None = None
+    attacker_type: PieceTypeName | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class UndefendedCondition:
+    target: PieceSubject
+
+
+@dataclass(frozen=True, slots=True)
+class UnderDefendedCondition:
+    target: PieceSubject
+
+
+@dataclass(frozen=True, slots=True)
+class AttackBalanceCondition:
+    target: PieceSubject
+    at_least: int
+
+
+@dataclass(frozen=True, slots=True)
+class CapturableCondition:
+    target: StartingPieceRef
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,13 +222,8 @@ class InCheckCondition:
 
 
 @dataclass(frozen=True, slots=True)
-class NamedConditionRef:
-    condition_id: str
-
-
-@dataclass(frozen=True, slots=True)
 class LastMoveCondition:
-    piece: OriginalPieceId
+    piece: StartingPieceRef
     to_square: str
 
 
@@ -240,8 +252,11 @@ Condition: TypeAlias = (
     | OccupiedByCondition
     | AttackedCondition
     | AttackedByCondition
+    | UndefendedCondition
+    | UnderDefendedCondition
+    | AttackBalanceCondition
+    | CapturableCondition
     | InCheckCondition
-    | NamedConditionRef
     | LastMoveCondition
     | AllCondition
     | AnyCondition
@@ -249,20 +264,19 @@ Condition: TypeAlias = (
 )
 
 
-class RuleLifecycle(str, Enum):
-    LOCKED = "locked"
-    UNLOCKED = "unlocked"
-    RETIRED = "retired"
+@dataclass(frozen=True, slots=True)
+class MoveAttempt:
+    to_square: str
 
 
-class EffectiveRuleStatus(str, Enum):
-    SELECTED = "selected"
-    APPLICABLE = "applicable"
-    WAITING = "waiting"
-    INACTIVE = "inactive"
-    LOCKED = "locked"
-    RETIRED = "retired"
-    OUT_OF_SCOPE = "out-of-scope"
+@dataclass(frozen=True, slots=True)
+class CaptureAttempt:
+    target_piece: StartingPieceRef | None = None
+    target_type: PieceTypeName | None = None
+    triggering_attacker: bool = False
+
+
+ActionAttempt: TypeAlias = MoveAttempt | CaptureAttempt
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,3 +289,4 @@ class LastMove:
 class ConditionResult:
     value: bool
     explanation: str
+    details: Mapping[str, object] = field(default_factory=dict)

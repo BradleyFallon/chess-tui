@@ -29,32 +29,41 @@ The left column is piece-centered:
 ```text
 PIECE
 CURRENT DECISION
+CURRENT PLAN
 AUTHORING
-  Normal development
+  Development assignments
   Special responses
+  Later plans
   Exact fixes
-  Change rule order
+  Change authored order
+PLANS AND STRUCTURES
+CONDITION LIBRARY
 POLICY DETAILS
 ```
 
-Piece inspection is always active and coexists with move selection. Normal
-editing uses chess terminology and friendly statuses. Exact lifecycle,
-conditions, authored IDs, decision trace, and TOML are progressive-disclosure
-diagnostics.
+Piece inspection is always active and coexists with move selection. Controlled
+pieces expose full authoring actions. Opponent pieces show original identity,
+current square, and movement/capture state as read-only condition references.
+Normal editing uses chess terminology and friendly statuses. Exact lifecycle,
+conditions, authored IDs, normalized position keys, decision trace, warnings,
+and TOML are progressive-disclosure diagnostics.
 
-All focused edits use `Edit -> Validate -> Review -> Apply`. Validation never
-writes. Apply revalidates, saves atomically, replays, and returns a complete
-snapshot. Response and development ordering use v3 authored list order; the
-browser never calculates policy precedence.
+All focused edits use `Edit -> Validate -> Review -> Apply`. This applies to
+named conditions, structures, responses, each individual development
+assignment, continuations, and exact fixes. Validation never writes. Apply
+recreates and revalidates the candidate, saves atomically, replays, and returns
+a complete snapshot. The browser never calculates policy precedence.
 
 Pending mismatch and frontier moves offer **Accept in this position**,
 **Create broader response**, and **Retry**. Mismatches also offer **Use expected
 move**. `/accept-here` is available for both attempt kinds; `/add-rule` is
 removed.
 
-This authoring batch does not add a schema, resolver, structure controls, or
-continuation controls. Existing v3 structure state and scopes remain Python
-policy data.
+The visual condition tree covers `moved`, `unmoved`, `captured`, `at`,
+`occupied`, `empty`, `occupied_by`, `attacked`, `attacked_by`, `in_check`,
+`last_move`, named references, `all`, `any`, and `not`. Advanced JSON is another
+view of that same AST. It is not a second draft. `unmoved` is preserved exactly
+and is not rewritten as `not moved`.
 
 This document defines the planned local web application, its relationship to the existing Python core and terminal interface, and the product behavior of Quiz Mode and Flow Development Mode.
 

@@ -115,9 +115,13 @@ The default bind is `127.0.0.1:8765`. Omitting `--engine` is supported and
 reported as `engine-off`. Development Mode supports controlled board/SAN input,
 generic policy retry/continuation, manual or engine opponent moves, Back,
 Restart, deterministic-v3 traces, piece-centered authoring, structured errors,
-and White-normalized evaluation. Normal development, existing response rules,
-and exact fixes use guided editors and a reusable visual condition tree. Raw
-condition JSON, lifecycle data, decision traces, and TOML live in the advanced
+and White-normalized evaluation. Named conditions, structures, responses,
+multiple development assignments, continuations, exact fixes, and authored
+section ordering all use guided editors and one reusable visual condition tree.
+The tree covers every v3 condition operator and preserves `unmoved` as distinct
+from logical `not moved`. Controlled pieces are authorable; opponent pieces are
+read-only condition references. Raw conditions, lifecycle data, decision
+traces, normalized position keys, warnings, and TOML live in the advanced
 Policy details drawer. Every edit validates before review; Apply validates the
 whole flow, atomically saves it, and replays the active line before returning a
 new snapshot. Frontier and mismatch attempts can be accepted as an exact fix
@@ -141,8 +145,8 @@ cd web
 npm run dev
 ```
 
-Web Quiz, structure and continuation authoring, forward navigation, WebSockets,
-accounts, databases, and hosted deployment are deferred.
+Web Quiz, forward navigation, WebSockets, accounts, databases, and hosted
+deployment are deferred.
 The authoritative specifications are
 `docs/design/rule-policy-v3.md`,
 `docs/design/rule-authoring-ui.md`,

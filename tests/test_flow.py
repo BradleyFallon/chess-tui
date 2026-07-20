@@ -146,6 +146,24 @@ def test_last_move_and_named_condition_reference_evaluate() -> None:
     ).value
 
 
+def test_unmoved_is_false_after_capture_before_move_but_not_moved_is_true() -> None:
+    flow = FlowStore().decode("""
+version=3
+name="Captured before moving"
+start_fen="4k3/8/8/1b6/8/8/4P3/4K3 w - - 0 1"
+side="white"
+""")
+    runtime, board = PolicyRuntime.replay(flow, ("Kf1", "Bxe2+"))
+    evaluator = ConditionEvaluator(board, runtime.tracker, {})
+
+    assert not evaluator.evaluate(
+        parse_condition({"unmoved": "piece:white:pawn:e"})
+    ).value
+    assert evaluator.evaluate(
+        parse_condition({"not": {"moved": "piece:white:pawn:e"}})
+    ).value
+
+
 def test_last_move_unlocks_an_immediate_response_and_latches() -> None:
     flow = FlowStore().decode("""
 version=3
@@ -342,12 +360,12 @@ side="white"
 [[structures]]
 id="first"
 name="First"
-available_when={moved="piece:white:pawn:d"}
+available_when={unmoved="piece:white:pawn:d"}
 selected_when={moved="piece:white:pawn:d"}
 [[structures]]
 id="second"
 name="Second"
-available_when={moved="piece:white:pawn:d"}
+available_when={unmoved="piece:white:pawn:d"}
 selected_when={moved="piece:white:pawn:d"}
 [[development]]
 id="d4"
@@ -372,6 +390,76 @@ structures=["second"]
         item for item in decision.item_resolutions if item.rule.id == "second-c4"
     )
     assert second.status.value == "out-of-scope"
+
+
+def test_structure_selection_preserves_pre_move_availability() -> None:
+    flow = FlowStore().decode("""
+version=3
+name="Pre-move availability"
+start_fen="startpos"
+side="white"
+[[structures]]
+id="active-c4"
+name="Active c4"
+available_when={unmoved="piece:white:pawn:c"}
+selected_when={at={piece="piece:white:pawn:c",square="c4"}}
+[[development]]
+id="play-c4"
+piece="piece:white:pawn:c"
+target="c4"
+structures=["active-c4"]
+""")
+
+    runtime, _ = PolicyRuntime.replay(flow, ("c4",))
+
+    assert runtime.selected_structure_id == "active-c4"
+
+
+def test_structure_overlap_warnings_identify_branch_candidates_and_winner() -> None:
+    flow = FlowStore().decode("""
+version=3
+name="Overlap"
+start_fen="startpos"
+side="white"
+[[structures]]
+id="first"
+name="First"
+available_when={unmoved="piece:white:pawn:c"}
+selected_when={at={piece="piece:white:pawn:c",square="c4"}}
+[[structures]]
+id="second"
+name="Second"
+available_when={unmoved="piece:white:pawn:c"}
+selected_when={at={piece="piece:white:pawn:c",square="c4"}}
+[[development]]
+id="first-c"
+piece="piece:white:pawn:c"
+target="c4"
+structures=["first"]
+[[development]]
+id="second-c"
+piece="piece:white:pawn:c"
+target="c3"
+structures=["second"]
+[[opponent_replies]]
+id="after-c4-e5"
+after=["c4"]
+move="e5"
+""")
+
+    warnings = FlowStore().warnings(flow)
+
+    assert any(
+        "structures first, second all match" in warning
+        and "'first' wins by authored order" in warning
+        for warning in warnings
+    )
+    assert any(
+        "simultaneously in-scope" in warning
+        and "first-c→c4" in warning
+        and "second-c→c3" in warning
+        for warning in warnings
+    )
 
 
 def test_tracker_handles_capture_castling_en_passant_and_promotion() -> None:

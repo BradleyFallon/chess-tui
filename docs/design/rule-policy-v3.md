@@ -137,11 +137,19 @@ SELECTED
 REJECTED
 ```
 
-Before selection, `available_when` is evaluated live. After every committed
-move, the runtime selects the first authored structure whose availability and
-selection conditions are both true. Selection is latched for the line and all
-other structures become rejected. A structure must not select in the initial
-position.
+Before selection, `available_when` is evaluated live. For every committed move,
+the runtime first records which structures are available in the pre-move
+position. It then commits the board, original-piece tracker, captures, last
+move, and lifecycle transition. In the resulting position it selects the first
+authored structure that was available before the move and whose
+`selected_when` is now true. Selection is latched for the line and all other
+structures become rejected. This same transition is used by normal play, exact
+fixes, accepted mismatch/frontier moves, replay, Back, and Restart. A structure
+must not select in the initial position.
+
+If multiple pre-move-available structures satisfy `selected_when` after one
+stored-branch move, authored order chooses the first. Validation reports the
+branch, candidates, and winner as a warning without changing behavior.
 
 A policy item without `structures` is global. Before selection, a scoped item is
 in scope when at least one listed structure is available. After selection, it
@@ -229,6 +237,15 @@ captured. These states are derived from replay and are not persisted.
 A piece may have at most one global assignment and at most one assignment for
 each structure. Multi-structure assignments are allowed, but assignments for
 the same piece may not overlap a structure.
+
+The global assignment is a fallback. If at least one structure-specific
+assignment for the same starting piece is currently in scope, the global
+assignment is suppressed regardless of its authored position. Authored order
+still chooses among simultaneously in-scope scoped assignments and among other
+pieces. When no scoped assignment for that piece is in scope, the global
+assignment participates again. Replay exposes the suppression reason, and
+validation warns when simultaneous scoped alternatives recommend different
+targets.
 
 ## Continuations
 

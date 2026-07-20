@@ -5,10 +5,11 @@
 > implementation and must not override v3 structure-scoped assignments or
 > authored-order semantics.
 >
-> The current piece-centered browser interaction, guided readiness editor,
-> review workflow, condition builder, and diagnostics disclosure are defined in
-> [rule-authoring-ui.md](rule-authoring-ui.md). The JSON-first editor described
-> below is historical and is no longer the primary web experience.
+> The current piece-centered browser interaction, multiple structure-scoped
+> assignment workflow, controlled/opponent distinction, guided readiness
+> editor, review workflow, condition builder, and diagnostics disclosure are
+> defined in [rule-authoring-ui.md](rule-authoring-ui.md). The JSON-first editor
+> described below is historical and is no longer the primary web experience.
 
 ## Starting-piece references
 

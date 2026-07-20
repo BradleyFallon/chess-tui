@@ -1,288 +1,196 @@
-export type ErrorCode =
-  | "INVALID_MOVE" | "FLOW_VALIDATION_ERROR" | "FLOW_PERSISTENCE_ERROR"
-  | "ENGINE_ERROR" | "SESSION_NOT_FOUND" | "INVALID_NAVIGATION" | "INVALID_REQUEST";
+export type PieceType = "pawn" | "knight" | "bishop" | "rook" | "queen" | "king";
 
-export interface ApiErrorItem { code: ErrorCode; message: string; details: Record<string, unknown>; }
+export type ConditionExpression =
+  | { moved: string }
+  | { unmoved: string }
+  | { captured: string }
+  | { at: { piece: string; square: string } }
+  | { occupied: string }
+  | { empty: string }
+  | { occupied_by: { square: string; color: "white" | "black"; type: PieceType } }
+  | { in_check: "white" | "black" }
+  | { last_move: { piece: string; to: string } }
+  | { attacked: string }
+  | { attacked_by: { target: string; piece: string } }
+  | { attacked_by: { target: string; type: PieceType } }
+  | { undefended: string }
+  | { under_defended: string }
+  | { attack_balance: { target: string; at_least: number } }
+  | { capturable: string }
+  | { all: ConditionExpression[] }
+  | { any: ConditionExpression[] }
+  | { not: ConditionExpression };
 
-export interface OpeningTagSnapshot {
-  recordId: number | null; eco: string; name: string;
+export interface ApiErrorItem {
+  code: "INVALID_MOVE" | "FLOW_VALIDATION_ERROR" | "FLOW_PERSISTENCE_ERROR" | "ENGINE_ERROR" | "SESSION_NOT_FOUND" | "INVALID_NAVIGATION" | "INVALID_REQUEST";
+  message: string;
+  details: Record<string, unknown>;
 }
 
-export interface FlowSnapshot {
-  name: string; version: number; path: string; side: "white" | "black";
-  openingTags: OpeningTagSnapshot[];
+export interface ActionAttemptDraft {
+  move?: string;
+  capture?: string;
+  captureType?: PieceType;
+}
+
+export interface DevelopmentDraft {
+  alias: string;
+  to: string;
+  requires: string[];
+  when: ConditionExpression | null;
+  why: string;
+}
+
+export interface InterruptDraft {
+  alias: string;
+  id: string | null;
+  requires: string[];
+  afterSan: string[] | null;
+  when: ConditionExpression | null;
+  required: boolean;
+  attempts: ActionAttemptDraft[];
+  why: string;
+}
+
+export interface MutationPreview {
+  valid: boolean;
+  errors: string[];
   warnings: string[];
-  policyModel: "deterministic-v3";
+  currentDecision: string | null;
+  previewDecision: string | null;
+  generatedToml: string | null;
 }
 
-export interface GameOverSnapshot { result: string; termination: string; winner: "white" | "black" | null; }
-export interface PositionSnapshot {
-  fen: string; historySan: string[]; turn: "white" | "black"; ply: number;
-  lastMoveUci: string | null; legalMovesUci: string[]; gameOver: GameOverSnapshot | null;
+export interface ConditionEvaluation {
+  value: boolean;
+  explanation: string;
+  details: Record<string, unknown>;
 }
 
-export type ConditionExpression = Record<string, unknown>;
-export interface ConditionSnapshot { expression: ConditionExpression; value: boolean; explanation: string; }
-
-export interface RuleRuntimeSnapshot {
-  kind: "rule"; section: "response" | "development" | "continuation";
-  id: string; order: number; structures: string[]; piece: string;
-  destination: string; moveUci: string | null; moveSan: string | null; legal: boolean;
-  lifecycle: "locked" | "unlocked" | "retired";
-  status: "locked" | "inactive" | "waiting" | "applicable" | "selected" | "retired" | "out-of-scope";
-  selected: boolean; shadowed: boolean; note: string | null;
-  unlockWhen: ConditionSnapshot | null; when: ConditionSnapshot | null;
-  expireWhen: ConditionSnapshot | null;
-  unlockedAtPly: number | null; retiredAtPly: number | null; reason: string;
-  title: string; triggerSummary: string; expirationSummary: string;
-  friendlyStatus: "not-triggered" | "available" | "recommended" | "blocked" | "completed";
+export interface ActionAttempt {
+  kind: "move" | "capture-attacker" | "capture-piece" | "capture-type";
+  value: string;
+  status: "not-evaluated" | "failed" | "resolved" | "ambiguous";
+  candidates: string[];
+  reason: string | null;
 }
 
-export type DevelopmentStatus =
-  | "inactive" | "waiting" | "applicable" | "selected" | "developed"
-  | "captured" | "out-of-scope";
-export interface DevelopmentRuleSnapshot {
-  id: string; target: string; order: number; structures: string[];
-  status: DevelopmentStatus; readyWhen: ConditionSnapshot | null;
-  note: string | null; reason: string;
-  readinessSummary: string;
-  friendlyStatus: "not-ready" | "ready" | "recommended" | "blocked" | "completed";
+export interface DevelopmentInstruction {
+  reference: string;
+  to: string;
+  requires: string[];
+  when: ConditionExpression | null;
+  why: string;
+  status: "not-ready" | "waiting-for-legality" | "available" | "selected" | "completed" | "captured";
+  explanation: string;
+  condition: ConditionEvaluation | null;
 }
-export interface RelatedRuleSnapshot {
-  id: string; role: "response" | "other"; title: string; piece: string;
-  target: string; moveSan: string | null; triggerSummary: string;
-  expirationSummary: string;
-  friendlyStatus: "not-triggered" | "available" | "recommended" | "blocked" | "completed";
-  runtimeStatus: string; note: string | null;
+
+export interface InterruptRule {
+  reference: string;
+  id: string;
+  requires: string[];
+  afterSan: string[] | null;
+  when: ConditionExpression | null;
+  required: boolean;
+  attempts: ActionAttempt[];
+  why: string;
+  status: "trigger-false" | "no-action" | "applicable" | "selected" | "completed" | "ambiguous" | "required-unhandled";
+  explanation: string;
+  trigger: ConditionEvaluation | null;
 }
-export interface ExactFixSummary {
-  id: string; afterSan: string[]; piece: string; target: string;
-  moveSan: string | null; reason: string | null;
-  friendlyStatus: "exact-fix-active" | "another-position";
+
+export interface Attack {
+  piece: string;
+  alias: string | null;
+  moveUci: string;
 }
-export interface StartingPieceSnapshot {
-  ref: string; originalPieceId: string; color: "white" | "black";
-  pieceType: "pawn" | "rook" | "knight" | "bishop" | "queen" | "king";
-  qualifier: string | null; label: string; startingSquare: string;
+
+export interface Defense {
+  piece: string;
+  alias: string | null;
+  moveUci: string;
+}
+
+export interface PieceRelationships {
+  attacks: Attack[];
+  attackers: Attack[];
+  defendersByAttacker: Array<{
+    attacker: string;
+    attackerAlias: string | null;
+    defenders: Defense[];
+  }>;
+  distinctDefenders: string[];
+  attackerCount: number;
+  defenderCount: number;
+  attackBalance: number;
+  attacked: boolean;
+  undefended: boolean;
+  underDefended: boolean;
+  kingPinned: boolean;
+  pinnedBy: string | null;
+}
+
+export interface PieceScript {
+  alias: string;
+  ref: string;
+  label: string;
   currentSquare: string | null;
-  state: "undeveloped" | "developed" | "captured-undeveloped" | "captured-developed";
-  firstMovedPly: number | null; capturedPly: number | null;
-  developmentRules: DevelopmentRuleSnapshot[];
-  relatedRules: RelatedRuleSnapshot[];
-  exactFixes: ExactFixSummary[];
+  mechanicalState: "undeveloped" | "developed" | "captured-undeveloped" | "captured-developed";
+  authorable: boolean;
+  development: DevelopmentInstruction | null;
+  interrupts: InterruptRule[];
+  relationships: PieceRelationships;
 }
 
-export interface OverrideRuntimeSnapshot {
-  kind: "exact-override"; id: string; afterSan: string[];
-  piece: string; destination: string; moveUci: string | null; moveSan: string | null;
-  matched: boolean; legal: boolean; selected: boolean; note: string | null; reason: string;
-  friendlyStatus: "exact-fix-active" | "another-position";
-  positionSummary: string; moveSummary: string;
-}
-
-export type PolicyItemSnapshot = RuleRuntimeSnapshot | OverrideRuntimeSnapshot;
-export interface StructureRuntimeSnapshot {
-  id: string; name: string;
-  status: "unavailable" | "available" | "selected" | "rejected";
-  availableWhen: ConditionSnapshot; selectedWhen: ConditionSnapshot;
-  selectedAtPly: number | null; note: string | null; reason: string;
-}
-export interface RuleGroupsSnapshot {
-  selected: PolicyItemSnapshot | null;
-  responses: RuleRuntimeSnapshot[]; development: RuleRuntimeSnapshot[];
-  continuations: RuleRuntimeSnapshot[]; overrides: OverrideRuntimeSnapshot[];
-  structures: StructureRuntimeSnapshot[];
-}
-
-export interface DecisionSnapshot {
-  status: "ready" | "frontier"; moveUci: string | null; moveSan: string | null;
-  source: "response" | "development" | "continuation" | "exact-override" | "frontier";
-  sourceId: string | null; note: string | null; trace: string[];
-  summary: string; reason: string;
-}
-
-export interface EngineReviewSnapshot {
-  status: "ready" | "engine-off" | "error"; quality: string | null; lossCp: number | null;
-  bestMoveUci: string | null; bestMoveSan: string | null;
-  evaluationBeforeCp: number | null; evaluationAfterCp: number | null;
-  mateBefore: number | null; mateAfter: number | null; errorMessage: string | null;
-}
-
-export interface AttemptSnapshot {
-  result: "correct" | "mismatch" | "frontier"; playedUci: string; playedSan: string;
-  expectedUci: string | null; expectedSan: string | null;
-  source: "response" | "development" | "continuation" | "exact-override" | "frontier";
-  sourceId: string | null;
-  note: string | null; trace: string[]; engineReview: EngineReviewSnapshot | null;
-  authoringPrefill: {
-    piece: string; target: string; pieceLabel: string;
-    suggestions: Array<{ label: string; expression: ConditionExpression }>;
-  };
-}
-
-export interface EvaluationSnapshot {
-  status: "ready" | "analyzing" | "engine-off" | "error" | "game-over";
-  perspective: "white"; centipawns: number | null; mateIn: number | null;
-  previousCentipawns: number | null; previousMateIn: number | null;
-  changeCentipawns: number | null; errorMessage: string | null;
-  analysis: AnalysisRunSnapshot | null;
-}
-
-export interface AnalysisRunSnapshot {
-  engineName: string; profileId: string; requestedDepth: number | null;
-  actualDepth: number | null; selectiveDepth: number | null;
-  nodes: number | null; nps: number | null; timeMs: number | null; lines: number;
-}
-export interface AnalysisProfileSnapshot {
-  id: string; label: string; depth: number; costLabel: string; costDescription: string;
-}
-export interface AnalysisSettingsSnapshot {
-  status: "off" | "configured" | "ready" | "error"; engineName: string | null;
-  selectedProfileId: string; profiles: AnalysisProfileSnapshot[];
-  candidateCount: number; billingNote: string;
-}
-
-export interface OpeningMatchSnapshot {
-  recordId: number; eco: string; name: string; family: string;
-  variation: string | null; lineDepth: number;
-}
-export interface BookContinuationSnapshot {
-  uci: string; san: string; openingNames: string[]; defenseNames: string[];
-}
-export type OpeningMoveSource =
-  | "book-and-policy" | "policy-only" | "exact-override" | "recorded-branch"
-  | "book" | "engine" | "manual" | "frontier";
-export interface OpeningContextSnapshot {
-  primaryMatch: OpeningMatchSnapshot | null;
-  currentMatches: OpeningMatchSnapshot[];
-  lastKnownMatch: OpeningMatchSnapshot | null;
-  entered: OpeningMatchSnapshot[]; maintained: OpeningMatchSnapshot[];
-  exited: OpeningMatchSnapshot[]; playedMoveInBook: boolean | null;
-  bookContinuations: BookContinuationSnapshot[]; reachableDefenses: string[];
-  moveSource: OpeningMoveSource | null; policyRuleId: string | null;
-  exactOverrideId: string | null; recordedReplyId: string | null;
-}
-export interface OpeningHistoryItemSnapshot {
-  ply: number; san: string; uci: string; positionKey: string;
-  context: OpeningContextSnapshot;
-}
-export interface OpeningContextAttachment {
-  kind: "opening-context"; entry: OpeningHistoryItemSnapshot | null;
-  context: OpeningContextSnapshot; presentation: "compact" | "transition" | "current";
-}
-
-export interface BookMoveSnapshot {
-  uci: string; san: string;
-  source: "opening-index" | "book-and-policy" | "policy" | "opponent-branch";
-  openingNames: string[]; defenseNames: string[];
-}
-export interface EngineMoveSnapshot {
-  uci: string; san: string; evaluationCp: number | null; mateIn: number | null;
-  principalVariation: string[];
-}
-export interface PositionAnalysisSnapshot {
-  bookMoves: BookMoveSnapshot[]; engineMoves: EngineMoveSnapshot[];
-  engine: AnalysisRunSnapshot | null;
-}
-export interface AvailableCommandSnapshot {
-  id: CommandId; slash: string; usage: string; description: string;
-  arguments: Array<{ name: string; description: string; required: boolean }>;
-}
-export interface PolicyReferenceSnapshot {
-  kind: "rule" | "exact-override"; id: string;
-  moveSan: string | null; note: string | null; reason: string;
-}
-export type ChatAttachment =
-  | OpeningContextAttachment
-  | { kind: "opening-list"; primaryMatch: OpeningMatchSnapshot | null; matches: OpeningMatchSnapshot[] }
-  | { kind: "defense-list"; reachable: string[]; entered: string[] }
-  | { kind: "book-details"; playedMoveInBook: boolean | null; continuations: BookContinuationSnapshot[] }
-  | { kind: "book-history"; entries: OpeningHistoryItemSnapshot[]; firstPolicyWithoutBookPly: number | null }
-  | { kind: "position-analysis"; analysis: PositionAnalysisSnapshot }
-  | { kind: "decision-explanation"; selected: PolicyReferenceSnapshot | null; waiting: PolicyReferenceSnapshot[]; applicableLater: PolicyReferenceSnapshot[]; unavailable: PolicyReferenceSnapshot[]; conditionReasons: string[]; provenance: string[] }
-  | { kind: "rule-details"; rule: PolicyItemSnapshot; provenance: string[] }
-  | { kind: "rule-list"; groups: RuleGroupsSnapshot }
-  | { kind: "decision-trace"; entries: string[]; provenance: "policy-trace" }
-  | { kind: "position-details"; fen: string; historySan: string[]; turn: "white" | "black"; ply: number; inCheck: boolean; lastMoveUci: string | null; legalMoves: Array<{ uci: string; san: string }>; gameOver: GameOverSnapshot | null }
-  | { kind: "command-list"; commands: AvailableCommandSnapshot[] }
-  | { kind: "validation-error"; code: string; details: Record<string, unknown> };
-export interface ChatMessageSnapshot {
-  id: string; sequence: number; role: "user" | "assistant" | "system" | "tool";
-  text: string; attachment: ChatAttachment | null;
-}
-export interface ActivitySnapshot {
-  id: number; sequence: number;
-  kind: "info" | "move" | "success" | "warning" | "commentary";
-  title: string; message: string;
-  attachment: OpeningContextAttachment | null;
-}
 export interface WorkspaceSnapshot {
-  sessionId: string; mode: "develop";
-  phase: "policy-ready" | "policy-result" | "opponent-ready" | "game-over";
-  flow: FlowSnapshot; position: PositionSnapshot; decision: DecisionSnapshot | null;
-  attempt: AttemptSnapshot | null; rules: RuleGroupsSnapshot;
-  startingPieces: StartingPieceSnapshot[];
-  namedConditions: Array<{ id: string; summary: string; expression: ConditionExpression }>;
-  opening: OpeningContextSnapshot; openingHistory: OpeningHistoryItemSnapshot[];
-  evaluation: EvaluationSnapshot;
-  analysisSettings: AnalysisSettingsSnapshot;
-  navigation: { canBack: boolean; canRestart: boolean }; activity: ActivitySnapshot[];
-  chat: ChatMessageSnapshot[]; availableCommands: AvailableCommandSnapshot[];
-  errors: ApiErrorItem[];
-}
-
-export type CommandId =
-  | "analyse_position" | "explain_decision" | "inspect_rule" | "list_rules"
-  | "trace_decision" | "inspect_position" | "inspect_opening" | "list_openings"
-  | "list_defenses" | "inspect_book" | "inspect_book_history"
-  | "play_move" | "next_opponent"
-  | "retry_policy" | "continue_policy" | "accept_attempt_as_override" | "go_back"
-  | "restart" | "hint_policy_move" | "list_commands";
-type SimpleCommandId = Exclude<CommandId, "play_move" | "inspect_rule">;
-export type TypedCommand =
-  | { command: SimpleCommandId; source: "ui" | "tool" }
-  | { command: "play_move"; source: "ui" | "tool"; notation: "san" | "uci"; move: string }
-  | { command: "inspect_rule"; source: "ui" | "tool"; ruleId: string };
-export interface ClientEffect { kind: "highlight-move"; uci: string; }
-export interface CommandResponse { workspace: WorkspaceSnapshot; effects: ClientEffect[]; }
-
-export interface RuleUpdate {
-  note: string | null; structures: string[];
-  move: { piece: string; to: string };
-  unlockWhen: ConditionExpression | null; when: ConditionExpression | null;
-  expireWhen: ConditionExpression | null;
-}
-
-export interface OverrideUpdate {
-  afterSan: string[]; note: string | null;
-  move: { piece: string; to: string };
-}
-
-export interface StructureUpdate {
-  name: string; note: string | null;
-  availableWhen: ConditionExpression;
-  selectedWhen: ConditionExpression;
-}
-
-export interface DevelopmentRuleDraft {
-  id: string | null; piece: string; target: string; structures: string[];
-  note: string | null; readyWhen: ConditionExpression | null;
-}
-export interface DevelopmentRuleValidation {
-  valid: boolean; ruleId: string; piece: string; target: string;
-  order: number; summary: string; readinessSummary: string;
-  currentDecision: string | null; previewDecision: string | null;
-  affectedOrder: string[]; conditionExpression: ConditionExpression | null;
-  warnings: string[]; errors: string[];
-}
-
-export interface RuleDraft {
-  id: string | null; piece: string; target: string; note: string | null;
-  trigger: ConditionExpression | null; expireWhen: ConditionExpression | null;
-}
-export interface RuleDraftValidation {
-  valid: boolean; ruleId: string; summary: string; triggerSummary: string;
-  expirationSummary: string; currentDecision: string | null;
-  previewDecision: string | null; affectedOrder: string[];
-  conditionExpression: ConditionExpression | null; warnings: string[]; errors: string[];
+  sessionId: string;
+  mode: "develop";
+  rulebook: {
+    name: string;
+    version: number;
+    path: string;
+    side: "white" | "black";
+    openingTags: Array<{ eco: string; name: string }>;
+    warnings: string[];
+  };
+  position: {
+    fen: string;
+    historySan: string[];
+    turn: "white" | "black";
+    legalMovesUci: string[];
+    lastMoveUci: string | null;
+    gameOver: string | null;
+  };
+  decision: {
+    status: "ready" | "frontier";
+    source: "interrupt" | "development" | "frontier";
+    moveUci: string | null;
+    moveSan: string | null;
+    instructionRef: string | null;
+    why: string | null;
+    frontier: {
+      reason: "development-complete" | "no-authored-legal-move" | "unhandled-required-rule" | "ambiguous-action";
+      explanation: string;
+    } | null;
+    trace: string[];
+  } | null;
+  pieceScripts: PieceScript[];
+  developmentOrder: string[];
+  interruptOrder: string[];
+  attempt: {
+    result: "correct" | "mismatch" | "frontier";
+    moveUci: string;
+    moveSan: string;
+    expectedUci: string | null;
+    expectedSan: string | null;
+  } | null;
+  navigation: { canBack: boolean; canRestart: boolean };
+  evaluation: {
+    status: "off" | "ready" | "error";
+    centipawns: number | null;
+    mateIn: number | null;
+    message: string | null;
+  };
+  errors: string[];
 }

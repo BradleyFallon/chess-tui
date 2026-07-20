@@ -445,10 +445,10 @@ class AuthorScreen(Screen[None]):
                 ),
                 checked_king=interaction.checked_king,
             ),
-            flipped=self.workspace.author.flow.side == "black",
+            flipped=self.workspace.author.rulebook.side == "black",
         )
         line = " ".join(self.history) if self.history else "Starting position"
-        self.header.update(f"{self.author.flow.name.upper()}    {line}")
+        self.header.update(f"{self.author.rulebook.name.upper()}    {line}")
         self._update_status()
         self._track_advantage()
 

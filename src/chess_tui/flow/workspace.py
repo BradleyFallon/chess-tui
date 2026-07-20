@@ -1,4 +1,4 @@
-"""Interactive coordinator for replaying and testing a deterministic v3 flow."""
+"""Interactive coordinator shared by the TUI and web Rulebook clients."""
 
 from __future__ import annotations
 
@@ -17,17 +17,15 @@ from ..opening.classification import (
     OpeningHistoryEntry,
     OpeningMoveProvenance,
 )
-from ..policy import MoveAction
+from ..policy.models import MoveAttempt, StartingPieceRef
 from ..policy.runtime import DecisionSource, PolicyDecision, PolicyRuntime
-from .author import AuthorBoardController, ConfirmedAuthorMove, FlowAuthor
+from .author import AuthorBoardController, ConfirmedAuthorMove, RulebookAuthor
 from .errors import FlowError, FlowValidationError
 from .models import (
-    AuthoredPolicyItem,
-    DevelopmentAssignment,
-    ExactOverride,
-    Flow,
+    DevelopmentInstruction,
+    InterruptRule,
     OpeningTag,
-    Structure,
+    Rulebook,
 )
 from .position import normalized_position_key
 
@@ -59,9 +57,9 @@ class FlowWorkspace:
         *,
         opening_classifier: OpeningClassifier | None = None,
     ) -> None:
-        self.author = FlowAuthor(flow_path)
-        self.runtime = PolicyRuntime(self.author.flow)
-        self.controller = AuthorBoardController(_start_board(self.author.flow))
+        self.author = RulebookAuthor(flow_path)
+        self.runtime = PolicyRuntime(self.author.rulebook)
+        self.controller = AuthorBoardController(_start_board(self.author.rulebook))
         self.opening_classifier = opening_classifier or OpeningClassifier.bundled()
         self.history: list[str] = []
         self.opening_history: list[OpeningHistoryEntry] = []
@@ -82,7 +80,7 @@ class FlowWorkspace:
 
     @property
     def controlled_color(self) -> chess.Color:
-        return chess.WHITE if self.author.flow.side == "white" else chess.BLACK
+        return chess.WHITE if self.author.rulebook.side == "white" else chess.BLACK
 
     @property
     def is_policy_turn(self) -> bool:
@@ -105,8 +103,8 @@ class FlowWorkspace:
         return self.begin_policy_turn()
 
     def restart_position(self) -> None:
-        self.runtime = PolicyRuntime(self.author.flow)
-        self.controller.reset(_start_board(self.author.flow))
+        self.runtime = PolicyRuntime(self.author.rulebook)
+        self.controller.reset(_start_board(self.author.rulebook))
         self.history.clear()
         self.opening_history.clear()
         self.attempt = None
@@ -162,11 +160,7 @@ class FlowWorkspace:
         history = self.attempt.history_before if self.attempt else tuple(self.history)
         self.author.reload()
         self._restore_history(history)
-        return (
-            self.begin_policy_turn()
-            if self.is_policy_turn and self.outcome is None
-            else None
-        )
+        return self.begin_policy_turn() if self.is_policy_turn and not self.outcome else None
 
     def begin_policy_turn(self) -> PolicyTurn:
         if self.outcome is not None:
@@ -198,9 +192,7 @@ class FlowWorkspace:
     def continue_with_policy_move(self) -> ConfirmedAuthorMove:
         attempt = self._require_attempt()
         if attempt.decision.move is None:
-            raise FlowValidationError(
-                "There is no selected policy move to continue with."
-            )
+            raise FlowValidationError("There is no selected Rulebook move.")
         self._restore_history(attempt.history_before)
         board_before = self.board.copy(stack=False)
         confirmed = self.controller.confirm_uci(attempt.decision.move.uci())
@@ -210,7 +202,7 @@ class FlowWorkspace:
     def complete_correct_move(self) -> None:
         attempt = self._require_attempt()
         if attempt.result is not AttemptResult.CORRECT:
-            raise FlowValidationError("The current policy attempt is not correct.")
+            raise FlowValidationError("The current Rulebook attempt is not correct.")
         self._commit_confirmed_policy_move(
             attempt.selected_move, attempt.decision, attempt.board_before
         )
@@ -242,71 +234,39 @@ class FlowWorkspace:
         assert confirmed is not None
         return confirmed
 
-    def update_rule(self, replacement: AuthoredPolicyItem) -> PolicyMoveAttempt | None:
-        return self._apply_candidate(self.author.candidate_with_rule(replacement))
-
-    def save_response_rule(
-        self, response: AuthoredPolicyItem
-    ) -> PolicyMoveAttempt | None:
-        if isinstance(response, DevelopmentAssignment):
-            raise FlowValidationError("A development assignment is not a response.")
-        if any(item.id == response.id for item in self.author.flow.responses):
-            candidate = self.author.candidate_with_rule(response)
-        else:
-            candidate = self.author.candidate_with_added_response(response)
-        return self._apply_candidate(candidate)
-
-    def delete_response_rule(self, rule_id: str) -> PolicyMoveAttempt | None:
-        return self._apply_candidate(self.author.candidate_without_response(rule_id))
-
-    def add_development_rule(
-        self, development_rule: DevelopmentAssignment
+    def save_development(
+        self, alias: str, development: DevelopmentInstruction | None
     ) -> PolicyMoveAttempt | None:
         return self._apply_candidate(
-            self.author.candidate_with_added_development_rule(development_rule)
+            self.author.candidate_with_development(alias, development)
         )
 
-    def save_development_rule(
-        self, development_rule: DevelopmentAssignment
+    def save_interrupt(
+        self, alias: str, rule: InterruptRule
     ) -> PolicyMoveAttempt | None:
-        if any(item.id == development_rule.id for item in self.author.flow.development):
-            candidate = self.author.candidate_with_rule(development_rule)
-        else:
-            candidate = self.author.candidate_with_added_development_rule(
-                development_rule
-            )
-        return self._apply_candidate(candidate)
-
-    def delete_development_rule(self, rule_id: str) -> PolicyMoveAttempt | None:
         return self._apply_candidate(
-            self.author.candidate_without_development_rule(rule_id)
+            self.author.candidate_with_interrupt(alias, rule)
         )
 
-    def reorder_development_rules(
-        self, ordered_rule_ids: tuple[str, ...]
+    def delete_interrupt(
+        self, alias: str, rule_id: str
     ) -> PolicyMoveAttempt | None:
         return self._apply_candidate(
-            self.author.candidate_with_development_order(ordered_rule_ids)
+            self.author.candidate_without_interrupt(alias, rule_id)
         )
 
-    def reorder_policy_section(
-        self, section: str, ordered_item_ids: tuple[str, ...]
+    def reorder_development(
+        self, aliases: tuple[str, ...]
     ) -> PolicyMoveAttempt | None:
         return self._apply_candidate(
-            self.author.candidate_with_policy_order(section, ordered_item_ids)
+            self.author.candidate_with_development_order(aliases)
         )
 
-    def update_override(self, replacement: ExactOverride) -> PolicyMoveAttempt | None:
-        return self._apply_candidate(self.author.candidate_with_override(replacement))
-
-    def update_structure(self, replacement: Structure) -> PolicyMoveAttempt | None:
-        return self._apply_candidate(self.author.candidate_with_structure(replacement))
-
-    def reorder_structures(
-        self, ordered_structure_ids: tuple[str, ...]
+    def reorder_interrupts(
+        self, references: tuple[str, ...]
     ) -> PolicyMoveAttempt | None:
         return self._apply_candidate(
-            self.author.candidate_with_structure_order(ordered_structure_ids)
+            self.author.candidate_with_interrupt_order(references)
         )
 
     def add_opening_tag(self, tag: OpeningTag) -> None:
@@ -315,58 +275,63 @@ class FlowWorkspace:
     def remove_opening_tag(self, tag: OpeningTag) -> None:
         self._apply_candidate(self.author.candidate_without_opening_tag(tag))
 
-    def accept_attempt_as_override(self) -> ExactOverride:
+    def accept_attempt_as_interrupt(self) -> InterruptRule:
         attempt = self._require_attempt()
         if attempt.result not in {AttemptResult.MISMATCH, AttemptResult.FRONTIER}:
             raise FlowValidationError(
-                "Only a mismatching or frontier move can be accepted as an exact fix."
+                "Only a mismatch or frontier move can be accepted here."
             )
         move = chess.Move.from_uci(attempt.selected_move.move.uci)
         if move.promotion is not None:
+            raise FlowValidationError("Promotion actions are deferred in v4.")
+        tracked = self.runtime.tracker.piece_id_at(move.from_square)
+        if tracked is None:
+            raise FlowValidationError("Attempted move has no original-piece identity.")
+        ref = StartingPieceRef.from_original(tracked)
+        try:
+            alias = self.author.rulebook.alias_by_ref[ref]
+        except KeyError as exc:
             raise FlowValidationError(
-                "Promotion moves cannot be authored because deterministic actions "
-                "do not encode promotion."
-            )
-        tracked_piece = next(
+                f"Attempted piece {ref} requires a Rulebook alias."
+            ) from exc
+        existing_reference = next(
             (
-                piece
-                for piece in self.runtime.tracker.pieces
-                if piece.current_square == move.from_square
+                reference
+                for reference, rule in self.author.rulebook.interrupt_by_ref.items()
+                if rule.after_san is not None
+                and normalized_position_key(attempt.board_before)
+                in self.runtime.exact_positions
+                and reference
+                in self.runtime.exact_positions[
+                    normalized_position_key(attempt.board_before)
+                ]
             ),
             None,
         )
-        if tracked_piece is None:
-            raise FlowValidationError(
-                "The attempted move does not belong to a tracked original piece."
-            )
-        position_key = normalized_position_key(attempt.board_before)
-        existing = self.runtime.overrides_by_position.get(position_key)
-        override = ExactOverride(
-            id=(
-                existing.id
-                if existing is not None
-                else self._available_override_id(
-                    move.uci(), len(attempt.history_before)
-                )
-            ),
+        rule_id = (
+            existing_reference.split(".", 1)[1]
+            if existing_reference is not None
+            and existing_reference.startswith(f"{alias}.")
+            else self._available_interrupt_id(alias, move.uci(), len(attempt.history_before))
+        )
+        rule = InterruptRule(
+            piece=ref,
+            id=rule_id,
+            requires=(),
             after_san=attempt.history_before,
-            move=MoveAction(tracked_piece.id, chess.square_name(move.to_square)),
-            note=f"Accepted {attempt.selected_move.san} in this exact position.",
+            when=None,
+            required=True,
+            attempts=(MoveAttempt(chess.square_name(move.to_square)),),
+            why=f"Accepted {attempt.selected_move.san} in this exact position.",
         )
-        candidate = (
-            self.author.candidate_with_override(override)
-            if existing is not None
-            else self.author.candidate_with_added_override(override)
-        )
-        self._apply_candidate(candidate)
-        return override
+        self._apply_candidate(self.author.candidate_with_interrupt(alias, rule))
+        return rule
 
-    def _apply_candidate(self, candidate: Flow) -> PolicyMoveAttempt | None:
+    def _apply_candidate(self, candidate: Rulebook) -> PolicyMoveAttempt | None:
         attempt_uci = self.attempt.selected_move.move.uci if self.attempt else None
         history = self.attempt.history_before if self.attempt else tuple(self.history)
-        # Validate serialization and deterministic replay before touching disk or live state.
         source = self.author.store.encode(candidate)
-        reparsed = self.author.store.decode(source, context="edited flow")
+        reparsed = self.author.store.decode(source, context="edited Rulebook")
         PolicyRuntime.replay(reparsed, history)
         self.author.save_candidate(reparsed)
         self._restore_history(history)
@@ -379,13 +344,13 @@ class FlowWorkspace:
             self.complete_correct_move()
         return refreshed
 
-    def _available_override_id(self, uci: str, ply: int) -> str:
-        stem = f"allow-{uci}-ply-{ply}"
-        existing = {item.id for item in self.author.flow.overrides}
-        if stem not in existing:
+    def _available_interrupt_id(self, alias: str, uci: str, ply: int) -> str:
+        stem = f"accept-{uci}-ply-{ply}"
+        ids = {item.id for item in self.author.rulebook.piece_by_alias[alias].rules}
+        if stem not in ids:
             return stem
         suffix = 2
-        while f"{stem}-{suffix}" in existing:
+        while f"{stem}-{suffix}" in ids:
             suffix += 1
         return f"{stem}-{suffix}"
 
@@ -401,12 +366,13 @@ class FlowWorkspace:
         if confirmed.color != self.controlled_color:
             raise FlowValidationError("Expected a move by the controlled side.")
         expected = turn.decision.move
-        if expected is None:
-            result = AttemptResult.FRONTIER
-        elif expected.uci() == confirmed.move.uci:
-            result = AttemptResult.CORRECT
-        else:
-            result = AttemptResult.MISMATCH
+        result = (
+            AttemptResult.FRONTIER
+            if expected is None
+            else AttemptResult.CORRECT
+            if expected.uci() == confirmed.move.uci
+            else AttemptResult.MISMATCH
+        )
         self.attempt = PolicyMoveAttempt(
             board_before, history_before, confirmed, turn.decision, result
         )
@@ -416,7 +382,7 @@ class FlowWorkspace:
         self,
         commit: Callable[[], ConfirmedAuthorMove | None],
         *,
-        move_source: OpeningMoveProvenance = OpeningMoveProvenance.MANUAL,
+        move_source: OpeningMoveProvenance,
     ) -> ConfirmedAuthorMove | None:
         if self.is_policy_turn:
             raise FlowValidationError("Expected an opponent move.")
@@ -428,14 +394,12 @@ class FlowWorkspace:
         if confirmed.color == self.controlled_color:
             raise FlowValidationError("Expected a move by the opponent.")
         try:
-            self.author.record_opponent_reply(
-                board_before, history_before, confirmed.san
-            )
+            self.author.record_opponent_reply(board_before, history_before, confirmed.san)
         except FlowError:
             self.controller.reset(board_before)
             raise
         move = chess.Move.from_uci(confirmed.move.uci)
-        self.runtime.flow = self.author.flow
+        self.runtime.rulebook = self.author.rulebook
         self.runtime.commit_move(
             board_before, move, self.board, ply=len(self.history) + 1
         )
@@ -461,19 +425,21 @@ class FlowWorkspace:
         board_before: chess.Board,
     ) -> None:
         move = chess.Move.from_uci(confirmed.move.uci)
-        selected_rule_id = (
-            decision.source_id if decision.source in _POLICY_ITEM_SOURCES else None
-        )
         self.runtime.commit_move(
             board_before,
             move,
             self.board,
-            selected_rule_id=selected_rule_id,
+            selected_rule_id=decision.source_id,
             ply=len(self.history) + 1,
         )
         self.history.append(confirmed.san)
         in_book = self.opening_classifier.compare_move_to_book(board_before, move)
-        if decision.source in _POLICY_ITEM_SOURCES:
+        exact = decision.source_id is not None and self._is_exact(decision.source_id)
+        if exact:
+            move_source = OpeningMoveProvenance.EXACT_OVERRIDE
+            policy_rule_id = None
+            exact_override_id = decision.source_id
+        elif decision.source in {DecisionSource.INTERRUPT, DecisionSource.DEVELOPMENT}:
             move_source = (
                 OpeningMoveProvenance.BOOK_AND_POLICY
                 if in_book
@@ -481,10 +447,6 @@ class FlowWorkspace:
             )
             policy_rule_id = decision.source_id
             exact_override_id = None
-        elif decision.source is DecisionSource.EXACT_OVERRIDE:
-            move_source = OpeningMoveProvenance.EXACT_OVERRIDE
-            policy_rule_id = None
-            exact_override_id = decision.source_id
         else:
             move_source = OpeningMoveProvenance.FRONTIER
             policy_rule_id = None
@@ -501,7 +463,7 @@ class FlowWorkspace:
         self.policy_turn = None
 
     def _restore_history(self, history: tuple[str, ...]) -> None:
-        self.runtime, board = PolicyRuntime.replay(self.author.flow, history)
+        self.runtime, board = PolicyRuntime.replay(self.author.rulebook, history)
         last_move = board.peek().uci() if board.move_stack else None
         self.controller.reset(board)
         if last_move is not None:
@@ -548,8 +510,8 @@ class FlowWorkspace:
         self.explored_opening_nodes[tuple(self.history)] = entry
 
     def _rebuild_opening_history(self, history: tuple[str, ...]) -> None:
-        board = _start_board(self.author.flow)
-        runtime = PolicyRuntime(self.author.flow)
+        board = _start_board(self.author.rulebook)
+        runtime = PolicyRuntime(self.author.rulebook)
         rebuilt: list[OpeningHistoryEntry] = []
         previous = self.opening_classifier.initial_context(board)
         prefix: list[str] = []
@@ -562,21 +524,22 @@ class FlowWorkspace:
             prefix.append(san)
             path = tuple(prefix)
             recorded_reply_id: str | None = None
-            if decision is not None and decision.source in _POLICY_ITEM_SOURCES:
-                source = (
-                    OpeningMoveProvenance.BOOK_AND_POLICY
-                    if in_book
-                    else OpeningMoveProvenance.POLICY_ONLY
+            if decision is not None and decision.move == move:
+                exact = decision.source_id is not None and self._is_exact(
+                    decision.source_id
                 )
-                policy_rule_id = decision.source_id
-                exact_override_id = None
-            elif (
-                decision is not None
-                and decision.source is DecisionSource.EXACT_OVERRIDE
-            ):
-                source = OpeningMoveProvenance.EXACT_OVERRIDE
-                policy_rule_id = None
-                exact_override_id = decision.source_id
+                if exact:
+                    source = OpeningMoveProvenance.EXACT_OVERRIDE
+                    policy_rule_id = None
+                    exact_override_id = decision.source_id
+                else:
+                    source = (
+                        OpeningMoveProvenance.BOOK_AND_POLICY
+                        if in_book
+                        else OpeningMoveProvenance.POLICY_ONLY
+                    )
+                    policy_rule_id = decision.source_id
+                    exact_override_id = None
             elif controlled:
                 source = OpeningMoveProvenance.FRONTIER
                 policy_rule_id = None
@@ -620,7 +583,7 @@ class FlowWorkspace:
                 board,
                 selected_rule_id=(
                     decision.source_id
-                    if decision is not None and decision.source in _POLICY_ITEM_SOURCES
+                    if decision is not None and decision.move == move
                     else None
                 ),
                 ply=ply,
@@ -634,11 +597,15 @@ class FlowWorkspace:
         return next(
             (
                 reply.id
-                for reply in self.author.flow.opponent_replies
+                for reply in self.author.rulebook.opponent_replies
                 if reply.after_san == history_before and reply.move_san == move_san
             ),
             None,
         )
+
+    def _is_exact(self, reference: str) -> bool:
+        rule = self.author.rulebook.interrupt_by_ref.get(reference)
+        return rule is not None and rule.after_san is not None
 
     def _committed_board(self) -> chess.Board:
         return self.attempt.board_before if self.attempt is not None else self.board
@@ -649,14 +616,9 @@ class FlowWorkspace:
         return self.attempt
 
 
-def _start_board(flow: Flow) -> chess.Board:
+def _start_board(rulebook: Rulebook) -> chess.Board:
     return (
-        chess.Board() if flow.start_fen == "startpos" else chess.Board(flow.start_fen)
+        chess.Board()
+        if rulebook.start_fen == "startpos"
+        else chess.Board(rulebook.start_fen)
     )
-
-
-_POLICY_ITEM_SOURCES = {
-    DecisionSource.RESPONSE,
-    DecisionSource.DEVELOPMENT,
-    DecisionSource.CONTINUATION,
-}

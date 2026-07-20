@@ -1,15 +1,13 @@
-"""Immutable persisted models for deterministic version 3 flows."""
+"""Immutable persisted models for Opening Rulebook version 4."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
-from ..policy.models import Condition, MoveAction, StartingPieceRef
+from ..policy.models import ActionAttempt, Condition, StartingPieceRef
 
 FlowSide: TypeAlias = Literal["white", "black"]
-MoveRuleSection: TypeAlias = Literal["response", "continuation"]
-PolicySection: TypeAlias = Literal["response", "development", "continuation"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,54 +17,32 @@ class OpeningTag:
 
 
 @dataclass(frozen=True, slots=True)
-class NamedCondition:
-    id: str
-    when: Condition
-
-
-@dataclass(frozen=True, slots=True)
-class Structure:
-    id: str
-    name: str
-    available_when: Condition
-    selected_when: Condition
-    note: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class MoveRule:
-    id: str
-    move: MoveAction
-    structures: tuple[str, ...] = ()
-    unlock_when: Condition | None = None
-    when: Condition | None = None
-    expire_when: Condition | None = None
-    note: str | None = None
-
-
-@dataclass(frozen=True, slots=True)
-class DevelopmentAssignment:
-    id: str
+class DevelopmentInstruction:
     piece: StartingPieceRef
-    target: str
-    structures: tuple[str, ...] = ()
-    ready_when: Condition | None = None
-    note: str | None = None
-
-    @property
-    def move(self) -> MoveAction:
-        return MoveAction(self.piece.original_piece_id, self.target)
-
-
-AuthoredPolicyItem: TypeAlias = MoveRule | DevelopmentAssignment
+    to_square: str
+    requires: tuple[str, ...]
+    when: Condition | None
+    why: str
 
 
 @dataclass(frozen=True, slots=True)
-class ExactOverride:
+class InterruptRule:
+    piece: StartingPieceRef
     id: str
-    after_san: tuple[str, ...]
-    move: MoveAction
-    note: str | None = None
+    requires: tuple[str, ...]
+    after_san: tuple[str, ...] | None
+    when: Condition | None
+    required: bool
+    attempts: tuple[ActionAttempt, ...]
+    why: str
+
+
+@dataclass(frozen=True, slots=True)
+class PieceScript:
+    id: str
+    ref: StartingPieceRef
+    development: DevelopmentInstruction | None
+    rules: tuple[InterruptRule, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,29 +54,38 @@ class OpponentReply:
 
 
 @dataclass(frozen=True, slots=True)
-class Flow:
+class Rulebook:
     version: int
     name: str
     start_fen: str
     side: FlowSide
+    development_order: tuple[str, ...]
+    interrupt_order: tuple[str, ...]
+    pieces: tuple[PieceScript, ...]
     opening_tags: tuple[OpeningTag, ...] = ()
-    conditions: tuple[NamedCondition, ...] = ()
-    structures: tuple[Structure, ...] = ()
-    responses: tuple[MoveRule, ...] = ()
-    development: tuple[DevelopmentAssignment, ...] = ()
-    continuations: tuple[MoveRule, ...] = ()
-    overrides: tuple[ExactOverride, ...] = ()
     opponent_replies: tuple[OpponentReply, ...] = ()
 
     @property
-    def policy_items(self) -> tuple[AuthoredPolicyItem, ...]:
-        return (*self.responses, *self.development, *self.continuations)
+    def piece_by_alias(self) -> dict[str, PieceScript]:
+        return {piece.id: piece for piece in self.pieces}
 
-    def section_for(self, item_id: str) -> PolicySection:
-        if any(item.id == item_id for item in self.responses):
-            return "response"
-        if any(item.id == item_id for item in self.development):
-            return "development"
-        if any(item.id == item_id for item in self.continuations):
-            return "continuation"
-        raise KeyError(item_id)
+    @property
+    def alias_by_ref(self) -> dict[StartingPieceRef, str]:
+        return {piece.ref: piece.id for piece in self.pieces}
+
+    @property
+    def interrupt_by_ref(self) -> dict[str, InterruptRule]:
+        return {
+            f"{piece.id}.{rule.id}": rule
+            for piece in self.pieces
+            for rule in piece.rules
+        }
+
+    def instruction(self, reference: str) -> DevelopmentInstruction | InterruptRule:
+        alias, separator, item_id = reference.partition(".")
+        if not separator:
+            raise KeyError(reference)
+        piece = self.piece_by_alias[alias]
+        if item_id == "develop" and piece.development is not None:
+            return piece.development
+        return next(rule for rule in piece.rules if rule.id == item_id)

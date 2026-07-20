@@ -5,7 +5,7 @@ import { BoardPanel } from "../components/BoardPanel";
 import { EvaluationBar } from "../components/EvaluationBar";
 import { PieceAuthoringPanel } from "../components/PieceAuthoringPanel";
 import { StatusFeed } from "../components/StatusFeed";
-import type { RuleDraft } from "../types/workspace";
+import type { ConditionExpression, RuleDraft } from "../types/workspace";
 import { useWorkspace } from "./WorkspaceContext";
 
 const AUTO_RESPOND_KEY = "chess-flow-development-auto-respond";
@@ -22,14 +22,22 @@ export function DevelopPage() {
     executeCommand,
     validateRuleDraft,
     applyRuleDraft,
-    deleteRule,
-    validateOverride,
-    updateOverride,
+    deleteMoveRule,
     validateDevelopmentRule,
     applyDevelopmentRule,
     deleteDevelopmentRule,
     reorderDevelopmentRules,
     reorderPolicySection,
+    validateStructureDraft,
+    applyStructureDraft,
+    deleteStructure,
+    reorderStructures,
+    validateNamedCondition,
+    applyNamedCondition,
+    deleteNamedCondition,
+    validateExactFix,
+    applyExactFix,
+    deleteExactFix,
     addOpeningTag,
     removeOpeningTag,
     updateAnalysisSettings,
@@ -39,9 +47,13 @@ export function DevelopPage() {
   );
   const autoRespondedPosition = useRef<string | null>(null);
   const [selectedPieceRef, setSelectedPieceRef] = useState<string | null>(null);
+  const [selectedAssignmentId, setSelectedAssignmentId] = useState<string | null>(null);
   const [targetPicking, setTargetPicking] = useState(false);
   const [pickedTarget, setPickedTarget] = useState<string | null>(null);
   const [responsePrefill, setResponsePrefill] = useState<RuleDraft | null>(null);
+  const [responseSuggestions, setResponseSuggestions] = useState<
+    Array<{ label: string; expression: ConditionExpression }>
+  >([]);
 
   useEffect(() => {
     localStorage.setItem(AUTO_RESPOND_KEY, String(autoRespond));
@@ -152,10 +164,16 @@ export function DevelopPage() {
           key={`${selectedPiece?.ref ?? "no-piece"}:${responsePrefill ? "prefill" : "idle"}`}
           workspace={workspace}
           piece={selectedPiece}
+          selectedAssignmentId={selectedAssignmentId}
           pending={pending}
           pickedTarget={pickedTarget}
           responsePrefill={responsePrefill}
-          onConsumeResponsePrefill={() => setResponsePrefill(null)}
+          responseSuggestions={responseSuggestions}
+          onConsumeResponsePrefill={() => {
+            setResponsePrefill(null);
+            setResponseSuggestions([]);
+          }}
+          onSelectAssignment={setSelectedAssignmentId}
           onBeginTargetPick={() => {
             setPickedTarget(null);
             setTargetPicking(true);
@@ -170,10 +188,18 @@ export function DevelopPage() {
           onReorderDevelopment={reorderDevelopmentRules}
           onValidateRule={validateRuleDraft}
           onApplyRule={applyRuleDraft}
-          onDeleteRule={deleteRule}
-          onReorderResponses={(ids) => reorderPolicySection("response", ids)}
-          onValidateOverride={validateOverride}
-          onUpdateOverride={updateOverride}
+          onDeleteMoveRule={deleteMoveRule}
+          onReorderSection={(section, ids) => reorderPolicySection(section, ids)}
+          onValidateExactFix={validateExactFix}
+          onApplyExactFix={applyExactFix}
+          onDeleteExactFix={deleteExactFix}
+          onValidateStructure={validateStructureDraft}
+          onApplyStructure={applyStructureDraft}
+          onDeleteStructure={deleteStructure}
+          onReorderStructures={reorderStructures}
+          onValidateNamedCondition={validateNamedCondition}
+          onApplyNamedCondition={applyNamedCondition}
+          onDeleteNamedCondition={deleteNamedCondition}
           onInspectPiece={(pieceRef) => setSelectedPieceRef(pieceRef)}
           onExplain={() => void executeCommand({ command: "explain_decision", source: "ui" })}
         />
@@ -188,6 +214,7 @@ export function DevelopPage() {
             selectedPieceRef={selectedPieceRef}
             onInspectPiece={(pieceRef) => {
               setSelectedPieceRef(pieceRef);
+              setSelectedAssignmentId(null);
               setTargetPicking(false);
               setPickedTarget(null);
             }}
@@ -217,12 +244,16 @@ export function DevelopPage() {
               const prefill = workspace.attempt?.authoringPrefill;
               if (!prefill) return;
               setSelectedPieceRef(prefill.piece);
+              setResponseSuggestions(prefill.suggestions);
               setResponsePrefill({
                 id: null,
+                section: "response",
                 piece: prefill.piece,
                 target: prefill.target,
+                structures: [],
                 note: null,
-                trigger: prefill.suggestions[0]?.expression ?? { attacked: prefill.piece },
+                unlockWhen: null,
+                when: null,
                 expireWhen: null,
               });
             }}

@@ -73,12 +73,17 @@ export function PolicyDetailsDrawer({
           <button ref={closeRef} type="button" onClick={onClose}>Close policy details</button>
         </div>
         <DiagnosticGroup title="Selected item" items={workspace.rules.selected ? [workspace.rules.selected] : []} />
-        <DiagnosticGroup title="Available items" items={items.filter((item) => item.kind === "rule" && item.friendlyStatus === "available")} />
-        <DiagnosticGroup title="Blocked items" items={items.filter((item) => item.kind === "rule" && item.friendlyStatus === "blocked")} />
-        <DiagnosticGroup title="Not triggered" items={items.filter((item) => item.kind === "rule" && item.friendlyStatus === "not-triggered")} />
+        <details className="diagnostic-group"><summary>Structures <span>{workspace.rules.structures.length}</span></summary>{workspace.rules.structures.map((item) => <section className="diagnostic-item" key={item.id}><strong>{item.id} · {item.name}</strong><dl><dt>Authored order</dt><dd>{item.order}</dd><dt>Runtime status</dt><dd>{item.status}</dd><dt>Reason</dt><dd>{item.reason}</dd><dt>Policy dependencies</dt><dd>{item.affectedPolicyItems.join(", ") || "None"}</dd></dl><pre><code>{JSON.stringify({ availableWhen: item.availableWhen.expression, selectedWhen: item.selectedWhen.expression }, null, 2)}</code></pre></section>)}</details>
+        <DiagnosticGroup title="Responses" items={workspace.rules.responses} />
+        <DiagnosticGroup title="Development" items={workspace.rules.development} />
+        <DiagnosticGroup title="Continuations" items={workspace.rules.continuations} />
         <DiagnosticGroup title="Completed" items={items.filter((item) => item.kind === "rule" && item.friendlyStatus === "completed")} />
+        <DiagnosticGroup title="Waiting / blocked" items={items.filter((item) => item.kind === "rule" && item.status === "waiting")} />
+        <DiagnosticGroup title="Out of scope" items={items.filter((item) => item.kind === "rule" && item.status === "out-of-scope")} />
         <DiagnosticGroup title="Exact fixes" items={workspace.rules.overrides} />
         <details className="diagnostic-group"><summary>Decision trace <span>{workspace.decision?.trace.length ?? 0}</span></summary><ol>{workspace.decision?.trace.map((line) => <li key={line}>{line}</li>)}</ol></details>
+        <details className="diagnostic-group"><summary>Flow warnings <span>{workspace.flow.warnings.length}</span></summary>{workspace.flow.warnings.length ? <ul>{workspace.flow.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul> : <p>None.</p>}</details>
+        <details className="diagnostic-group"><summary>Named conditions <span>{workspace.namedConditions.length}</span></summary>{workspace.namedConditions.map((condition) => <section className="diagnostic-item" key={condition.id}><strong>{condition.id}</strong><p>{condition.summary}</p><p>References: {condition.references.join(", ") || "None"}</p><pre><code>{JSON.stringify(condition.expression, null, 2)}</code></pre></section>)}</details>
         <details className="diagnostic-group"><summary>Flow TOML</summary>{sourceError && <p role="alert">{sourceError}</p>}{source ? <pre aria-label="Flow TOML source"><code>{source}</code></pre> : <p>Loading source…</p>}</details>
       </aside>
     </div>

@@ -1,12 +1,14 @@
 # Chess TUI
 
 In Web Development Mode, click any board piece to inspect its original
-starting-piece identity and authored behavior. The left panel centers normal
-development, special responses, exact fixes, and a compact current decision.
-Guided editors and a visual condition builder keep raw JSON and runtime
-lifecycle detail in the advanced Policy details drawer. Every change is
-validated, reviewed, saved atomically, and replayed through the deterministic
-Python policy runtime.
+starting-piece identity. Controlled pieces expose complete deterministic-v3
+authoring for development assignments, responses, continuations, and exact
+fixes; opponent pieces are read-only condition references. Plans/structures,
+named conditions, and authored ordering are managed in the same panel. Guided
+editors and a complete visual condition builder keep raw expressions and
+runtime lifecycle detail in the advanced Policy details drawer. Every change
+is validated, reviewed, saved atomically, and replayed through the
+deterministic Python policy runtime.
 
 Authored piece references use readable identifiers such as
 `piece:white:pawn:d`, `piece:white:bishop:queenside`, and
@@ -80,12 +82,17 @@ Quick, Analysis, or Deep local search at fixed depths 10, 15, 20, or 26.
 Current-position and candidate
 scores identify the UCI engine and report actual depth, elapsed time, and nodes
 when supplied by the engine. Local Stockfish has no API or per-analysis fee;
-deeper and multi-line searches use more local CPU time. Guided development,
-response, and exact-fix editors use canonical starting-piece references and one
-structured condition AST. The complete flow is preview-validated before review,
-then validated again, saved atomically, and replayed on Apply. Existing
-structure scopes are preserved, but structure and continuation authoring are
-outside this UI batch.
+deeper and multi-line searches use more local CPU time.
+
+The browser provides complete deterministic-v3 authoring for named conditions,
+plans/structures, special responses, multiple structure-scoped development
+assignments, continuations, exact fixes, and authored ordering. Controlled
+pieces expose move authoring; opponent pieces are read-only references for the
+condition builder. Every editor uses canonical starting-piece references and
+the same visual condition AST, including distinct `unmoved`, `captured`, and
+`last_move` operators. Drafts validate without persistence, show an impact
+review, then revalidate, save atomically, replay, and return a complete snapshot
+on Apply.
 The right-side timeline keeps application activity separate from user/assistant
 conversation while displaying both in deterministic sequence order. Python
 publishes the commands available in each snapshot and handles SAN, `/analyse`,

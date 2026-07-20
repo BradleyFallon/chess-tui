@@ -181,11 +181,16 @@ RETIRED
 
 * Structures are mutually exclusive on a line.
 * Availability is live until selection.
-* After each committed move, the first authored available structure whose `selected_when` is true is selected permanently.
+* Before a move is committed, preserve the structures that are available.
+* After the move, select permanently the first authored structure that was
+  available before the move and whose `selected_when` is true afterward.
 * All other structures become rejected.
 * Global policy items omit `structures`.
 * Before selection, a scoped item participates when at least one listed structure is available.
 * After selection, it participates only when the selected structure is listed.
+* For one starting piece, any currently in-scope structure-specific
+  development assignment suppresses its global assignment. The global
+  assignment is a fallback only.
 
 ### Resolution order
 
@@ -318,14 +323,19 @@ It may expose:
 Development Mode should support experimental play followed by turning an observed move into a deterministic rule.
 
 The primary web authoring surface is piece-centered. Use chess-facing terms
-such as Normal development, Special responses, Exact fixes, Recommended now,
-Ready, Not ready, Blocked, and Completed. Keep authored IDs, lifecycle,
-conditions, trace, and TOML in the advanced Policy details drawer.
+such as Development assignments, Plans and structures, Special responses,
+Later plans, Exact fixes, Recommended now, Ready, Not ready, Blocked, and
+Completed. Controlled pieces expose authoring actions; opponent pieces are
+read-only but remain available in condition selectors. Keep authored IDs,
+lifecycle, exact conditions, normalized position keys, trace, and TOML in the
+advanced Policy details drawer.
 
 Focused edits follow `Edit -> Validate -> Review -> Apply`. Validation must not
 persist. Apply revalidates, saves atomically, replays the active line, and
 returns a complete snapshot. The visual condition builder and advanced source
-must edit one shared condition AST.
+must edit one shared condition AST covering every v3 operator. In particular,
+`unmoved` is distinct from `not moved` because captured-undeveloped pieces are
+not `unmoved`.
 
 Mismatch and frontier attempts both support Accept in this position through
 `accept_attempt_as_override` and `/accept-here`. `/add-rule` is unsupported.

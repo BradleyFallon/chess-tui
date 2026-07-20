@@ -2,7 +2,7 @@ import type { CommandResponse, ClientEffect, RuleRuntimeSnapshot, WorkspaceSnaps
 
 export function ruleFixture(overrides: Partial<RuleRuntimeSnapshot> = {}): RuleRuntimeSnapshot {
   return {
-    kind: "rule", section: "development", id: "develop-d-pawn", order: 1, structures: [],
+    kind: "rule", section: "development", id: "develop-d-pawn", order: 1, structures: [], structureNames: [],
     piece: "piece:white:pawn:d", destination: "d4", moveUci: "d2d4", moveSan: "d4",
     legal: true, lifecycle: "unlocked", status: "selected", selected: true,
     shadowed: false, note: "Control the center.", unlockWhen: null, when: null,
@@ -49,9 +49,10 @@ export function workspaceFixture(overrides: Partial<WorkspaceSnapshot> = {}): Wo
         ref: "piece:white:pawn:d", originalPieceId: "white:d2", color: "white",
         pieceType: "pawn", qualifier: "d", label: "White d-pawn",
         startingSquare: "d2", currentSquare: "d2", state: "undeveloped",
-        firstMovedPly: null, capturedPly: null,
+        firstMovedPly: null, capturedPly: null, authorable: true,
         developmentRules: [{
-          id: "develop-d-pawn", target: "d4", order: 1, structures: [],
+          id: "develop-d-pawn", target: "d4", order: 1, structures: [], structureNames: [],
+          scopeSummary: "All structures",
           status: "selected", readyWhen: null, note: "Control the center.",
           reason: "First applicable assignment in development order.",
           readinessSummary: "Ready immediately", friendlyStatus: "recommended",
@@ -62,14 +63,22 @@ export function workspaceFixture(overrides: Partial<WorkspaceSnapshot> = {}): Wo
         ref: "piece:white:bishop:queenside", originalPieceId: "white:c1", color: "white",
         pieceType: "bishop", qualifier: "queenside", label: "White queenside bishop",
         startingSquare: "c1", currentSquare: "c1", state: "undeveloped",
-        firstMovedPly: null, capturedPly: null,
+        firstMovedPly: null, capturedPly: null, authorable: true,
         developmentRules: [{
-          id: "develop-dark-bishop", target: "f4", order: 2, structures: [],
+          id: "develop-dark-bishop", target: "f4", order: 2, structures: [], structureNames: [],
+          scopeSummary: "All structures",
           status: "inactive", readyWhen: null, note: "Develop outside the chain.",
           reason: "White d-pawn has not moved.",
           readinessSummary: "White d-pawn has moved", friendlyStatus: "not-ready",
         }],
         relatedRules: [], exactFixes: [],
+      },
+      {
+        ref: "piece:black:bishop:queenside", originalPieceId: "black:c8", color: "black",
+        pieceType: "bishop", qualifier: "queenside", label: "Black queenside bishop",
+        startingSquare: "c8", currentSquare: "c8", state: "undeveloped",
+        firstMovedPly: null, capturedPly: null, authorable: false,
+        developmentRules: [], relatedRules: [], exactFixes: [],
       },
     ],
     namedConditions: [],

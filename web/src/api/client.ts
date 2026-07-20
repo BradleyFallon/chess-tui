@@ -1,13 +1,12 @@
-import type { ApiErrorItem, CommandResponse, DevelopmentRuleDraft, DevelopmentRuleValidation, OverrideUpdate, RuleDraft, RuleDraftValidation, RuleUpdate, StructureUpdate, TypedCommand, WorkspaceSnapshot } from "../types/workspace";
+import type {
+  ApiErrorItem,
+  DevelopmentDraft,
+  InterruptDraft,
+  MutationPreview,
+  WorkspaceSnapshot,
+} from "../types/workspace";
 
-interface ErrorEnvelope {
-  error: ApiErrorItem;
-}
-
-export interface FlowSourceResponse {
-  path: string;
-  content: string;
-}
+interface ErrorEnvelope { error: ApiErrorItem }
 
 export class ApiError extends Error {
   readonly code: ApiErrorItem["code"];
@@ -28,119 +27,59 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   try {
     response = await fetch(path, {
       ...init,
-      headers: {
-        "Content-Type": "application/json",
-        ...init?.headers,
-      },
+      headers: { "Content-Type": "application/json", ...init?.headers },
     });
   } catch (error) {
-    throw new ApiError(
-      {
-        code: "INVALID_REQUEST",
-        message: error instanceof Error ? error.message : "Network request failed.",
-        details: {},
-      },
-      0,
-    );
+    throw new ApiError({
+      code: "INVALID_REQUEST",
+      message: error instanceof Error ? error.message : "Network request failed.",
+      details: {},
+    }, 0);
   }
   if (!response.ok) {
-    let envelope: ErrorEnvelope;
-    try {
-      envelope = (await response.json()) as ErrorEnvelope;
-    } catch {
-      envelope = {
-        error: {
-          code: "INVALID_REQUEST",
-          message: `Request failed with status ${response.status}.`,
-          details: {},
-        },
-      };
-    }
+    const fallback: ErrorEnvelope = {
+      error: { code: "INVALID_REQUEST", message: `Request failed with status ${response.status}.`, details: {} },
+    };
+    let envelope = fallback;
+    try { envelope = await response.json() as ErrorEnvelope; } catch { /* use fallback */ }
     throw new ApiError(envelope.error, response.status);
   }
-  return (await response.json()) as T;
+  return await response.json() as T;
 }
 
-const post = (path: string, body?: unknown) =>
-  request<WorkspaceSnapshot>(path, {
-    method: "POST",
-    body: JSON.stringify(body ?? {}),
-  });
-
+const post = (path: string, body: unknown = {}) =>
+  request<WorkspaceSnapshot>(path, { method: "POST", body: JSON.stringify(body) });
 const put = (path: string, body: unknown) =>
   request<WorkspaceSnapshot>(path, { method: "PUT", body: JSON.stringify(body) });
-
 const remove = (path: string) =>
   request<WorkspaceSnapshot>(path, { method: "DELETE" });
+const preview = (path: string, body: unknown) =>
+  request<MutationPreview>(path, { method: "POST", body: JSON.stringify(body) });
 
 export const workspaceApi = {
-  createSession: (flowPath?: string) =>
-    post("/api/sessions", flowPath ? { flowPath } : {}),
-  getSession: (sessionId: string) =>
-    request<WorkspaceSnapshot>(`/api/sessions/${sessionId}`),
-  getFlowSource: (sessionId: string) =>
-    request<FlowSourceResponse>(`/api/sessions/${sessionId}/flow/source`),
-  sendChat: (sessionId: string, text: string) =>
-    request<CommandResponse>(`/api/sessions/${sessionId}/chat`, {
-      method: "POST", body: JSON.stringify({ text }),
-    }),
-  executeCommand: (sessionId: string, command: TypedCommand) =>
-    request<CommandResponse>(`/api/sessions/${sessionId}/commands`, {
-      method: "POST", body: JSON.stringify(command),
-    }),
-  submitMove: (sessionId: string, uci: string) =>
-    post(`/api/sessions/${sessionId}/moves`, { uci }),
-  submitSanMove: (sessionId: string, san: string) =>
-    post(`/api/sessions/${sessionId}/moves/san`, { san }),
-  retryPolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/retry`),
-  continuePolicy: (sessionId: string) => post(`/api/sessions/${sessionId}/policy/continue`),
-  acceptAttemptHere: (sessionId: string) => post(`/api/sessions/${sessionId}/attempt/accept-here`),
-  playNextOpponent: (sessionId: string) => post(`/api/sessions/${sessionId}/opponent/next`),
-  analysePosition: (sessionId: string) => post(`/api/sessions/${sessionId}/analysis`),
-  updateAnalysisSettings: (sessionId: string, profileId: string) =>
-    put(`/api/sessions/${sessionId}/analysis/settings`, { profileId }),
-  updateRule: (sessionId: string, ruleId: string, update: RuleUpdate) =>
-    put(`/api/sessions/${sessionId}/rules/${encodeURIComponent(ruleId)}`, update),
-  validateRuleDraft: (sessionId: string, draft: RuleDraft) =>
-    request<RuleDraftValidation>(
-      `/api/sessions/${sessionId}/rules/drafts/validate`,
-      { method: "POST", body: JSON.stringify(draft) },
-    ),
-  applyRuleDraft: (sessionId: string, draft: RuleDraft) =>
-    post(`/api/sessions/${sessionId}/rules`, draft),
-  deleteRule: (sessionId: string, ruleId: string) =>
-    remove(`/api/sessions/${sessionId}/rules/${encodeURIComponent(ruleId)}`),
-  updateOverride: (sessionId: string, overrideId: string, update: OverrideUpdate) =>
-    put(`/api/sessions/${sessionId}/overrides/${encodeURIComponent(overrideId)}`, update),
-  validateOverride: (sessionId: string, overrideId: string, update: OverrideUpdate) =>
-    request<RuleDraftValidation>(
-      `/api/sessions/${sessionId}/overrides/${encodeURIComponent(overrideId)}/validate`,
-      { method: "POST", body: JSON.stringify(update) },
-    ),
-  validateDevelopmentRule: (sessionId: string, draft: DevelopmentRuleDraft) =>
-    request<DevelopmentRuleValidation>(
-      `/api/sessions/${sessionId}/development-rules/validate`,
-      { method: "POST", body: JSON.stringify(draft) },
-    ),
-  applyDevelopmentRule: (sessionId: string, draft: DevelopmentRuleDraft) =>
-    post(`/api/sessions/${sessionId}/development-rules`, draft),
-  deleteDevelopmentRule: (sessionId: string, ruleId: string) =>
-    remove(`/api/sessions/${sessionId}/development-rules/${encodeURIComponent(ruleId)}`),
-  reorderDevelopmentRules: (sessionId: string, ruleIds: string[]) =>
-    put(`/api/sessions/${sessionId}/development-rules/order`, { ruleIds }),
-  reorderPolicySection: (
-    sessionId: string,
-    section: "response" | "development" | "continuation",
-    itemIds: string[],
-  ) => put(`/api/sessions/${sessionId}/policy-order/${section}`, { itemIds }),
-  updateStructure: (sessionId: string, structureId: string, update: StructureUpdate) =>
-    put(`/api/sessions/${sessionId}/structures/${encodeURIComponent(structureId)}`, update),
-  reorderStructures: (sessionId: string, structureIds: string[]) =>
-    put(`/api/sessions/${sessionId}/structures/order`, { structureIds }),
-  addOpeningTag: (sessionId: string, recordId: number) =>
-    post(`/api/sessions/${sessionId}/opening-tags`, { recordId }),
-  removeOpeningTag: (sessionId: string, recordId: number) =>
-    remove(`/api/sessions/${sessionId}/opening-tags/${recordId}`),
-  back: (sessionId: string) => post(`/api/sessions/${sessionId}/back`),
-  restart: (sessionId: string) => post(`/api/sessions/${sessionId}/restart`),
+  createSession: (flowPath?: string) => post("/api/sessions", flowPath ? { flowPath } : {}),
+  getSession: (id: string) => request<WorkspaceSnapshot>(`/api/sessions/${id}`),
+  submitMove: (id: string, uci: string) => post(`/api/sessions/${id}/moves`, { uci }),
+  retry: (id: string) => post(`/api/sessions/${id}/policy/retry`),
+  continuePolicy: (id: string) => post(`/api/sessions/${id}/policy/continue`),
+  acceptHere: (id: string) => post(`/api/sessions/${id}/attempt/accept-here`),
+  back: (id: string) => post(`/api/sessions/${id}/back`),
+  restart: (id: string) => post(`/api/sessions/${id}/restart`),
+  analyse: (id: string) => post(`/api/sessions/${id}/analysis`),
+  previewDevelopment: (id: string, draft: DevelopmentDraft) =>
+    preview(`/api/sessions/${id}/development/validate`, draft),
+  applyDevelopment: (id: string, draft: DevelopmentDraft) =>
+    post(`/api/sessions/${id}/development`, draft),
+  deleteDevelopment: (id: string, alias: string) =>
+    remove(`/api/sessions/${id}/development/${encodeURIComponent(alias)}`),
+  previewInterrupt: (id: string, draft: InterruptDraft) =>
+    preview(`/api/sessions/${id}/interrupts/validate`, draft),
+  applyInterrupt: (id: string, draft: InterruptDraft) =>
+    post(`/api/sessions/${id}/interrupts`, draft),
+  deleteInterrupt: (id: string, alias: string, ruleId: string) =>
+    remove(`/api/sessions/${id}/interrupts/${encodeURIComponent(alias)}/${encodeURIComponent(ruleId)}`),
+  reorderDevelopment: (id: string, aliases: string[]) =>
+    put(`/api/sessions/${id}/orders/development`, { aliases }),
+  reorderInterrupts: (id: string, ruleRefs: string[]) =>
+    put(`/api/sessions/${id}/orders/interrupts`, { ruleRefs }),
 };

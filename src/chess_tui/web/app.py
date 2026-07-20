@@ -1,4 +1,4 @@
-"""FastAPI application factory for local Flow Development Mode."""
+"""FastAPI application for local Opening Rulebook development."""
 
 from __future__ import annotations
 
@@ -6,41 +6,29 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, cast
+from typing import cast
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from ..commands import CommandFailure, CommandId, CommandInvocation
 from ..engine import ChessEngineService, EngineError, StockfishEngineService
 from ..flow import FlowStorageError, FlowValidationError
 from .api_models import (
     AnalysisSettingsRequest,
     ApiErrorEnvelope,
     ApiErrorItem,
-    ChatRequest,
-    CommandResponse,
     CreateSessionRequest,
+    DevelopmentDraftRequest,
     DevelopmentOrderRequest,
-    DevelopmentRuleDraftRequest,
-    DevelopmentRuleValidationResponse,
     FlowSourceResponse,
     HealthResponse,
+    InterruptDraftRequest,
+    InterruptOrderRequest,
     MoveRequest,
-    OpeningTagRequest,
-    PolicyOrderRequest,
-    RuleDraftRequest,
-    RuleDraftValidationResponse,
-    InspectRuleCommandRequest,
-    PlayMoveCommandRequest,
+    MutationPreviewResponse,
     SanMoveRequest,
-    StructureOrderRequest,
-    UpdateOverrideRequest,
-    UpdateRuleRequest,
-    UpdateStructureRequest,
     WorkspaceSnapshot,
-    TypedCommandRequest,
 )
 from .errors import ApiErrorCode, WebApiError
 from .sessions import SessionManager
@@ -62,25 +50,18 @@ def create_app(
     *,
     analysis_engine: ChessEngineService | None = None,
 ) -> FastAPI:
-    """Create an isolated local web application and its owned lifespan."""
-
     config = settings or WebAppSettings()
 
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         engine = analysis_engine
-        identity = "engine-off"
-        if engine is not None:
-            identity = f"injected:{type(engine).__name__}"
-        elif config.engine_path is not None:
+        if engine is None and config.engine_path is not None:
             engine = StockfishEngineService(config.engine_path)
-            identity = f"stockfish:{config.engine_path.resolve()}"
         application.state.session_manager = SessionManager(
             project_root=config.project_root,
             allowed_flow_directory=config.allowed_flow_directory,
             startup_flow_path=config.startup_flow_path,
             engine=engine,
-            engine_identity=identity,
         )
         try:
             yield
@@ -89,8 +70,8 @@ def create_app(
                 await engine.close()
 
     application = FastAPI(
-        title="Chess TUI Local Web API",
-        version="0.1.0",
+        title="Chess TUI Opening Rule Engine API",
+        version="4.0",
         lifespan=lifespan,
     )
     _register_error_handlers(application)
@@ -104,10 +85,7 @@ def _register_error_handlers(application: FastAPI) -> None:
     async def handle_web_error(request: Request, error: WebApiError) -> JSONResponse:
         del request
         return _error_response(
-            error.code,
-            str(error),
-            error.status_code,
-            error.details,
+            error.code, str(error), error.status_code, error.details
         )
 
     @application.exception_handler(RequestValidationError)
@@ -123,58 +101,36 @@ def _register_error_handlers(application: FastAPI) -> None:
         )
 
     @application.exception_handler(FlowStorageError)
-    async def handle_flow_storage(
-        request: Request, error: FlowStorageError
-    ) -> JSONResponse:
+    async def handle_storage(request: Request, error: FlowStorageError) -> JSONResponse:
         del request
         return _error_response(
-            ApiErrorCode.FLOW_PERSISTENCE_ERROR,
-            str(error),
-            500,
+            ApiErrorCode.FLOW_PERSISTENCE_ERROR, str(error), 500
         )
 
     @application.exception_handler(FlowValidationError)
-    async def handle_flow_validation(
+    async def handle_validation(
         request: Request, error: FlowValidationError
     ) -> JSONResponse:
         del request
-        return _error_response(
-            ApiErrorCode.FLOW_VALIDATION_ERROR,
-            str(error),
-            422,
-        )
+        return _error_response(ApiErrorCode.FLOW_VALIDATION_ERROR, str(error), 422)
 
     @application.exception_handler(EngineError)
-    async def handle_engine_error(request: Request, error: EngineError) -> JSONResponse:
+    async def handle_engine(request: Request, error: EngineError) -> JSONResponse:
         del request
         return _error_response(ApiErrorCode.ENGINE_ERROR, str(error), 500)
-
-    @application.exception_handler(CommandFailure)
-    async def handle_command_error(
-        request: Request, error: CommandFailure
-    ) -> JSONResponse:
-        del request
-        return _error_response(
-            ApiErrorCode.INVALID_REQUEST,
-            str(error),
-            400,
-            {"commandCode": error.code, **error.details},
-        )
 
 
 def _register_api_routes(application: FastAPI) -> None:
     @application.get("/api/health", response_model=HealthResponse)
     async def health(request: Request) -> HealthResponse:
-        manager = _manager(request)
-        return HealthResponse(engine=manager.evaluations.health)
+        return HealthResponse(engine=_manager(request).evaluations.health)
 
     @application.post("/api/sessions", response_model=WorkspaceSnapshot)
     async def create_session(
-        request: Request,
-        payload: CreateSessionRequest | None = None,
+        request: Request, payload: CreateSessionRequest | None = None
     ) -> WorkspaceSnapshot:
         return await _manager(request).create_session(
-            payload.flow_path if payload is not None else None
+            payload.flow_path if payload else None
         )
 
     @application.get("/api/sessions/{session_id}", response_model=WorkspaceSnapshot)
@@ -182,77 +138,32 @@ def _register_api_routes(application: FastAPI) -> None:
         return await _manager(request).get_snapshot(session_id)
 
     @application.get(
-        "/api/sessions/{session_id}/flow/source",
+        "/api/sessions/{session_id}/rulebook/source",
         response_model=FlowSourceResponse,
     )
-    async def get_flow_source(request: Request, session_id: str) -> FlowSourceResponse:
+    async def get_source(request: Request, session_id: str) -> FlowSourceResponse:
         return await _manager(request).get_flow_source(session_id)
 
     @application.post(
         "/api/sessions/{session_id}/moves", response_model=WorkspaceSnapshot
     )
     async def submit_move(
-        request: Request,
-        session_id: str,
-        payload: MoveRequest,
+        request: Request, session_id: str, payload: MoveRequest
     ) -> WorkspaceSnapshot:
         return await _manager(request).submit_move(session_id, payload.uci)
 
     @application.post(
-        "/api/sessions/{session_id}/moves/san",
-        response_model=WorkspaceSnapshot,
+        "/api/sessions/{session_id}/moves/san", response_model=WorkspaceSnapshot
     )
-    async def submit_san_move(
-        request: Request,
-        session_id: str,
-        payload: SanMoveRequest,
+    async def submit_san(
+        request: Request, session_id: str, payload: SanMoveRequest
     ) -> WorkspaceSnapshot:
         return await _manager(request).submit_san_move(session_id, payload.san)
 
     @application.post(
-        "/api/sessions/{session_id}/chat",
-        response_model=CommandResponse,
+        "/api/sessions/{session_id}/policy/retry", response_model=WorkspaceSnapshot
     )
-    async def submit_chat(
-        request: Request,
-        session_id: str,
-        payload: ChatRequest,
-    ) -> CommandResponse:
-        return await _manager(request).submit_chat(session_id, payload.text)
-
-    @application.post(
-        "/api/sessions/{session_id}/commands",
-        response_model=CommandResponse,
-    )
-    async def execute_command(
-        request: Request,
-        session_id: str,
-        payload: TypedCommandRequest,
-    ) -> CommandResponse:
-        invocation = CommandInvocation(
-            command=CommandId(payload.command),
-            source=payload.source,
-            notation=(
-                payload.notation
-                if isinstance(payload, PlayMoveCommandRequest)
-                else None
-            ),
-            move=(
-                payload.move if isinstance(payload, PlayMoveCommandRequest) else None
-            ),
-            rule_id=(
-                payload.rule_id
-                if isinstance(payload, InspectRuleCommandRequest)
-                else None
-            ),
-        )
-        return await _manager(request).execute_command(session_id, invocation)
-
-    @application.post(
-        "/api/sessions/{session_id}/policy/retry",
-        response_model=WorkspaceSnapshot,
-    )
-    async def retry_policy(request: Request, session_id: str) -> WorkspaceSnapshot:
+    async def retry(request: Request, session_id: str) -> WorkspaceSnapshot:
         return await _manager(request).retry_policy(session_id)
 
     @application.post(
@@ -266,32 +177,97 @@ def _register_api_routes(application: FastAPI) -> None:
         "/api/sessions/{session_id}/attempt/accept-here",
         response_model=WorkspaceSnapshot,
     )
-    async def accept_attempt_as_override(
-        request: Request, session_id: str
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).accept_attempt_as_override(session_id)
+    async def accept_here(request: Request, session_id: str) -> WorkspaceSnapshot:
+        return await _manager(request).accept_attempt_as_interrupt(session_id)
 
     @application.post(
-        "/api/sessions/{session_id}/opponent/next",
-        response_model=WorkspaceSnapshot,
+        "/api/sessions/{session_id}/development/validate",
+        response_model=MutationPreviewResponse,
     )
-    async def play_next_opponent(
-        request: Request, session_id: str
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).play_next_opponent(session_id)
+    async def preview_development(
+        request: Request, session_id: str, payload: DevelopmentDraftRequest
+    ) -> MutationPreviewResponse:
+        return await _manager(request).preview_development(session_id, payload)
 
     @application.post(
-        "/api/sessions/{session_id}/analysis",
+        "/api/sessions/{session_id}/development",
         response_model=WorkspaceSnapshot,
     )
-    async def analyse_position(request: Request, session_id: str) -> WorkspaceSnapshot:
+    async def apply_development(
+        request: Request, session_id: str, payload: DevelopmentDraftRequest
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).apply_development(session_id, payload)
+
+    @application.delete(
+        "/api/sessions/{session_id}/development/{alias}",
+        response_model=WorkspaceSnapshot,
+    )
+    async def delete_development(
+        request: Request, session_id: str, alias: str
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).delete_development(session_id, alias)
+
+    @application.post(
+        "/api/sessions/{session_id}/interrupts/validate",
+        response_model=MutationPreviewResponse,
+    )
+    async def preview_interrupt(
+        request: Request, session_id: str, payload: InterruptDraftRequest
+    ) -> MutationPreviewResponse:
+        return await _manager(request).preview_interrupt(session_id, payload)
+
+    @application.post(
+        "/api/sessions/{session_id}/interrupts", response_model=WorkspaceSnapshot
+    )
+    async def apply_interrupt(
+        request: Request, session_id: str, payload: InterruptDraftRequest
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).apply_interrupt(session_id, payload)
+
+    @application.delete(
+        "/api/sessions/{session_id}/interrupts/{alias}/{rule_id}",
+        response_model=WorkspaceSnapshot,
+    )
+    async def delete_interrupt(
+        request: Request, session_id: str, alias: str, rule_id: str
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).delete_interrupt(
+            session_id, alias, rule_id
+        )
+
+    @application.put(
+        "/api/sessions/{session_id}/orders/development",
+        response_model=WorkspaceSnapshot,
+    )
+    async def reorder_development(
+        request: Request, session_id: str, payload: DevelopmentOrderRequest
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).reorder_development(
+            session_id, tuple(payload.aliases)
+        )
+
+    @application.put(
+        "/api/sessions/{session_id}/orders/interrupts",
+        response_model=WorkspaceSnapshot,
+    )
+    async def reorder_interrupts(
+        request: Request, session_id: str, payload: InterruptOrderRequest
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).reorder_interrupts(
+            session_id, tuple(payload.rule_refs)
+        )
+
+    @application.post(
+        "/api/sessions/{session_id}/analysis", response_model=WorkspaceSnapshot
+    )
+    async def analyse(request: Request, session_id: str) -> WorkspaceSnapshot:
         return await _manager(request).analyse_position(session_id)
 
     @application.put(
         "/api/sessions/{session_id}/analysis/settings",
         response_model=WorkspaceSnapshot,
     )
-    async def update_analysis_settings(
+    async def analysis_settings(
         request: Request,
         session_id: str,
         payload: AnalysisSettingsRequest,
@@ -300,184 +276,10 @@ def _register_api_routes(application: FastAPI) -> None:
             session_id, payload.profile_id
         )
 
-    @application.put(
-        "/api/sessions/{session_id}/rules/{rule_id}",
-        response_model=WorkspaceSnapshot,
-    )
-    async def update_rule(
-        request: Request,
-        session_id: str,
-        rule_id: str,
-        payload: UpdateRuleRequest,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).update_rule(session_id, rule_id, payload)
-
-    @application.post(
-        "/api/sessions/{session_id}/rules/drafts/validate",
-        response_model=RuleDraftValidationResponse,
-    )
-    async def validate_rule_draft(
-        request: Request,
-        session_id: str,
-        payload: RuleDraftRequest,
-    ) -> RuleDraftValidationResponse:
-        return await _manager(request).validate_rule_draft(session_id, payload)
-
-    @application.post(
-        "/api/sessions/{session_id}/rules",
-        response_model=WorkspaceSnapshot,
-    )
-    async def apply_rule_draft(
-        request: Request,
-        session_id: str,
-        payload: RuleDraftRequest,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).apply_rule_draft(session_id, payload)
-
-    @application.delete(
-        "/api/sessions/{session_id}/rules/{rule_id}",
-        response_model=WorkspaceSnapshot,
-    )
-    async def delete_rule(
-        request: Request,
-        session_id: str,
-        rule_id: str,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).delete_rule(session_id, rule_id)
-
-    @application.post(
-        "/api/sessions/{session_id}/development-rules/validate",
-        response_model=DevelopmentRuleValidationResponse,
-    )
-    async def validate_development_rule(
-        request: Request,
-        session_id: str,
-        payload: DevelopmentRuleDraftRequest,
-    ) -> DevelopmentRuleValidationResponse:
-        return await _manager(request).validate_development_rule(session_id, payload)
-
-    @application.post(
-        "/api/sessions/{session_id}/development-rules",
-        response_model=WorkspaceSnapshot,
-    )
-    async def apply_development_rule(
-        request: Request,
-        session_id: str,
-        payload: DevelopmentRuleDraftRequest,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).apply_development_rule(session_id, payload)
-
-    @application.delete(
-        "/api/sessions/{session_id}/development-rules/{rule_id}",
-        response_model=WorkspaceSnapshot,
-    )
-    async def delete_development_rule(
-        request: Request, session_id: str, rule_id: str
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).delete_development_rule(session_id, rule_id)
-
-    @application.put(
-        "/api/sessions/{session_id}/development-rules/order",
-        response_model=WorkspaceSnapshot,
-    )
-    async def reorder_development_rules(
-        request: Request,
-        session_id: str,
-        payload: DevelopmentOrderRequest,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).reorder_development_rules(session_id, payload)
-
-    @application.put(
-        "/api/sessions/{session_id}/policy-order/{section}",
-        response_model=WorkspaceSnapshot,
-    )
-    async def reorder_policy_section(
-        request: Request,
-        session_id: str,
-        section: Literal["response", "development", "continuation"],
-        payload: PolicyOrderRequest,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).reorder_policy_section(
-            session_id, section, payload
-        )
-
-    @application.put(
-        "/api/sessions/{session_id}/structures/order",
-        response_model=WorkspaceSnapshot,
-    )
-    async def reorder_structures(
-        request: Request,
-        session_id: str,
-        payload: StructureOrderRequest,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).reorder_structures(session_id, payload)
-
-    @application.put(
-        "/api/sessions/{session_id}/structures/{structure_id}",
-        response_model=WorkspaceSnapshot,
-    )
-    async def update_structure(
-        request: Request,
-        session_id: str,
-        structure_id: str,
-        payload: UpdateStructureRequest,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).update_structure(
-            session_id, structure_id, payload
-        )
-
-    @application.put(
-        "/api/sessions/{session_id}/overrides/{override_id}",
-        response_model=WorkspaceSnapshot,
-    )
-    async def update_override(
-        request: Request,
-        session_id: str,
-        override_id: str,
-        payload: UpdateOverrideRequest,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).update_override(session_id, override_id, payload)
-
-    @application.post(
-        "/api/sessions/{session_id}/overrides/{override_id}/validate",
-        response_model=RuleDraftValidationResponse,
-    )
-    async def validate_override(
-        request: Request,
-        session_id: str,
-        override_id: str,
-        payload: UpdateOverrideRequest,
-    ) -> RuleDraftValidationResponse:
-        return await _manager(request).validate_override(
-            session_id, override_id, payload
-        )
-
-    @application.post(
-        "/api/sessions/{session_id}/opening-tags",
-        response_model=WorkspaceSnapshot,
-    )
-    async def add_opening_tag(
-        request: Request,
-        session_id: str,
-        payload: OpeningTagRequest,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).add_opening_tag(session_id, payload.record_id)
-
-    @application.delete(
-        "/api/sessions/{session_id}/opening-tags/{record_id}",
-        response_model=WorkspaceSnapshot,
-    )
-    async def remove_opening_tag(
-        request: Request,
-        session_id: str,
-        record_id: int,
-    ) -> WorkspaceSnapshot:
-        return await _manager(request).remove_opening_tag(session_id, record_id)
-
     @application.post(
         "/api/sessions/{session_id}/back", response_model=WorkspaceSnapshot
     )
-    async def go_back(request: Request, session_id: str) -> WorkspaceSnapshot:
+    async def back(request: Request, session_id: str) -> WorkspaceSnapshot:
         return await _manager(request).go_back(session_id)
 
     @application.post(
@@ -485,6 +287,12 @@ def _register_api_routes(application: FastAPI) -> None:
     )
     async def restart(request: Request, session_id: str) -> WorkspaceSnapshot:
         return await _manager(request).restart(session_id)
+
+    @application.post(
+        "/api/sessions/{session_id}/reload", response_model=WorkspaceSnapshot
+    )
+    async def reload(request: Request, session_id: str) -> WorkspaceSnapshot:
+        return await _manager(request).reload(session_id)
 
     @application.api_route(
         "/api/{unknown_path:path}",
@@ -494,9 +302,7 @@ def _register_api_routes(application: FastAPI) -> None:
     async def unknown_api(unknown_path: str) -> JSONResponse:
         del unknown_path
         return _error_response(
-            ApiErrorCode.INVALID_REQUEST,
-            "API route was not found.",
-            404,
+            ApiErrorCode.INVALID_REQUEST, "API route was not found.", 404
         )
 
 
@@ -508,8 +314,7 @@ def _register_frontend_routes(application: FastAPI, frontend_dist: Path) -> None
         if not dist.is_dir() or not (dist / "index.html").is_file():
             return HTMLResponse(
                 "<h1>Chess TUI web build not found</h1>"
-                "<p>Run <code>cd web &amp;&amp; npm run build</code>, then restart "
-                "the server. The API remains available under <code>/api</code>.</p>",
+                "<p>Run <code>cd web &amp;&amp; npm run build</code>.</p>",
                 status_code=503,
             )
         candidate = (dist / browser_path).resolve()
@@ -529,11 +334,7 @@ def _error_response(
     details: dict[str, object] | None = None,
 ) -> JSONResponse:
     envelope = ApiErrorEnvelope(
-        error=ApiErrorItem(
-            code=code,
-            message=message,
-            details=details or {},
-        )
+        error=ApiErrorItem(code=code, message=message, details=details or {})
     )
     return JSONResponse(
         status_code=status_code,

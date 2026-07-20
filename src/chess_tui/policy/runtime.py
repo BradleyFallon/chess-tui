@@ -1,4 +1,4 @@
-"""History-sensitive deterministic version 3 policy resolution."""
+"""History-sensitive scheduler for Opening Rule Engine v4."""
 
 from __future__ import annotations
 
@@ -8,106 +8,73 @@ from enum import Enum
 import chess
 
 from ..flow.models import (
-    AuthoredPolicyItem,
-    DevelopmentAssignment,
-    ExactOverride,
-    Flow,
-    MoveRule,
-    PolicySection,
-    Structure,
+    DevelopmentInstruction,
+    InterruptRule,
+    Rulebook,
 )
 from ..flow.position import normalized_position_key, replay_san
+from .actions import ActionResolution, ActionResolver, ActionStatus
 from .conditions import ConditionEvaluator
-from .models import (
-    ConditionResult,
-    EffectiveRuleStatus,
-    LastMove,
-    MoveAction,
-    RuleLifecycle,
-)
+from .models import ConditionResult, LastMove
+from .relations import PositionAnalyzer, PositionRelations
 from .tracker import OriginalPieceTracker
 
 
 class DecisionSource(str, Enum):
-    EXACT_OVERRIDE = "exact-override"
-    RESPONSE = "response"
+    INTERRUPT = "interrupt"
     DEVELOPMENT = "development"
-    CONTINUATION = "continuation"
     FRONTIER = "frontier"
 
 
-class StructureStatus(str, Enum):
+class FrontierReason(str, Enum):
+    DEVELOPMENT_COMPLETE = "development-complete"
+    NO_AUTHORED_LEGAL_MOVE = "no-authored-legal-move"
+    UNHANDLED_REQUIRED_RULE = "unhandled-required-rule"
+    AMBIGUOUS_ACTION = "ambiguous-action"
+
+
+class DevelopmentStatus(str, Enum):
+    NOT_READY = "not-ready"
+    WAITING_FOR_LEGALITY = "waiting-for-legality"
     AVAILABLE = "available"
-    UNAVAILABLE = "unavailable"
     SELECTED = "selected"
-    REJECTED = "rejected"
+    COMPLETED = "completed"
+    CAPTURED = "captured"
 
 
-@dataclass(slots=True)
-class RuleRuntimeState:
-    unlocked: bool
-    unlocked_at_ply: int | None = None
-    retired: bool = False
-    retired_at_ply: int | None = None
-    retirement_reason: str | None = None
-
-    @property
-    def lifecycle(self) -> RuleLifecycle:
-        if self.retired:
-            return RuleLifecycle.RETIRED
-        if self.unlocked:
-            return RuleLifecycle.UNLOCKED
-        return RuleLifecycle.LOCKED
+class InterruptStatus(str, Enum):
+    TRIGGER_FALSE = "trigger-false"
+    NO_ACTION = "no-action"
+    APPLICABLE = "applicable"
+    SELECTED = "selected"
+    COMPLETED = "completed"
+    AMBIGUOUS = "ambiguous"
+    REQUIRED_UNHANDLED = "required-unhandled"
 
 
 @dataclass(frozen=True, slots=True)
-class StructureResolution:
-    structure: Structure
-    status: StructureStatus
-    available: ConditionResult
-    selected: ConditionResult
-    selected_at_ply: int | None
+class DevelopmentResolution:
+    reference: str
+    instruction: DevelopmentInstruction
+    status: DevelopmentStatus
+    prerequisites_complete: bool
+    condition: ConditionResult | None
+    move: chess.Move | None
+    move_san: str | None
     reason: str
 
 
 @dataclass(frozen=True, slots=True)
-class PolicyItemResolution:
-    item: AuthoredPolicyItem
-    section: PolicySection
-    status: EffectiveRuleStatus
-    lifecycle: RuleLifecycle
+class InterruptResolution:
+    reference: str
+    rule: InterruptRule
+    status: InterruptStatus
+    exact_position: bool
+    prerequisites_complete: bool
+    trigger: ConditionResult | None
+    attempts: tuple[ActionResolution, ...]
     move: chess.Move | None
     move_san: str | None
-    legal: bool
-    selected: bool
-    shadowed: bool
-    in_scope: bool
-    reason: str
-    unlock: ConditionResult | None
-    live_condition: ConditionResult | None
-    expiration: ConditionResult | None
-    unlocked_at_ply: int | None
-    retired_at_ply: int | None
-    retirement_reason: str | None
-
-    @property
-    def rule(self) -> AuthoredPolicyItem:
-        """Compatibility-free convenience for presentation code."""
-
-        return self.item
-
-
-RuleResolution = PolicyItemResolution
-
-
-@dataclass(frozen=True, slots=True)
-class OverrideResolution:
-    override: ExactOverride
-    matched: bool
-    move: chess.Move | None
-    move_san: str | None
-    legal: bool
-    selected: bool
     reason: str
 
 
@@ -117,386 +84,430 @@ class PolicyDecision:
     move: chess.Move | None
     move_san: str | None
     source_id: str | None
-    note: str | None
-    selected_structure_id: str | None
-    structure_resolutions: tuple[StructureResolution, ...]
-    item_resolutions: tuple[PolicyItemResolution, ...]
-    override_resolutions: tuple[OverrideResolution, ...]
+    why: str | None
+    frontier_reason: FrontierReason | None
+    development_resolutions: tuple[DevelopmentResolution, ...]
+    interrupt_resolutions: tuple[InterruptResolution, ...]
+    relations: PositionRelations
     trace: tuple[str, ...]
 
     @property
-    def rule_resolutions(self) -> tuple[PolicyItemResolution, ...]:
-        return self.item_resolutions
+    def note(self) -> str | None:
+        return self.why
 
 
 class PolicyRuntime:
-    def __init__(self, flow: Flow) -> None:
-        self.flow = flow
-        self.start_board = _board_from_fen(flow.start_fen)
+    def __init__(self, rulebook: Rulebook) -> None:
+        self.rulebook = rulebook
+        self.start_board = _board_from_fen(rulebook.start_fen)
         self.tracker = OriginalPieceTracker(self.start_board)
-        self.conditions = {item.id: item.when for item in flow.conditions}
         self.last_move: LastMove | None = None
-        self.selected_structure_id: str | None = None
-        self.selected_structure_at_ply: int | None = None
-        self.rule_states: dict[str, RuleRuntimeState] = {}
-        self.overrides_by_position: dict[str, ExactOverride] = {}
-        for override in flow.overrides:
+        self.history_san: tuple[str, ...] = ()
+        self.completed_interrupts: set[str] = set()
+        self.exact_positions: dict[str, tuple[str, ...]] = {}
+        for reference in rulebook.interrupt_order:
+            rule = rulebook.interrupt_by_ref[reference]
+            if rule.after_san is None:
+                continue
             board = replay_san(
                 self.start_board.fen(en_passant="fen"),
-                override.after_san,
-                context=f"Override {override.id!r}",
+                rule.after_san,
+                context=f"Interrupt {reference!r}",
             )
-            self.overrides_by_position[normalized_position_key(board)] = override
-        self._initialize_lifecycle()
+            self.exact_positions.setdefault(normalized_position_key(board), ())
+            self.exact_positions[normalized_position_key(board)] += (reference,)
 
     @property
-    def move_rules(self) -> tuple[MoveRule, ...]:
-        return (*self.flow.responses, *self.flow.continuations)
+    def flow(self) -> Rulebook:
+        """Rulebook accessor retained for workspace naming consistency."""
 
-    def _initialize_lifecycle(self) -> None:
-        evaluator = self._evaluator(self.start_board)
-        for rule in self.move_rules:
-            unlocked = (
-                rule.unlock_when is None or evaluator.evaluate(rule.unlock_when).value
-            )
-            self.rule_states[rule.id] = RuleRuntimeState(
-                unlocked=unlocked,
-                unlocked_at_ply=0 if unlocked else None,
-            )
-
-    def _evaluator(self, board: chess.Board) -> ConditionEvaluator:
-        return ConditionEvaluator(
-            board,
-            self.tracker,
-            self.conditions,
-            self.last_move,
-        )
+        return self.rulebook
 
     def resolve(self, board: chess.Board) -> PolicyDecision:
-        if board.turn != _color(self.flow.side):
+        if board.turn != _color(self.rulebook.side):
             raise ValueError(
-                f"Policy controls {self.flow.side}, but it is the opponent's turn."
+                f"Rulebook controls {self.rulebook.side}, but it is the opponent's turn."
             )
-
-        evaluator = self._evaluator(board)
+        relations = PositionAnalyzer().analyze(board, self.tracker)
         trace: list[str] = []
-        structures = self._resolve_structures(evaluator)
-        for result in structures:
-            trace.append(
-                f"Structure {result.structure.id}: {result.status.value} — "
-                f"{result.reason}"
-            )
+        interrupt_results: list[InterruptResolution] = []
+        development_results: list[DevelopmentResolution] = []
+        selected_move: chess.Move | None = None
+        selected_san: str | None = None
+        selected_reference: str | None = None
+        selected_why: str | None = None
+        frontier: FrontierReason | None = None
 
-        override_results: list[OverrideResolution] = []
-        selected_override: tuple[ExactOverride, chess.Move, str] | None = None
-        position_key = normalized_position_key(board)
-        for override in self.flow.overrides:
-            matched = self.overrides_by_position.get(position_key) == override
-            move, san, action_reason = _resolve_action(
-                board, self.tracker, override.move
-            )
-            legal = matched and move is not None
-            selected = matched and legal and selected_override is None
-            if not matched:
-                reason = "Exact position does not match."
-            elif not legal:
-                reason = action_reason
-            elif selected:
-                reason = "Exact position matched and the action is legal."
-                assert move is not None and san is not None
-                selected_override = (override, move, san)
-            else:
-                reason = "A preceding override already matched."
-            trace.append(
-                f"Override {override.id}: "
-                f"{'selected' if selected else 'skipped'} — {reason}"
-            )
-            override_results.append(
-                OverrideResolution(
-                    override=override,
-                    matched=matched,
-                    move=move if matched else None,
-                    move_san=san if matched else None,
-                    legal=legal,
-                    selected=selected,
-                    reason=reason,
-                )
-            )
-
-        selected_id: str | None = None
-        results: list[PolicyItemResolution] = []
-        sections: tuple[tuple[PolicySection, tuple[AuthoredPolicyItem, ...]], ...] = (
-            ("response", self.flow.responses),
-            ("development", self.flow.development),
-            ("continuation", self.flow.continuations),
+        exact_refs = set(
+            self.exact_positions.get(normalized_position_key(board), ())
         )
-        for section, items in sections:
-            for item in items:
-                result = self._resolve_item(
+        ordered_refs = (
+            tuple(ref for ref in self.rulebook.interrupt_order if ref in exact_refs)
+            + tuple(
+                ref for ref in self.rulebook.interrupt_order if ref not in exact_refs
+            )
+        )
+        exact_phase_complete = False
+        for reference in ordered_refs:
+            is_exact = reference in exact_refs
+            if not is_exact and not exact_phase_complete:
+                exact_phase_complete = True
+            rule = self.rulebook.interrupt_by_ref[reference]
+            can_select = selected_move is None and frontier is None
+            result = self._resolve_interrupt(
+                reference,
+                rule,
+                board,
+                relations,
+                is_exact=is_exact,
+                can_select=can_select,
+            )
+            interrupt_results.append(result)
+            trace.append(
+                f"Interrupt {reference}: {result.status.value} — {result.reason}"
+            )
+            if result.status is InterruptStatus.SELECTED:
+                selected_move = result.move
+                selected_san = result.move_san
+                selected_reference = reference
+                selected_why = rule.why
+            elif result.status is InterruptStatus.AMBIGUOUS and can_select and (
+                is_exact or rule.required
+            ):
+                frontier = FrontierReason.AMBIGUOUS_ACTION
+                selected_reference = reference
+                selected_why = rule.why
+            elif result.status is InterruptStatus.REQUIRED_UNHANDLED and can_select:
+                frontier = FrontierReason.UNHANDLED_REQUIRED_RULE
+                selected_reference = reference
+                selected_why = rule.why
+
+        if selected_move is None and frontier is None:
+            for alias in self.rulebook.development_order:
+                piece = self.rulebook.piece_by_alias[alias]
+                instruction = piece.development
+                assert instruction is not None
+                result = self._resolve_development(
+                    alias,
+                    instruction,
                     board,
-                    evaluator,
-                    item,
-                    section,
-                    can_select=selected_override is None and selected_id is None,
+                    relations,
+                    can_select=selected_move is None,
                 )
-                if result.selected:
-                    selected_id = item.id
-                results.append(result)
+                development_results.append(result)
                 trace.append(
-                    f"{section.title()} {item.id}: {result.status.value} — "
+                    f"Development {alias}.develop: {result.status.value} — "
                     f"{result.reason}"
                 )
+                if result.status is DevelopmentStatus.SELECTED:
+                    selected_move = result.move
+                    selected_san = result.move_san
+                    selected_reference = f"{alias}.develop"
+                    selected_why = instruction.why
 
-        if selected_override is not None:
-            override, move, san = selected_override
-            return PolicyDecision(
-                source=DecisionSource.EXACT_OVERRIDE,
-                move=move,
-                move_san=san,
-                source_id=override.id,
-                note=override.note,
-                selected_structure_id=self.selected_structure_id,
-                structure_resolutions=structures,
-                item_resolutions=tuple(results),
-                override_resolutions=tuple(override_results),
-                trace=tuple(trace),
+        if selected_move is not None:
+            source = (
+                DecisionSource.DEVELOPMENT
+                if selected_reference and selected_reference.endswith(".develop")
+                else DecisionSource.INTERRUPT
             )
-
-        selected_result = next((item for item in results if item.selected), None)
-        if selected_result is not None:
-            assert (
-                selected_result.move is not None
-                and selected_result.move_san is not None
-            )
-            source = {
-                "response": DecisionSource.RESPONSE,
-                "development": DecisionSource.DEVELOPMENT,
-                "continuation": DecisionSource.CONTINUATION,
-            }[selected_result.section]
             return PolicyDecision(
                 source=source,
-                move=selected_result.move,
-                move_san=selected_result.move_san,
-                source_id=selected_result.item.id,
-                note=selected_result.item.note,
-                selected_structure_id=self.selected_structure_id,
-                structure_resolutions=structures,
-                item_resolutions=tuple(results),
-                override_resolutions=tuple(override_results),
+                move=selected_move,
+                move_san=selected_san,
+                source_id=selected_reference,
+                why=selected_why,
+                frontier_reason=None,
+                development_resolutions=tuple(development_results),
+                interrupt_resolutions=tuple(interrupt_results),
+                relations=relations,
                 trace=tuple(trace),
             )
 
-        trace.append(
-            "No exact override, response, development assignment, or continuation "
-            "resolved; frontier reached."
-        )
+        if frontier is None:
+            frontier = (
+                FrontierReason.DEVELOPMENT_COMPLETE
+                if self._all_development_terminal()
+                else FrontierReason.NO_AUTHORED_LEGAL_MOVE
+            )
+        trace.append(f"Frontier reached: {frontier.value}.")
         return PolicyDecision(
             source=DecisionSource.FRONTIER,
             move=None,
             move_san=None,
-            source_id=None,
-            note=None,
-            selected_structure_id=self.selected_structure_id,
-            structure_resolutions=structures,
-            item_resolutions=tuple(results),
-            override_resolutions=tuple(override_results),
+            source_id=selected_reference,
+            why=selected_why,
+            frontier_reason=frontier,
+            development_resolutions=tuple(development_results),
+            interrupt_resolutions=tuple(interrupt_results),
+            relations=relations,
             trace=tuple(trace),
         )
 
-    def _resolve_item(
+    def _resolve_interrupt(
         self,
+        reference: str,
+        rule: InterruptRule,
         board: chess.Board,
-        evaluator: ConditionEvaluator,
-        item: AuthoredPolicyItem,
-        section: PolicySection,
+        relations: PositionRelations,
         *,
+        is_exact: bool,
         can_select: bool,
-    ) -> PolicyItemResolution:
-        in_scope, scope_reason = self._scope(item.structures, evaluator)
-        move, san, action_reason = _resolve_action(board, self.tracker, item.move)
-
-        if isinstance(item, DevelopmentAssignment):
-            piece = self.tracker.get(item.piece.original_piece_id)
-            lifecycle = (
-                RuleLifecycle.RETIRED
-                if piece.has_moved or piece.captured
-                else RuleLifecycle.UNLOCKED
+    ) -> InterruptResolution:
+        if reference in self.completed_interrupts:
+            return InterruptResolution(
+                reference,
+                rule,
+                InterruptStatus.COMPLETED,
+                is_exact,
+                True,
+                None,
+                (),
+                None,
+                None,
+                "One-shot interrupt already completed.",
             )
-            live = (
-                evaluator.evaluate(item.ready_when)
-                if item.ready_when is not None
-                else None
+        prerequisites = all(self._instruction_complete(item) for item in rule.requires)
+        if not prerequisites:
+            return InterruptResolution(
+                reference,
+                rule,
+                InterruptStatus.TRIGGER_FALSE,
+                is_exact,
+                False,
+                None,
+                (),
+                None,
+                None,
+                "Prerequisites are incomplete.",
             )
-            if not in_scope:
-                status = EffectiveRuleStatus.OUT_OF_SCOPE
-                reason = scope_reason
-            elif piece.captured:
-                status = EffectiveRuleStatus.RETIRED
-                reason = f"{item.piece.label} was captured."
-            elif piece.has_moved:
-                status = EffectiveRuleStatus.RETIRED
-                reason = f"{item.piece.label} already moved."
-            elif live is not None and not live.value:
-                status = EffectiveRuleStatus.INACTIVE
-                reason = live.explanation
-            elif move is None:
-                status = EffectiveRuleStatus.WAITING
-                reason = action_reason
-            elif can_select:
-                status = EffectiveRuleStatus.SELECTED
-                reason = "First applicable assignment in development order."
-            else:
-                status = EffectiveRuleStatus.APPLICABLE
-                reason = "Applicable, but an earlier policy item wins."
-            return PolicyItemResolution(
-                item=item,
-                section=section,
-                status=status,
-                lifecycle=lifecycle,
-                move=move,
-                move_san=san,
-                legal=move is not None,
-                selected=status is EffectiveRuleStatus.SELECTED,
-                shadowed=status is EffectiveRuleStatus.APPLICABLE,
-                in_scope=in_scope,
-                reason=reason,
-                unlock=None,
-                live_condition=live,
-                expiration=None,
-                unlocked_at_ply=0,
-                retired_at_ply=(
-                    piece.captured_ply if piece.captured else piece.first_moved_ply
-                ),
-                retirement_reason=(
-                    reason if status is EffectiveRuleStatus.RETIRED else None
-                ),
+        if rule.after_san is not None and not is_exact:
+            return InterruptResolution(
+                reference,
+                rule,
+                InterruptStatus.TRIGGER_FALSE,
+                False,
+                True,
+                None,
+                (),
+                None,
+                None,
+                "Exact position does not match.",
             )
-
-        state = self.rule_states[item.id]
-        unlock = (
-            evaluator.evaluate(item.unlock_when)
-            if item.unlock_when is not None
-            else None
+        evaluator = ConditionEvaluator(
+            board,
+            self.tracker,
+            relations=relations,
+            last_move=self.last_move,
+            subject=rule.piece,
         )
-        live = evaluator.evaluate(item.when) if item.when is not None else None
-        expiration = (
-            evaluator.evaluate(item.expire_when)
-            if item.expire_when is not None
-            else None
-        )
-        if not in_scope:
-            status = EffectiveRuleStatus.OUT_OF_SCOPE
-            reason = scope_reason
-        elif state.retired:
-            status = EffectiveRuleStatus.RETIRED
-            reason = state.retirement_reason or "Rule retired."
-        elif not state.unlocked:
-            status = EffectiveRuleStatus.LOCKED
-            reason = unlock.explanation if unlock else "Unlock condition is pending."
-        elif live is not None and not live.value:
-            status = EffectiveRuleStatus.INACTIVE
-            reason = live.explanation
-        elif move is None:
-            status = EffectiveRuleStatus.WAITING
-            reason = action_reason
-        elif can_select:
-            status = EffectiveRuleStatus.SELECTED
-            reason = f"First applicable rule in {section} order."
-        else:
-            status = EffectiveRuleStatus.APPLICABLE
-            reason = "Applicable, but an earlier policy item wins."
-        return PolicyItemResolution(
-            item=item,
-            section=section,
-            status=status,
-            lifecycle=state.lifecycle,
-            move=move,
-            move_san=san,
-            legal=move is not None,
-            selected=status is EffectiveRuleStatus.SELECTED,
-            shadowed=status is EffectiveRuleStatus.APPLICABLE,
-            in_scope=in_scope,
-            reason=reason,
-            unlock=unlock,
-            live_condition=live,
-            expiration=expiration,
-            unlocked_at_ply=state.unlocked_at_ply,
-            retired_at_ply=state.retired_at_ply,
-            retirement_reason=state.retirement_reason,
-        )
-
-    def _scope(
-        self,
-        structure_ids: tuple[str, ...],
-        evaluator: ConditionEvaluator,
-    ) -> tuple[bool, str]:
-        if not structure_ids:
-            return True, "Global item."
-        if self.selected_structure_id is not None:
-            in_scope = self.selected_structure_id in structure_ids
-            return (
-                in_scope,
+        trigger = evaluator.evaluate(rule.when) if rule.when is not None else None
+        if trigger is not None and not trigger.value:
+            return InterruptResolution(
+                reference,
+                rule,
+                InterruptStatus.TRIGGER_FALSE,
+                is_exact,
+                True,
+                trigger,
+                (),
+                None,
+                None,
+                trigger.explanation,
+            )
+        attempt_results: list[ActionResolution] = []
+        resolved: ActionResolution | None = None
+        ambiguous = False
+        resolver = ActionResolver()
+        for attempt in rule.attempts:
+            result = resolver.resolve(
+                attempt,
+                board=board,
+                tracker=self.tracker,
+                relations=relations,
+                subject=rule.piece,
+                trigger=trigger,
+            )
+            attempt_results.append(result)
+            if result.status is ActionStatus.AMBIGUOUS:
+                ambiguous = True
+                break
+            if result.status is ActionStatus.RESOLVED:
+                resolved = result
+                break
+        if resolved is not None:
+            status = InterruptStatus.SELECTED if can_select else InterruptStatus.APPLICABLE
+            return InterruptResolution(
+                reference,
+                rule,
+                status,
+                is_exact,
+                True,
+                trigger,
+                tuple(attempt_results),
+                resolved.move,
+                resolved.move_san,
                 (
-                    f"Selected structure {self.selected_structure_id} is in scope."
-                    if in_scope
-                    else f"Selected structure {self.selected_structure_id} is not "
-                    "in this item's scopes."
+                    "First resolving action selected."
+                    if can_select
+                    else "Applicable, but an earlier instruction wins."
                 ),
             )
-        available_ids = {
-            structure.id
-            for structure in self.flow.structures
-            if evaluator.evaluate(structure.available_when).value
-        }
-        matching = available_ids.intersection(structure_ids)
-        return (
-            bool(matching),
+        if ambiguous:
+            return InterruptResolution(
+                reference,
+                rule,
+                InterruptStatus.AMBIGUOUS,
+                is_exact,
+                True,
+                trigger,
+                tuple(attempt_results),
+                None,
+                None,
+                attempt_results[-1].reason,
+            )
+        # A triggerless opportunity is applicable only through a resolving action.
+        required_unhandled = rule.required and trigger is not None
+        if is_exact:
+            required_unhandled = True
+        status = (
+            InterruptStatus.REQUIRED_UNHANDLED
+            if required_unhandled
+            else InterruptStatus.NO_ACTION
+        )
+        return InterruptResolution(
+            reference,
+            rule,
+            status,
+            is_exact,
+            True,
+            trigger,
+            tuple(attempt_results),
+            None,
+            None,
             (
-                f"Available structure scope: {sorted(matching)[0]}."
-                if matching
-                else "None of this item's structure scopes are currently available."
+                "Triggered required interrupt has no resolving action."
+                if required_unhandled
+                else "No ordered action resolves uniquely."
             ),
         )
 
-    def _resolve_structures(
-        self, evaluator: ConditionEvaluator
-    ) -> tuple[StructureResolution, ...]:
-        resolutions: list[StructureResolution] = []
-        for structure in self.flow.structures:
-            available = evaluator.evaluate(structure.available_when)
-            selected = evaluator.evaluate(structure.selected_when)
-            if self.selected_structure_id is None:
-                status = (
-                    StructureStatus.AVAILABLE
-                    if available.value
-                    else StructureStatus.UNAVAILABLE
-                )
-                reason = (
-                    available.explanation
-                    if available.value
-                    else f"Availability pending: {available.explanation}"
-                )
-            elif structure.id == self.selected_structure_id:
-                status = StructureStatus.SELECTED
-                reason = "This structure was selected permanently on this line."
-            else:
-                status = StructureStatus.REJECTED
-                reason = f"Structure {self.selected_structure_id} was selected first."
-            resolutions.append(
-                StructureResolution(
-                    structure=structure,
-                    status=status,
-                    available=available,
-                    selected=selected,
-                    selected_at_ply=(
-                        self.selected_structure_at_ply
-                        if structure.id == self.selected_structure_id
-                        else None
-                    ),
-                    reason=reason,
-                )
+    def _resolve_development(
+        self,
+        alias: str,
+        instruction: DevelopmentInstruction,
+        board: chess.Board,
+        relations: PositionRelations,
+        *,
+        can_select: bool,
+    ) -> DevelopmentResolution:
+        runtime = self.tracker.get(instruction.piece.original_piece_id)
+        if runtime.captured:
+            return DevelopmentResolution(
+                f"{alias}.develop",
+                instruction,
+                DevelopmentStatus.CAPTURED,
+                False,
+                None,
+                None,
+                None,
+                (
+                    f"{instruction.piece.label} was captured after developing."
+                    if runtime.has_moved
+                    else f"{instruction.piece.label} was captured undeveloped."
+                ),
             )
-        return tuple(resolutions)
+        if runtime.has_moved:
+            return DevelopmentResolution(
+                f"{alias}.develop",
+                instruction,
+                DevelopmentStatus.COMPLETED,
+                True,
+                None,
+                None,
+                None,
+                f"{instruction.piece.label} has moved.",
+            )
+        prerequisites = all(
+            self._instruction_complete(item) for item in instruction.requires
+        )
+        if not prerequisites:
+            return DevelopmentResolution(
+                f"{alias}.develop",
+                instruction,
+                DevelopmentStatus.NOT_READY,
+                False,
+                None,
+                None,
+                None,
+                "Prerequisites are incomplete.",
+            )
+        condition = None
+        if instruction.when is not None:
+            condition = ConditionEvaluator(
+                board,
+                self.tracker,
+                relations=relations,
+                last_move=self.last_move,
+                subject=instruction.piece,
+            ).evaluate(instruction.when)
+            if not condition.value:
+                return DevelopmentResolution(
+                    f"{alias}.develop",
+                    instruction,
+                    DevelopmentStatus.NOT_READY,
+                    True,
+                    condition,
+                    None,
+                    None,
+                    condition.explanation,
+                )
+        assert runtime.current_square is not None
+        move = chess.Move(
+            runtime.current_square, chess.parse_square(instruction.to_square)
+        )
+        if move not in board.legal_moves:
+            return DevelopmentResolution(
+                f"{alias}.develop",
+                instruction,
+                DevelopmentStatus.WAITING_FOR_LEGALITY,
+                True,
+                condition,
+                None,
+                None,
+                f"{move.uci()} is not currently legal.",
+            )
+        status = DevelopmentStatus.SELECTED if can_select else DevelopmentStatus.AVAILABLE
+        return DevelopmentResolution(
+            f"{alias}.develop",
+            instruction,
+            status,
+            True,
+            condition,
+            move,
+            board.san(move),
+            (
+                "First legal instruction in development order."
+                if can_select
+                else "Available, but an earlier development instruction wins."
+            ),
+        )
+
+    def _instruction_complete(self, reference: str) -> bool:
+        instruction = self.rulebook.instruction(reference)
+        if isinstance(instruction, InterruptRule):
+            return reference in self.completed_interrupts
+        runtime = self.tracker.get(instruction.piece.original_piece_id)
+        return runtime.has_moved
+
+    def _all_development_terminal(self) -> bool:
+        for alias in self.rulebook.development_order:
+            instruction = self.rulebook.piece_by_alias[alias].development
+            assert instruction is not None
+            runtime = self.tracker.get(instruction.piece.original_piece_id)
+            if not runtime.has_moved and not runtime.captured:
+                return False
+        return True
 
     def commit_move(
         self,
@@ -510,90 +521,38 @@ class PolicyRuntime:
         moving_piece_id = self.tracker.piece_id_at(move.from_square)
         if moving_piece_id is None:
             raise ValueError(
-                f"No tracked original piece is on "
-                f"{chess.square_name(move.from_square)}."
+                f"No tracked original piece is on {chess.square_name(move.from_square)}."
             )
+        san = board_before.san(move)
         self.tracker.apply_move(board_before, move, ply=ply)
         self.last_move = LastMove(moving_piece_id, chess.square_name(move.to_square))
-        evaluator = self._evaluator(board_after)
-
-        # Retirement is evaluated before unlocking and structure selection.
-        for rule in self.move_rules:
-            state = self.rule_states[rule.id]
-            if state.retired:
-                continue
-            expiration = (
-                evaluator.evaluate(rule.expire_when)
-                if rule.expire_when is not None
-                else None
-            )
-            if rule.id == selected_rule_id or (
-                expiration is not None and expiration.value
-            ):
-                state.retired = True
-                state.retired_at_ply = ply
-                if rule.id == selected_rule_id:
-                    state.retirement_reason = "Selected one-shot rule was executed."
-                else:
-                    assert expiration is not None
-                    state.retirement_reason = expiration.explanation
-
-        for rule in self.move_rules:
-            state = self.rule_states[rule.id]
-            if state.retired or state.unlocked or rule.unlock_when is None:
-                continue
-            result = evaluator.evaluate(rule.unlock_when)
-            if result.value:
-                state.unlocked = True
-                state.unlocked_at_ply = ply
-
-        if self.selected_structure_id is None:
-            for structure in self.flow.structures:
-                available = evaluator.evaluate(structure.available_when)
-                selected = evaluator.evaluate(structure.selected_when)
-                if available.value and selected.value:
-                    self.selected_structure_id = structure.id
-                    self.selected_structure_at_ply = ply
-                    break
+        self.history_san = (*self.history_san, san)
+        if (
+            selected_rule_id is not None
+            and not selected_rule_id.endswith(".develop")
+            and selected_rule_id in self.rulebook.interrupt_by_ref
+        ):
+            self.completed_interrupts.add(selected_rule_id)
 
     @classmethod
     def replay(
-        cls, flow: Flow, history_san: tuple[str, ...]
+        cls, rulebook: Rulebook, history_san: tuple[str, ...]
     ) -> tuple[PolicyRuntime, chess.Board]:
-        runtime = cls(flow)
-        board = _board_from_fen(flow.start_fen)
-        controlled_sources = {
-            DecisionSource.RESPONSE,
-            DecisionSource.DEVELOPMENT,
-            DecisionSource.CONTINUATION,
-        }
+        runtime = cls(rulebook)
+        board = _board_from_fen(rulebook.start_fen)
         for ply, san in enumerate(history_san, start=1):
             before = board.copy(stack=False)
             move = board.parse_san(san)
             selected_rule_id: str | None = None
-            if before.turn == _color(flow.side):
+            if before.turn == _color(rulebook.side):
                 decision = runtime.resolve(before)
-                if decision.source in controlled_sources and decision.move == move:
+                if decision.move == move:
                     selected_rule_id = decision.source_id
             board.push(move)
             runtime.commit_move(
                 before, move, board, selected_rule_id=selected_rule_id, ply=ply
             )
         return runtime, board
-
-
-def _resolve_action(
-    board: chess.Board,
-    tracker: OriginalPieceTracker,
-    action: MoveAction,
-) -> tuple[chess.Move | None, str | None, str]:
-    runtime = tracker.get(action.piece)
-    if runtime.current_square is None:
-        return None, None, f"Original piece {action.piece} has been captured."
-    move = chess.Move(runtime.current_square, chess.parse_square(action.to_square))
-    if move not in board.legal_moves:
-        return None, None, f"{move.uci()} is not legal in the current position."
-    return move, board.san(move), "Action is legal."
 
 
 def _board_from_fen(value: str) -> chess.Board:

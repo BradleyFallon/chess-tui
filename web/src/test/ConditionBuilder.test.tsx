@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import {
@@ -9,14 +9,31 @@ import {
 import { ConditionBuilder } from "../components/ConditionBuilder";
 import { workspaceFixture } from "./fixtures";
 
-test("condition AST round-trips nested all, any, and invisible not-moved mapping", () => {
+test.each([
+  { moved: "piece:white:pawn:c" },
+  { unmoved: "piece:white:pawn:c" },
+  { captured: "piece:black:bishop:queenside" },
+  { at: { piece: "piece:black:bishop:queenside", square: "f5" } },
+  { occupied: "e4" },
+  { empty: "d5" },
+  { occupied_by: { square: "c6", color: "black", type: "knight" } },
+  { attacked: "piece:white:bishop:queenside" },
+  { attacked_by: { target: "piece:white:pawn:c", attacker: "piece:black:bishop:queenside" } },
+  { in_check: "black" },
+  { last_move: { piece: "piece:black:pawn:e", to: "e5" } },
+  { condition: "center-ready" },
+])("condition AST round-trips atomic operator %#", (expression) => {
+  expect(conditionToExpression(expressionToCondition(expression))).toEqual(expression);
+});
+
+test("condition AST round-trips nested all, any, and not", () => {
   const expression = {
     all: [
-      { not: { moved: "piece:white:pawn:c" } },
+      { unmoved: "piece:white:pawn:c" },
       {
         any: [
           { at: { piece: "piece:black:bishop:queenside", square: "f5" } },
-          { at: { piece: "piece:black:bishop:queenside", square: "g4" } },
+          { not: { captured: "piece:black:bishop:queenside" } },
         ],
       },
     ],
@@ -29,7 +46,6 @@ test("visual builder edits one AST and advanced source reparses it", async () =>
   let latest: ConditionNode = {
     kind: "piece-moved",
     piece: "piece:white:pawn:d",
-    negated: false,
   };
   const view = render(
     <ConditionBuilder
@@ -41,9 +57,14 @@ test("visual builder edits one AST and advanced source reparses it", async () =>
       onChange={(node) => { latest = node; }}
     />,
   );
-  await userEvent.selectOptions(screen.getByLabelText("Movement"), "not-moved");
+  const pieceSelect = screen.getByLabelText("Piece");
+  expect(within(pieceSelect).getByRole("group", { name: "White pieces" })).toBeInTheDocument();
+  expect(within(pieceSelect).getByRole("group", { name: "Black pieces" })).toBeInTheDocument();
+  expect(within(pieceSelect).getByRole("option", { name: /Black queenside bishop/ })).toBeInTheDocument();
+  expect(screen.getByLabelText("Condition type")).not.toContainHTML('value="named"');
+  await userEvent.selectOptions(screen.getByLabelText("Condition type"), "piece-unmoved");
   expect(conditionToExpression(latest)).toEqual({
-    not: { moved: "piece:white:pawn:d" },
+    unmoved: "piece:white:pawn:d",
   });
 
   await userEvent.click(screen.getByText("Advanced condition source"));
