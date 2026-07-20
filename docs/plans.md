@@ -1,12 +1,9 @@
+ui fels clunky and ugly, it isn't easy to use and it looks bad. We want the ui to be elegant and intuitive. We want information to be hidden if not currently under focus, but easy to find when we want it. Also, we want things to be compact so that we can fit things on screen with less scrolling.
 
-use bots of different elo to generate different multiple choice options. We can keep trying with lower elo until we get a full set of unique choices which are all legal moves.
+development order. These should be single row items that we can drag up and down.
 
-How can we test for if there are any blunder scenarios with our current move sequence. I want us to be able to define a default move sequence, so for example, let's say we do d4, Bf4, e3, Nf3... we want to analyze it. We start with d4, trivial, it is always okay, it is first move. Then we do Bf4. We should scan for in what scenarios would that be a bad move. The one that I know of is e5 from black, then we would just sacrifice our bishop for no reason. How do we scan for that? We start with move one, trivial, then move two, we check that move against the most obvious black responses. Do we just do a full on brute force? how do we generate the list of potential black responses? I suppose we could iterate through each possibility, but is that stupid? We can probably make use of exiting chess bot strategies to help figure that out.
+things should be more compact in general. The settings such as engine settings should be in a menu that opens, not always visible. 
 
+general rules and inspected piece information should be very clearly separated. There should be a piece inspector area cleanly separate from other parts on the left side.
 
-
----
-
-with each move, put a thing in the chat that says what book openings we are in alignment with. If we can also say what defenses to expect, that too. We should have an inventory of openings and defenses and a way to check if they are applicable to the current board state. Then, later, we should be able to scroll back and review the chat/log and understand how the game developed from opening system into defense systems and when it went from book standards to rule-based. Eventually, we want to be able to ask the chat for llm advice, where the llm will get the info and be asked to advise or help write new rules etc.
-
-we don't need to see "white to move" status on the evaluation bar area. instead we should indicate what is used to evaluate, such as stockfish V14 D25 or something like that
+Also, let's talk about the screen layout in general. What are the different screen areas. let's come up with some names for areas and decide what they are for and why. we may need to reconsider some things.

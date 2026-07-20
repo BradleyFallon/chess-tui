@@ -1,11 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { Link } from "react-router-dom";
 
-import { BoardPanel } from "../components/BoardPanel";
-import { EvaluationBar } from "../components/EvaluationBar";
-import { PieceAuthoringPanel } from "../components/PieceAuthoringPanel";
-import { PolicyDetailsDrawer } from "../components/PolicyDetailsDrawer";
-import { StatusFeed } from "../components/StatusFeed";
+import {
+  AuthoringSidebar,
+  type AuthoringTab,
+} from "../components/AuthoringSidebar";
+import { BoardStage } from "../components/BoardStage";
+import { CoachPanel } from "../components/CoachPanel";
+import { CommandBar } from "../components/CommandBar";
+import {
+  DetailsDrawer,
+  type DetailsTab,
+} from "../components/DetailsDrawer";
 import { useWorkspace } from "./WorkspaceContext";
 
 const AUTO_RESPOND_KEY = "chess-flow-development-auto-respond";
@@ -14,7 +19,10 @@ export function DevelopPage() {
   const context = useWorkspace();
   const { workspace, loading, pending, error, initialize } = context;
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
+  const [authoringTab, setAuthoringTab] = useState<AuthoringTab>("piece");
+  const [focusInterruptRef, setFocusInterruptRef] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsTab, setDetailsTab] = useState<DetailsTab>("decision");
   const [autoRespond, setAutoRespond] = useState(
     () => localStorage.getItem(AUTO_RESPOND_KEY) === "true",
   );
@@ -92,23 +100,43 @@ export function DevelopPage() {
     ?? workspace.pieceScripts[0]?.alias
     ?? null;
   const selected = workspace.pieceScripts.find((piece) => piece.alias === effectiveAlias) ?? null;
+  const inspectPiece = (alias: string) => {
+    setSelectedAlias(alias);
+    setFocusInterruptRef(null);
+    setAuthoringTab("piece");
+  };
+  const focusInterrupt = (reference: string) => {
+    setSelectedAlias(reference.split(".")[0]);
+    setFocusInterruptRef(reference);
+    setAuthoringTab("piece");
+  };
+  const openDetails = (tab: DetailsTab) => {
+    setDetailsTab(tab);
+    setDetailsOpen(true);
+  };
   return (
     <main className="develop-page">
-      <header className="app-header">
-        <div><Link className="brand" to="/">Chess Flow</Link><span className="header-separator">/</span><span>Opening Rule Engine</span></div>
-        <div className="flow-title"><strong>{workspace.rulebook.name}</strong><span>Rulebook v{workspace.rulebook.version} · {workspace.rulebook.path}</span></div>
-        <div className="header-actions">
-          <button disabled={pending || !workspace.navigation.canBack} onClick={() => void context.back()}>Back</button>
-          <button disabled={pending || !workspace.navigation.canRestart} onClick={() => void context.restart()}>Restart</button>
-          <button disabled={pending} onClick={() => void context.analyse()}>Analyze</button>
-        </div>
-      </header>
-      <div className="workspace-grid v4-grid">
-        <PieceAuthoringPanel
-          key={selected?.alias ?? "none"}
+      <CommandBar
+        workspace={workspace}
+        pending={pending}
+        autoRespond={autoRespond}
+        onAutoRespondChange={changeAutoRespond}
+        onOpponentModeChange={(mode) => void context.updateOpponentMode(mode)}
+        onAnalysisProfileChange={(profileId) => void context.updateAnalysisProfile(profileId)}
+        onAnalyse={() => void context.analyse()}
+        onBack={() => void context.back()}
+        onRestart={() => void context.restart()}
+      />
+      <div className="development-workspace">
+        <AuthoringSidebar
+          key={`${selected?.alias ?? "none"}:${focusInterruptRef ?? "summary"}`}
           workspace={workspace}
           piece={selected}
           pending={pending}
+          tab={authoringTab}
+          focusInterruptRef={focusInterruptRef}
+          onTabChange={setAuthoringTab}
+          onFocusHandled={() => setFocusInterruptRef(null)}
           onPreviewDevelopment={context.previewDevelopment}
           onApplyDevelopment={context.applyDevelopment}
           onDeleteDevelopment={context.deleteDevelopment}
@@ -117,46 +145,42 @@ export function DevelopPage() {
           onDeleteInterrupt={context.deleteInterrupt}
           onReorderDevelopment={context.reorderDevelopment}
           onReorderInterrupts={context.reorderInterrupts}
-          onSelectPiece={setSelectedAlias}
-          onOpenDetails={() => setDetailsOpen(true)}
+          onSelectPiece={inspectPiece}
+          onFocusInterrupt={focusInterrupt}
+          onOpenDetails={openDetails}
         />
-        <div className="board-region">
-          <EvaluationBar evaluation={workspace.evaluation} />
-          <BoardPanel workspace={workspace} pending={pending} selectedAlias={effectiveAlias} onInspect={setSelectedAlias} onMove={(uci) => void context.move(uci)} />
-          <section className="workspace-panel history-panel">
-            <div className="section-heading-row">
-              <span className="eyebrow">Move history</span>
-              <span className="turn-label">{workspace.position.turn} to move</span>
-            </div>
-            <p>{workspace.position.historySan.join(" ") || "Start position"}</p>
-          </section>
-        </div>
-        <div className="side-region">
-          <StatusFeed
-            workspace={workspace}
-            pending={pending}
-            error={error}
-            autoRespond={autoRespond}
-            onAutoRespondChange={changeAutoRespond}
-            onOpponentModeChange={(mode) => void context.updateOpponentMode(mode)}
-            onAnalysisProfileChange={(profileId) => void context.updateAnalysisProfile(profileId)}
-            onAddOpeningTag={(recordId) => void context.addOpeningTag(recordId)}
-            onRemoveOpeningTag={(recordId) => void context.removeOpeningTag(recordId)}
-            onAnalyse={() => void context.analyse()}
-            onNextOpponent={() => void context.nextOpponent()}
-            onSubmit={(text) => void context.sendChat(text)}
-            onRetry={() => void context.retry()}
-            onContinue={() => void context.continuePolicy()}
-            onAcceptHere={() => void context.acceptHere()}
-          />
-        </div>
+        <BoardStage
+          workspace={workspace}
+          pending={pending}
+          selectedAlias={effectiveAlias}
+          onInspect={inspectPiece}
+          onMove={(uci) => void context.move(uci)}
+          onOpenDetails={openDetails}
+          onNextOpponent={() => void context.nextOpponent()}
+          onRetry={() => void context.retry()}
+          onContinue={() => void context.continuePolicy()}
+          onAcceptHere={() => void context.acceptHere()}
+        />
+        <CoachPanel
+          workspace={workspace}
+          pending={pending}
+          error={error}
+          onAddOpeningTag={(recordId) => void context.addOpeningTag(recordId)}
+          onRemoveOpeningTag={(recordId) => void context.removeOpeningTag(recordId)}
+          onSubmit={(text) => void context.sendChat(text)}
+          onOpenDetails={openDetails}
+        />
       </div>
-      <PolicyDetailsDrawer
-        workspace={workspace}
-        piece={selected}
-        open={detailsOpen}
-        onClose={() => setDetailsOpen(false)}
-      />
+      {detailsOpen && (
+        <DetailsDrawer
+          workspace={workspace}
+          piece={selected}
+          open
+          tab={detailsTab}
+          onTabChange={setDetailsTab}
+          onClose={() => setDetailsOpen(false)}
+        />
+      )}
     </main>
   );
 }

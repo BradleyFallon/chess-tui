@@ -2,14 +2,20 @@ import type { WorkspaceSnapshot } from "../types/workspace";
 
 type Evaluation = WorkspaceSnapshot["evaluation"];
 
-export function EvaluationBar({ evaluation }: { evaluation: Evaluation }) {
+export function EvaluationBar({
+  evaluation,
+  onOpenDetails,
+}: {
+  evaluation: Evaluation;
+  onOpenDetails?: () => void;
+}) {
   const label = evaluationLabel(evaluation);
   const percentage = evaluationPercentage(evaluation);
   return (
-    <section className="evaluation-card" aria-label="Engine advantage">
-      <output className="evaluation-score" aria-label="White-perspective score">
-        {label}
-      </output>
+    <section
+      className={`evaluation-bar evaluation-${evaluation.status}`}
+      aria-label="Engine advantage"
+    >
       <div
         className="evaluation-track"
         role="meter"
@@ -22,27 +28,19 @@ export function EvaluationBar({ evaluation }: { evaluation: Evaluation }) {
             : evaluation.centipawns / 100
         }
       >
-        <div
-          className="evaluation-black"
-          style={{ width: `${100 - percentage}%` }}
-        />
-        <div
-          className="evaluation-white"
-          style={{ width: `${percentage}%` }}
-        />
+        <div className="evaluation-black" style={{ height: `${100 - percentage}%` }} />
+        <div className="evaluation-white" style={{ height: `${percentage}%` }} />
         <span className="evaluation-center-marker" aria-hidden="true" />
       </div>
-      <span className="evaluation-provenance">
-        {analysisLabel(evaluation)}
-        {evaluation.changeCentipawns !== null
-          ? ` · ${evaluation.changeCentipawns >= 0 ? "+" : ""}${(
-              evaluation.changeCentipawns / 100
-            ).toFixed(2)} since the previous position`
-          : ""}
-      </span>
-      {evaluation.message && evaluation.status === "error" && (
-        <p className="inline-error">{evaluation.message}</p>
-      )}
+      <button
+        type="button"
+        className="evaluation-score"
+        aria-label="White-perspective score"
+        title={analysisLabel(evaluation)}
+        onClick={onOpenDetails}
+      >
+        {label}
+      </button>
     </section>
   );
 }

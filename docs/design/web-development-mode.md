@@ -41,9 +41,37 @@ browser to merge domain state from unrelated responses.
 
 ## Workspace
 
-The main surface contains the board and move history, piece-script inspector,
-current decision/frontier, Back and Restart, optional engine analysis, and
-opening context. Selecting a piece never disables move selection.
+The desktop workspace uses seven named areas:
+
+```text
+Command Bar
+Authoring Sidebar
+Piece Inspector
+Rulebook Outline
+Board Stage
+Coach Panel
+Details Drawer
+```
+
+The thin Command Bar keeps navigation and compact status chips visible while
+analysis profiles, opponent mode, and auto-response behavior remain in its
+Settings popover. Below it, a stable three-column layout places the Authoring
+Sidebar, visually dominant Board Stage, and Coach Panel beside one another.
+The page shell fits the desktop viewport; the Authoring Sidebar, Coach timeline,
+and Details Drawer own their scroll regions.
+
+The Authoring Sidebar separates selected-piece authoring from global Rulebook
+structure with Piece and Rulebook tabs. The Piece Inspector shows compact
+development, interrupt, and relationship rows, and a focused editor temporarily
+replaces it during a change. The Rulebook Outline contains draggable semantic
+development and interrupt order plus opening metadata and warnings.
+
+The Board Stage contains the one-line current recommendation, board, attached
+White-normalized evaluation bar, and only the immediate actions relevant to
+the current move. The Coach Panel keeps the compact timeline independently
+scrollable while its SAN/chat/command composer remains visible. Full decision
+traces, relationships, engine diagnostics, and TOML source stay hidden in the
+tabbed Details Drawer until requested.
 
 Controlled pieces expose default-development and interrupt authoring. Opponent
 pieces are read-only. Relationship details distinguish each legal attacker and

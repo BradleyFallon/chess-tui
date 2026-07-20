@@ -191,8 +191,8 @@ after = ["d4", "d5", "Bf4", "Nf6", "e3", "c5", "Nd2"]
 move = "Qb6"
 
 [[opponent_replies]]
-id = "after-d4-nf6-bf4-d5-e3-c5-nf3-e6"
-after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3"]
+id = "after-d4-nf6-bf4-d5-e3-c5-nbd2-e6"
+after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nbd2"]
 move = "e6"
 
 [[opponent_replies]]
@@ -201,6 +201,11 @@ after = ["d4", "Nf6", "Bf4", "d5", "e3"]
 move = "e6"
 
 [[opponent_replies]]
-id = "after-d4-nf6-bf4-d5-e3-e6-nf3-c5"
-after = ["d4", "Nf6", "Bf4", "d5", "e3", "e6", "Nf3"]
+id = "after-d4-nf6-bf4-d5-e3-e6-nbd2-c5"
+after = ["d4", "Nf6", "Bf4", "d5", "e3", "e6", "Nbd2"]
 move = "c5"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-d5-e3-c5-nf3-nc6"
+after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3"]
+move = "Nc6"

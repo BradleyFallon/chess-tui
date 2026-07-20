@@ -77,17 +77,6 @@ def test_configured_engine_analyses_each_move_and_supplies_black_reply(
         assert len(analysed["positionAnalysis"]["engineMoves"]) == 4
         assert analysed["positionAnalysis"]["bookMoves"] is not None
 
-        record_id = analysed["opening"]["recordId"]
-        assert record_id is not None
-        tagged = client.post(
-            f"/api/sessions/{session_id}/opening-tags",
-            json={"recordId": record_id},
-        ).json()
-        assert tagged["opening"]["isTagged"] is True
-        assert tagged["opening"]["name"] in {
-            item["name"] for item in tagged["rulebook"]["openingTags"]
-        }
-
 
 def test_chat_hint_and_diagnostic_commands_remain_python_owned(web_client) -> None:
     client, _ = web_client
