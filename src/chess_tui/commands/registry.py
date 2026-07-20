@@ -92,7 +92,7 @@ COMMANDS: tuple[CommandDefinition, ...] = (
         CommandId.NEXT_OPPONENT,
         "/next",
         "/next",
-        "Ask Stockfish to play the opponent's next move.",
+        "Play the opponent's next move from the explicitly selected source.",
     ),
     CommandDefinition(
         CommandId.RETRY_POLICY,
@@ -171,7 +171,12 @@ class CommandRegistry:
         if command is CommandId.PLAY_MOVE:
             return context.phase in {"policy-ready", "opponent-ready"}
         if command is CommandId.NEXT_OPPONENT:
-            return context.engine_available and context.phase == "opponent-ready"
+            available = (
+                context.opponent_available
+                if context.opponent_available is not None
+                else context.engine_available
+            )
+            return available and context.phase == "opponent-ready"
         if command is CommandId.RETRY_POLICY:
             return context.phase == "policy-result"
         if command is CommandId.CONTINUE_POLICY:

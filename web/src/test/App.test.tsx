@@ -21,6 +21,7 @@ function renderApp(workspace = workspaceFixture) {
 describe("Opening Rule Engine workspace", () => {
   beforeEach(() => {
     sessionStorage.clear();
+    localStorage.clear();
     vi.restoreAllMocks();
   });
 
@@ -47,6 +48,26 @@ describe("Opening Rule Engine workspace", () => {
     expect(screen.getByText("black-b-pawn via b4c3")).toBeInTheDocument();
   });
 
+  it("labels an attacked piece with no defenders as undefended", async () => {
+    renderApp({
+      ...workspaceFixture,
+      pieceScripts: workspaceFixture.pieceScripts.map((piece, index) => index
+        ? piece
+        : {
+            ...piece,
+            relationships: {
+              ...piece.relationships,
+              undefended: true,
+              underDefended: true,
+              defenderCount: 0,
+            },
+          }),
+    });
+    await screen.findByText("Move to d4");
+    fireEvent.click(screen.getByText("Current board relationships"));
+    expect(screen.getByText("Undefended")).toBeInTheDocument();
+  });
+
   it("opens a guided interrupt wizard with required and ordered attempts", async () => {
     renderApp();
     await screen.findByText("Move to d4");
@@ -58,6 +79,22 @@ describe("Opening Rule Engine workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Later step" }));
     expect(screen.getByText("Ordered attempts")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Add attempt" })).toBeInTheDocument();
+  });
+
+  it("preloads the guided wizard when editing an existing interrupt", async () => {
+    renderApp();
+    await screen.findByText("Move to d4");
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.getByRole("dialog", { name: /Edit interrupt/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("Rule ID")).toHaveValue("take-bishop");
+    expect(screen.getByLabelText("Prerequisites")).toHaveValue("d-pawn.develop");
+    fireEvent.click(screen.getByRole("button", { name: "Later step" }));
+    fireEvent.click(screen.getByRole("button", { name: "Later step" }));
+    expect(screen.getByLabelText("Capture type")).toHaveValue("bishop");
+    fireEvent.click(screen.getByRole("button", { name: "Later step" }));
+    expect(screen.getByLabelText("Why")).toHaveValue(
+      "Capture a bishop when possible.",
+    );
   });
 
   it("offers exact-position interrupts through the same wizard", async () => {
@@ -153,5 +190,76 @@ describe("Opening Rule Engine workspace", () => {
     fireEvent.click(screen.getByRole("button", { name: "Analyze" }));
     await waitFor(() => expect(screen.getByText("Illegal move")).toBeInTheDocument());
     expect(screen.getByText("Move to d4")).toBeInTheDocument();
+  });
+
+  it("renders the restored timeline, composer, and evaluation controls", async () => {
+    renderApp({
+      ...workspaceFixture,
+      evaluation: {
+        ...workspaceFixture.evaluation,
+        status: "ready",
+        centipawns: 42,
+        previousCentipawns: 18,
+        changeCentipawns: 24,
+        engineName: "Stockfish",
+        profileId: "quick",
+        requestedDepth: 10,
+        actualDepth: 10,
+        nodes: 12000,
+        timeMs: 45,
+      },
+      analysisSettings: {
+        ...workspaceFixture.analysisSettings,
+        status: "ready",
+        engineName: "Stockfish",
+      },
+      positionAnalysis: {
+        bookMoves: ["d4", "Nf3"],
+        engineMoves: [
+          {
+            uci: "d2d4",
+            san: "d4",
+            centipawns: 42,
+            mateIn: null,
+            principalVariation: ["d2d4", "g8f6"],
+          },
+        ],
+      },
+    });
+    expect(await screen.findByRole("complementary", {
+      name: "Development timeline",
+    })).toBeInTheDocument();
+    expect(screen.getByLabelText("Enter move, chat, or command")).toBeInTheDocument();
+    expect(screen.getByLabelText("Engine advantage")).toBeInTheDocument();
+    expect(screen.getByLabelText("White-perspective score")).toHaveTextContent("+0.42");
+    expect(screen.getByLabelText("Engine analysis strength")).toHaveValue("quick");
+    expect(screen.getByText(/Stockfish · depth 10 · 45 ms · 12,000 nodes/)).toBeInTheDocument();
+    expect(screen.getByText(/\+0.24 since the previous position/)).toBeInTheDocument();
+    expect(screen.getByText("Engine candidates")).toBeInTheDocument();
+    expect(screen.getByText("d4, Nf3")).toBeInTheDocument();
+  });
+
+  it("automatically requests the selected engine reply on the opponent turn", async () => {
+    localStorage.setItem("chess-flow-development-auto-respond", "true");
+    renderApp({
+      ...workspaceFixture,
+      position: {
+        ...workspaceFixture.position,
+        turn: "black",
+        historySan: ["d4"],
+      },
+      decision: null,
+      opponent: {
+        mode: "engine",
+        storedReplyAvailable: false,
+        engineAvailable: true,
+        lastSource: null,
+      },
+    });
+    await screen.findByText("Black to move");
+    await waitFor(() => expect(vi.mocked(fetch)).toHaveBeenCalledWith(
+      expect.stringContaining("/opponent/next"),
+      expect.objectContaining({ method: "POST" }),
+    ));
   });
 });

@@ -2,8 +2,8 @@ version = 4
 name = "Accelerated London"
 start_fen = "startpos"
 side = "white"
-development_order = ["d-pawn", "london-bishop", "e-pawn", "c-pawn", "queenside-knight", "kingside-knight", "kingside-bishop", "queen", "king"]
-interrupt_order = ["d-pawn.accept-englund", "d-pawn.advance-against-early-c5", "london-bishop.escape-attack", "queenside-knight.handle-pressure", "d-pawn.take-bishop", "c-pawn.challenge-center"]
+development_order = ["d-pawn", "london-bishop", "e-pawn", "kingside-knight", "c-pawn", "queenside-knight", "kingside-bishop", "king", "queen"]
+interrupt_order = ["d-pawn.accept-englund", "d-pawn.advance-against-early-c5", "london-bishop.escape-attack", "queenside-knight.develop-behind-c4", "queenside-knight.handle-pressure", "d-pawn.take-bishop", "c-pawn.challenge-center"]
 
 [[opening_tags]]
 eco = "A40"
@@ -66,7 +66,7 @@ ref = "piece:white:pawn:c"
 
 [pieces.c-pawn.develop]
 to = "c3"
-requires = ["e-pawn.develop"]
+requires = ["queenside-knight.develop"]
 why = "Build the compact London center."
 
 [[pieces.c-pawn.rules]]
@@ -80,8 +80,14 @@ ref = "piece:white:knight:queenside"
 
 [pieces.queenside-knight.develop]
 to = "d2"
-requires = ["c-pawn.develop"]
+requires = ["e-pawn.develop"]
 why = "Support the compact c3 center."
+
+[[pieces.queenside-knight.rules]]
+id = "develop-behind-c4"
+when = { at = { piece = "c-pawn", square = "c4" } }
+try = [{ move = "c3" }]
+why = "Coordinate the queenside knight with the active c4 center."
 
 [[pieces.queenside-knight.rules]]
 id = "handle-pressure"
@@ -172,4 +178,29 @@ move = "d5"
 [[opponent_replies]]
 id = "after-d4-d5-bf4-c5"
 after = ["d4", "d5", "Bf4"]
+move = "c5"
+
+[[opponent_replies]]
+id = "after-d4-d5-bf4-nf6-e3-c5"
+after = ["d4", "d5", "Bf4", "Nf6", "e3"]
+move = "c5"
+
+[[opponent_replies]]
+id = "after-d4-d5-bf4-nf6-e3-c5-nd2-qb6"
+after = ["d4", "d5", "Bf4", "Nf6", "e3", "c5", "Nd2"]
+move = "Qb6"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-d5-e3-c5-nf3-e6"
+after = ["d4", "Nf6", "Bf4", "d5", "e3", "c5", "Nf3"]
+move = "e6"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-d5-e3-e6"
+after = ["d4", "Nf6", "Bf4", "d5", "e3"]
+move = "e6"
+
+[[opponent_replies]]
+id = "after-d4-nf6-bf4-d5-e3-e6-nf3-c5"
+after = ["d4", "Nf6", "Bf4", "d5", "e3", "e6", "Nf3"]
 move = "c5"

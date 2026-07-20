@@ -17,6 +17,14 @@ export function BoardPanel({ workspace, pending, selectedAlias, onInspect, onMov
   const sources = useMemo(() => new Set(legal.map((move) => move.slice(0, 2))), [legal]);
   const targets = selected ? legal.filter((move) => move.startsWith(selected)).map((move) => move.slice(2, 4)) : [];
   const styles: Record<string, React.CSSProperties> = {};
+  if (workspace.hintMoveUci) {
+    styles[workspace.hintMoveUci.slice(0, 2)] = {
+      boxShadow: "inset 0 0 0 5px #e2ad55",
+    };
+    styles[workspace.hintMoveUci.slice(2, 4)] = {
+      boxShadow: "inset 0 0 0 5px rgba(226, 173, 85, .82)",
+    };
+  }
   const inspected = workspace.pieceScripts.find((piece) => piece.alias === selectedAlias);
   if (inspected?.currentSquare) styles[inspected.currentSquare] = { boxShadow: "inset 0 0 0 5px #61c7c2" };
   if (workspace.position.lastMoveUci) {

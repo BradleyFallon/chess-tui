@@ -26,12 +26,18 @@ interface WorkspaceContextValue {
   error: ApiError | null;
   initialize: () => Promise<void>;
   move: (uci: string) => Promise<void>;
+  sendChat: (text: string) => Promise<void>;
+  nextOpponent: () => Promise<void>;
+  updateOpponentMode: (mode: WorkspaceSnapshot["opponent"]["mode"]) => Promise<void>;
   retry: () => Promise<void>;
   continuePolicy: () => Promise<void>;
   acceptHere: () => Promise<void>;
   back: () => Promise<void>;
   restart: () => Promise<void>;
   analyse: () => Promise<void>;
+  updateAnalysisProfile: (profileId: string) => Promise<void>;
+  addOpeningTag: (recordId: number) => Promise<void>;
+  removeOpeningTag: (recordId: number) => Promise<void>;
   previewDevelopment: (draft: DevelopmentDraft) => Promise<MutationPreview>;
   applyDevelopment: (draft: DevelopmentDraft) => Promise<void>;
   deleteDevelopment: (alias: string) => Promise<void>;
@@ -106,12 +112,22 @@ export function WorkspaceProvider({ children }: PropsWithChildren) {
   const value = useMemo<WorkspaceContextValue>(() => ({
     workspace, loading, pending, error, initialize,
     move: (uci) => operate((id) => workspaceApi.submitMove(id, uci)),
+    sendChat: (text) => operate((id) => workspaceApi.submitChat(id, text)),
+    nextOpponent: () => operate(workspaceApi.nextOpponent),
+    updateOpponentMode: (mode) =>
+      operate((id) => workspaceApi.updateOpponentMode(id, mode)),
     retry: () => operate(workspaceApi.retry),
     continuePolicy: () => operate(workspaceApi.continuePolicy),
     acceptHere: () => operate(workspaceApi.acceptHere),
     back: () => operate(workspaceApi.back),
     restart: () => operate(workspaceApi.restart),
     analyse: () => operate(workspaceApi.analyse),
+    updateAnalysisProfile: (profileId) =>
+      operate((id) => workspaceApi.updateAnalysisProfile(id, profileId)),
+    addOpeningTag: (recordId) =>
+      operate((id) => workspaceApi.addOpeningTag(id, recordId)),
+    removeOpeningTag: (recordId) =>
+      operate((id) => workspaceApi.removeOpeningTag(id, recordId)),
     previewDevelopment: (draft) => {
       const current = needWorkspace();
       return workspaceApi.previewDevelopment(current.sessionId, draft);

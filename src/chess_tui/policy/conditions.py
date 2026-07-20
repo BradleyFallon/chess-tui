@@ -119,7 +119,7 @@ def parse_condition(
     if kind == "last_move":
         data = _exact_mapping(payload, {"piece", "to"}, context)
         return LastMoveCondition(
-            _reference(data["piece"], aliases, context),
+            _subject(data["piece"], aliases, context),
             _square(data["to"], context),
         )
     if kind in {"all", "any"}:
@@ -237,7 +237,7 @@ def referenced_pieces(condition: Condition) -> set[StartingPieceRef]:
     if isinstance(condition, CapturableCondition):
         return {condition.target}
     if isinstance(condition, LastMoveCondition):
-        return {condition.piece}
+        return _reference_set(condition.piece)
     if isinstance(condition, (AllCondition, AnyCondition)):
         return set().union(
             *(referenced_pieces(child) for child in condition.conditions)
@@ -387,14 +387,15 @@ class ConditionEvaluator:
                 value, f"{condition.color} is{' ' if value else ' not '}in check"
             )
         if isinstance(condition, LastMoveCondition):
+            ref = self._resolve(condition.piece)
             value = (
                 self.last_move is not None
-                and self.last_move.piece == condition.piece.original_piece_id
+                and self.last_move.piece == ref.original_piece_id
                 and self.last_move.to_square == condition.to_square
             )
             return ConditionResult(
                 value,
-                f"last move was{' ' if value else ' not '}{condition.piece.label} "
+                f"last move was{' ' if value else ' not '}{ref.label} "
                 f"to {condition.to_square}",
             )
         if isinstance(condition, AllCondition):

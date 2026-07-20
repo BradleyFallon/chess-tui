@@ -9,9 +9,18 @@ import secrets
 
 import chess
 
+from ..commands import (
+    CommandAvailability,
+    CommandFailure,
+    CommandId,
+    CommandInvocation,
+    CommandRegistry,
+)
 from ..engine import (
     ANALYSIS_PROFILES,
     DEFAULT_ANALYSIS_PROFILE,
+    ENGINE_PROTOTYPE_PROFILE,
+    AnalysedMove,
     ChessEngineService,
     EngineError,
 )
@@ -22,9 +31,13 @@ from ..flow import (
     FlowWorkspace,
     InterruptRule,
     MoveAttempt,
+    OpeningTag,
     PieceScript,
     Rulebook,
+    normalized_position_key,
+    replay_san,
 )
+from ..opening import OpeningDataError, OpeningMoveProvenance
 from ..policy import (
     PositionAnalyzer,
     StartingPieceRef,
@@ -39,15 +52,19 @@ from ..policy.runtime import (
 from .api_models import (
     ActionAttemptRequest,
     ActionAttemptSnapshot,
+    AnalysisProfileSnapshot,
     AnalysisRunSnapshot,
+    AnalysisSettingsSnapshot,
     AttackSnapshot,
     AttemptSnapshot,
+    AvailableCommandSnapshot,
     ConditionEvaluationSnapshot,
     DecisionSnapshot,
     DefenseSnapshot,
     DefendersAgainstSnapshot,
     DevelopmentDraftRequest,
     DevelopmentInstructionSnapshot,
+    EngineLineSnapshot,
     EngineHealth,
     EvaluationSnapshot,
     FlowSourceResponse,
@@ -56,11 +73,16 @@ from .api_models import (
     InterruptRuleSnapshot,
     MutationPreviewResponse,
     NavigationSnapshot,
+    OpeningHistorySnapshot,
+    OpeningSummarySnapshot,
     OpeningTagSnapshot,
+    OpponentSettingsSnapshot,
     PieceRelationSnapshot,
     PieceScriptSnapshot,
     PositionSnapshot,
+    PositionAnalysisSnapshot,
     RulebookSnapshot,
+    TimelineEntrySnapshot,
     WorkspaceSnapshot,
 )
 from .errors import ApiErrorCode, WebApiError
@@ -74,12 +96,26 @@ class DevelopmentSession:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     analysis_profile_id: str = DEFAULT_ANALYSIS_PROFILE.id
     evaluation: EvaluationSnapshot = field(default_factory=EvaluationSnapshot)
+    opponent_mode: str = "stored"
+    last_opponent_source: str | None = None
+    position_analysis: PositionAnalysisSnapshot | None = None
+    hint_move_uci: str | None = None
+    timeline: list[TimelineEntrySnapshot] = field(default_factory=list)
+    next_timeline_id: int = 1
 
 
 class EvaluationService:
-    def __init__(self, engine: ChessEngineService | None) -> None:
+    def __init__(
+        self,
+        engine: ChessEngineService | None,
+        *,
+        engine_identity: str = "",
+    ) -> None:
         self.engine = engine
+        self.engine_identity = engine_identity or None
         self.status = "off" if engine is None else "configured"
+        self.last_engine_name: str | None = None
+        self._cache: dict[tuple[str, str, str], tuple[AnalysedMove, ...]] = {}
         self._lock = asyncio.Lock()
 
     @property
@@ -92,20 +128,69 @@ class EvaluationService:
                 status="off", message="Engine is not configured."
             )
         profile = next(item for item in ANALYSIS_PROFILES if item.id == profile_id)
+        try:
+            result = (await self.analyse_lines(board, profile_id, count=1))[0]
+        except (EngineError, RuntimeError) as exc:
+            self.status = "error"
+            return AnalysisRunSnapshot(status="error", message=str(exc))
+        return _analysis_run_snapshot(result, profile.id, profile.depth)
+
+    async def analyse_lines(
+        self,
+        board: chess.Board,
+        profile_id: str,
+        *,
+        count: int,
+    ) -> tuple[AnalysedMove, ...]:
+        if self.engine is None:
+            raise RuntimeError("Engine analysis is disabled.")
+        legal_count = board.legal_moves.count()
+        if legal_count == 0:
+            raise RuntimeError("The position has no legal moves to analyse.")
+        profile = next(item for item in ANALYSIS_PROFILES if item.id == profile_id)
+        requested = min(count, legal_count)
+        key = (
+            normalized_position_key(board),
+            profile.id,
+            self.engine_identity or type(self.engine).__name__,
+        )
+        async with self._lock:
+            cached = self._cache.get(key, ())
+            if len(cached) >= requested:
+                return cached[:requested]
+            try:
+                results = await self.engine.analyse(
+                    board.copy(stack=False),
+                    count=requested,
+                    profile=profile,
+                )
+                if not results:
+                    raise RuntimeError("Engine returned no analysis rows.")
+            except EngineError:
+                self.status = "error"
+                raise
+            self._cache[key] = results
+        self.status = "ready"
+        self.last_engine_name = results[0].engine_name or self.engine_identity
+        return results
+
+    async def choose_move(self, board: chess.Board) -> chess.Move:
+        if self.engine is None:
+            raise WebApiError(
+                ApiErrorCode.ENGINE_ERROR,
+                "Engine reply mode requires a configured chess engine.",
+                status_code=503,
+            )
         async with self._lock:
             try:
-                result = (await self.engine.analyse(board, count=1, profile=profile))[0]
+                return await self.engine.choose_move(board, ENGINE_PROTOTYPE_PROFILE)
             except EngineError as exc:
                 self.status = "error"
-                return AnalysisRunSnapshot(status="error", message=str(exc))
-        self.status = "ready"
-        return AnalysisRunSnapshot(
-            status="ready",
-            centipawns=result.evaluation_cp,
-            mate_in=result.mate_in,
-            move_uci=result.uci,
-            move_san=result.san,
-        )
+                raise WebApiError(
+                    ApiErrorCode.ENGINE_ERROR,
+                    f"The configured engine could not choose a reply: {exc}",
+                    status_code=502,
+                ) from exc
 
 
 class SessionManager:
@@ -118,13 +203,16 @@ class SessionManager:
         engine: ChessEngineService | None,
         engine_identity: str = "",
     ) -> None:
-        del engine_identity
         self.project_root = project_root.resolve()
         self.allowed_flow_directory = allowed_flow_directory.resolve()
         self.startup_flow_path = (
             startup_flow_path.resolve() if startup_flow_path else None
         )
-        self.evaluations = EvaluationService(engine)
+        self.evaluations = EvaluationService(
+            engine,
+            engine_identity=engine_identity,
+        )
+        self.commands = CommandRegistry()
         self.sessions: dict[str, DevelopmentSession] = {}
 
     async def create_session(
@@ -134,13 +222,22 @@ class SessionManager:
         workspace = FlowWorkspace(path)
         workspace.restart()
         session = DevelopmentSession(secrets.token_urlsafe(12), path, workspace)
+        if self.evaluations.engine is not None:
+            session.opponent_mode = "engine"
+        self._append_timeline(
+            session,
+            "system",
+            "Development session ready",
+            f"Loaded {workspace.author.rulebook.name} as a v4 Rulebook.",
+        )
         self.sessions[session.id] = session
-        return self._snapshot(session)
+        async with session.lock:
+            return await self._snapshot(session)
 
     async def get_snapshot(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
-            return self._snapshot(session)
+            return await self._snapshot(session)
 
     async def get_flow_source(self, session_id: str) -> FlowSourceResponse:
         session = self._session(session_id)
@@ -152,21 +249,13 @@ class SessionManager:
     async def submit_move(self, session_id: str, uci: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
-            workspace = session.workspace
             try:
-                if workspace.is_policy_turn:
-                    attempt = workspace.submit_policy_uci(uci)
-                    if attempt.result.value == "correct":
-                        workspace.complete_correct_move()
-                else:
-                    workspace.submit_opponent_uci(uci)
-                    if workspace.outcome is None:
-                        workspace.begin_policy_turn()
+                self._submit_move_locked(session, uci)
             except (ValueError, FlowValidationError) as exc:
                 raise WebApiError(
                     ApiErrorCode.INVALID_MOVE, str(exc), status_code=422
                 ) from exc
-            return self._snapshot(session)
+            return await self._snapshot(session)
 
     async def submit_san_move(self, session_id: str, san: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
@@ -180,23 +269,109 @@ class SessionManager:
             ) from exc
         return await self.submit_move(session_id, uci)
 
+    async def submit_chat(self, session_id: str, text: str) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            self._append_timeline(session, "user", "You", text.strip())
+            try:
+                invocation = self.commands.parse_chat(text)
+                await self._execute_command_locked(session, invocation)
+            except (
+                CommandFailure,
+                FlowValidationError,
+                ValueError,
+                WebApiError,
+            ) as exc:
+                self._append_timeline(
+                    session,
+                    "error",
+                    "Command failed",
+                    str(exc),
+                )
+            return await self._snapshot(session)
+
+    async def next_opponent(self, session_id: str) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            try:
+                await self._play_next_opponent_locked(session)
+            except CommandFailure as exc:
+                raise WebApiError(
+                    ApiErrorCode.INVALID_REQUEST,
+                    str(exc),
+                    status_code=409,
+                ) from exc
+            return await self._snapshot(session)
+
+    async def update_opponent_mode(
+        self,
+        session_id: str,
+        mode: str,
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            session.opponent_mode = mode
+            self._append_timeline(
+                session,
+                "system",
+                "Opponent mode changed",
+                {
+                    "stored": "Stored replies only. Missing branches will fail clearly.",
+                    "engine": "Configured engine replies only. Engine errors remain visible.",
+                    "manual": "Opponent moves must be entered manually.",
+                }[mode],
+            )
+            return await self._snapshot(session)
+
     async def retry_policy(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
             session.workspace.retry_policy_move()
-            return self._snapshot(session)
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session,
+                "system",
+                "Retry",
+                "Restored the position before the attempted move.",
+            )
+            return await self._snapshot(session)
 
     async def continue_policy(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
+            attempt = session.workspace.attempt
+            san = attempt.decision.move_san if attempt else None
             session.workspace.continue_with_policy_move()
-            return self._snapshot(session)
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session,
+                "success",
+                "Used Rulebook recommendation",
+                "Committed the selected v4 instruction without changing the Rulebook.",
+            )
+            if san:
+                self._append_opening_timeline(session, san)
+            return await self._snapshot(session)
 
     async def accept_attempt_as_interrupt(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
-            session.workspace.accept_attempt_as_interrupt()
-            return self._snapshot(session)
+            attempt = session.workspace.attempt
+            san = attempt.selected_move.san if attempt else None
+            rule = session.workspace.accept_attempt_as_interrupt()
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session,
+                "success",
+                "Accepted exact-position move",
+                f"Added or replaced {rule.id} as a piece-owned exact-position interrupt.",
+            )
+            if san:
+                self._append_opening_timeline(session, san)
+            return await self._snapshot(session)
 
     async def go_back(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
@@ -207,40 +382,102 @@ class SessionManager:
                 raise WebApiError(
                     ApiErrorCode.INVALID_NAVIGATION, str(exc), status_code=409
                 ) from exc
-            return self._snapshot(session)
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session,
+                "system",
+                "Moved back",
+                "Replayed the retained line and restored Rulebook completion state.",
+            )
+            return await self._snapshot(session)
 
     async def restart(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
             session.workspace.restart()
-            return self._snapshot(session)
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session,
+                "system",
+                "Line restarted",
+                "Returned to the Rulebook start position.",
+            )
+            return await self._snapshot(session)
 
     async def reload(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
             session.workspace.reload()
-            return self._snapshot(session)
+            session.position_analysis = None
+            session.hint_move_uci = None
+            return await self._snapshot(session)
 
     async def analyse_position(self, session_id: str) -> WorkspaceSnapshot:
         session = self._session(session_id)
         async with session.lock:
-            result = await self.evaluations.analyse(
-                session.workspace.board, session.analysis_profile_id
-            )
-            session.evaluation = EvaluationSnapshot(
-                status=result.status,
-                centipawns=result.centipawns,
-                mate_in=result.mate_in,
-                message=result.message,
-            )
-            return self._snapshot(session)
+            await self._analyse_locked(session)
+            return await self._snapshot(session)
 
     async def update_analysis_profile(
         self, session_id: str, profile_id: str
     ) -> WorkspaceSnapshot:
         session = self._session(session_id)
-        session.analysis_profile_id = profile_id
-        return self._snapshot(session)
+        async with session.lock:
+            session.analysis_profile_id = profile_id
+            session.position_analysis = None
+            self._append_timeline(
+                session,
+                "system",
+                "Analysis strength changed",
+                f"Future analysis uses {_analysis_profile(profile_id).label}.",
+            )
+            return await self._snapshot(session)
+
+    async def add_opening_tag(
+        self,
+        session_id: str,
+        record_id: int,
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            match = self._opening_match(session.workspace, record_id)
+            session.workspace.add_opening_tag(OpeningTag(match.eco, match.name))
+            self._append_timeline(
+                session,
+                "success",
+                f"Labeled Rulebook {match.name}",
+                f"Saved {match.eco} as durable Rulebook metadata.",
+            )
+            return await self._snapshot(session)
+
+    async def remove_opening_tag(
+        self,
+        session_id: str,
+        record_id: int,
+    ) -> WorkspaceSnapshot:
+        session = self._session(session_id)
+        async with session.lock:
+            match = self._opening_match(session.workspace, record_id)
+            session.workspace.remove_opening_tag(OpeningTag(match.eco, match.name))
+            self._append_timeline(
+                session,
+                "system",
+                f"Removed Rulebook label {match.name}",
+                f"Removed {match.eco} from durable Rulebook metadata.",
+            )
+            return await self._snapshot(session)
+
+    @staticmethod
+    def _opening_match(workspace: FlowWorkspace, record_id: int):
+        try:
+            return workspace.opening_classifier.match_by_id(record_id)
+        except OpeningDataError as exc:
+            raise WebApiError(
+                ApiErrorCode.INVALID_REQUEST,
+                f"Unknown opening record id {record_id}.",
+            ) from exc
 
     async def preview_development(
         self, session_id: str, payload: DevelopmentDraftRequest
@@ -261,7 +498,7 @@ class SessionManager:
             session.workspace.save_development(
                 payload.alias, _development_from_request(session, payload)
             )
-            return self._snapshot(session)
+            return await self._snapshot(session)
 
     async def delete_development(
         self, session_id: str, alias: str
@@ -269,7 +506,7 @@ class SessionManager:
         session = self._session(session_id)
         async with session.lock:
             session.workspace.save_development(alias, None)
-            return self._snapshot(session)
+            return await self._snapshot(session)
 
     async def preview_interrupt(
         self, session_id: str, payload: InterruptDraftRequest
@@ -290,7 +527,7 @@ class SessionManager:
             session.workspace.save_interrupt(
                 payload.alias, _interrupt_from_request(session, payload)
             )
-            return self._snapshot(session)
+            return await self._snapshot(session)
 
     async def delete_interrupt(
         self, session_id: str, alias: str, rule_id: str
@@ -298,7 +535,7 @@ class SessionManager:
         session = self._session(session_id)
         async with session.lock:
             session.workspace.delete_interrupt(alias, rule_id)
-            return self._snapshot(session)
+            return await self._snapshot(session)
 
     async def reorder_development(
         self, session_id: str, aliases: tuple[str, ...]
@@ -306,7 +543,7 @@ class SessionManager:
         session = self._session(session_id)
         async with session.lock:
             session.workspace.reorder_development(aliases)
-            return self._snapshot(session)
+            return await self._snapshot(session)
 
     async def reorder_interrupts(
         self, session_id: str, references: tuple[str, ...]
@@ -314,7 +551,572 @@ class SessionManager:
         session = self._session(session_id)
         async with session.lock:
             session.workspace.reorder_interrupts(references)
-            return self._snapshot(session)
+            return await self._snapshot(session)
+
+    def _submit_move_locked(self, session: DevelopmentSession, uci: str) -> None:
+        workspace = session.workspace
+        session.position_analysis = None
+        session.hint_move_uci = None
+        move = chess.Move.from_uci(uci)
+        if move not in workspace.board.legal_moves:
+            raise FlowValidationError(f"{uci!r} is not legal in the current position.")
+        san = workspace.board.san(move)
+        color = "White" if workspace.board.turn == chess.WHITE else "Black"
+        if workspace.is_policy_turn:
+            attempt = workspace.submit_policy_uci(uci)
+            if attempt.result.value == "correct":
+                workspace.complete_correct_move()
+                self._append_timeline(
+                    session,
+                    "move",
+                    f"{color} played {san}",
+                    f"Matched {attempt.decision.source_id}: "
+                    f"{attempt.decision.why or 'Rulebook recommendation.'}",
+                )
+                self._append_opening_timeline(session, san)
+            else:
+                if attempt.decision.move_san:
+                    message = (
+                        f"Expected {attempt.decision.move_san} from "
+                        f"{attempt.decision.source_id}."
+                    )
+                else:
+                    frontier = (
+                        attempt.decision.frontier_reason.value
+                        if attempt.decision.frontier_reason is not None
+                        else "a Rulebook frontier"
+                    )
+                    message = f"Reached {frontier}."
+                self._append_timeline(
+                    session,
+                    "warning",
+                    f"{color} attempted {san}",
+                    message,
+                )
+            return
+        workspace.submit_opponent_uci(
+            uci,
+            move_source=OpeningMoveProvenance.MANUAL,
+        )
+        session.last_opponent_source = "manual"
+        self._append_timeline(
+            session,
+            "move",
+            f"{color} played {san}",
+            "Manual opponent move.",
+        )
+        self._append_opening_timeline(session, san)
+        if workspace.outcome is None:
+            workspace.begin_policy_turn()
+
+    async def _play_next_opponent_locked(
+        self,
+        session: DevelopmentSession,
+    ) -> None:
+        workspace = session.workspace
+        if workspace.is_policy_turn or workspace.outcome is not None:
+            raise CommandFailure(
+                "COMMAND_UNAVAILABLE",
+                "An automatic opponent reply is not available on this turn.",
+            )
+        if session.opponent_mode == "manual":
+            raise CommandFailure(
+                "MANUAL_OPPONENT_MODE",
+                "Manual mode requires an opponent move on the board or in SAN.",
+            )
+        session.position_analysis = None
+        session.hint_move_uci = None
+        if session.opponent_mode == "stored":
+            reply = self._stored_reply(session)
+            if reply is None:
+                raise CommandFailure(
+                    "STORED_REPLY_MISSING",
+                    "No stored opponent reply exists for this exact history.",
+                )
+            san = reply.move_san
+            workspace.submit_opponent_san(
+                san,
+                move_source=OpeningMoveProvenance.RECORDED_BRANCH,
+            )
+            source = "stored"
+            detail = f"Stored reply {reply.id}."
+        else:
+            move = await self.evaluations.choose_move(workspace.board.copy(stack=False))
+            if move not in workspace.board.legal_moves:
+                raise WebApiError(
+                    ApiErrorCode.ENGINE_ERROR,
+                    "The configured engine returned an illegal reply.",
+                    status_code=502,
+                )
+            san = workspace.board.san(move)
+            workspace.submit_opponent_uci(
+                move.uci(),
+                move_source=OpeningMoveProvenance.ENGINE,
+            )
+            source = "engine"
+            detail = "Configured engine reply."
+        session.last_opponent_source = source
+        color = "White" if not workspace.controlled_color else "Black"
+        self._append_timeline(
+            session,
+            "move",
+            f"{color} played {san}",
+            detail,
+        )
+        self._append_opening_timeline(session, san)
+        if workspace.outcome is None:
+            workspace.begin_policy_turn()
+
+    async def _analyse_locked(self, session: DevelopmentSession) -> None:
+        try:
+            lines = await self.evaluations.analyse_lines(
+                session.workspace.board,
+                session.analysis_profile_id,
+                count=4,
+            )
+        except (EngineError, RuntimeError) as exc:
+            session.position_analysis = None
+            session.evaluation = EvaluationSnapshot(
+                status="error",
+                message=str(exc),
+                engine_name=self.evaluations.last_engine_name
+                or self.evaluations.engine_identity,
+            )
+            self._append_timeline(
+                session,
+                "error",
+                "Engine analysis",
+                str(exc),
+            )
+            return
+        profile = _analysis_profile(session.analysis_profile_id)
+        result = _analysis_run_snapshot(lines[0], profile.id, profile.depth)
+        session.position_analysis = PositionAnalysisSnapshot(
+            book_moves=[
+                item.san for item in session.workspace.get_book_continuations()
+            ],
+            engine_moves=[
+                EngineLineSnapshot(
+                    uci=line.uci,
+                    san=line.san,
+                    centipawns=line.evaluation_cp,
+                    mate_in=line.mate_in,
+                    principal_variation=list(line.principal_variation),
+                )
+                for line in lines
+            ],
+        )
+        session.evaluation = EvaluationSnapshot(
+            status=result.status,
+            centipawns=result.centipawns,
+            mate_in=result.mate_in,
+            message=result.message,
+            engine_name=result.engine_name,
+            profile_id=result.profile_id,
+            requested_depth=result.requested_depth,
+            actual_depth=result.actual_depth,
+            selective_depth=result.selective_depth,
+            nodes=result.nodes,
+            nps=result.nps,
+            time_ms=result.time_ms,
+            best_move_uci=result.move_uci,
+            best_move_san=result.move_san,
+        )
+        self._append_timeline(
+            session,
+            "analysis" if result.status == "ready" else "error",
+            "Engine analysis",
+            (
+                f"Best move {result.move_san or result.move_uci}; "
+                f"{_score_text(result.centipawns, result.mate_in)}. "
+                f"Compared {len(lines)} engine candidate(s)."
+                if result.status == "ready"
+                else result.message or "Engine analysis is unavailable."
+            ),
+        )
+
+    async def _execute_command_locked(
+        self,
+        session: DevelopmentSession,
+        invocation: CommandInvocation,
+    ) -> None:
+        availability = self._command_availability(session)
+        if not self.commands.is_available(invocation.command, availability):
+            definition = self.commands.definition(invocation.command)
+            raise CommandFailure(
+                "COMMAND_UNAVAILABLE",
+                f"{definition.slash} is not available in the current position.",
+            )
+        workspace = session.workspace
+        command = invocation.command
+        if command is CommandId.PLAY_MOVE:
+            if not invocation.move:
+                raise CommandFailure("INVALID_COMMAND", "A move is required.")
+            move = (
+                workspace.board.parse_san(invocation.move)
+                if invocation.notation == "san"
+                else chess.Move.from_uci(invocation.move)
+            )
+            self._submit_move_locked(session, move.uci())
+            return
+        if command is CommandId.RETRY_POLICY:
+            workspace.retry_policy_move()
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session, "system", "Retry", "Restored the attempted position."
+            )
+            return
+        if command is CommandId.CONTINUE_POLICY:
+            attempt = workspace.attempt
+            san = attempt.decision.move_san if attempt else None
+            workspace.continue_with_policy_move()
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session,
+                "success",
+                "Used Rulebook recommendation",
+                "Committed the selected instruction.",
+            )
+            if san:
+                self._append_opening_timeline(session, san)
+            return
+        if command is CommandId.ACCEPT_ATTEMPT_HERE:
+            attempt = workspace.attempt
+            san = attempt.selected_move.san if attempt else None
+            rule = workspace.accept_attempt_as_interrupt()
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session,
+                "success",
+                "Accepted exact-position move",
+                f"Saved piece-owned interrupt {rule.id}.",
+            )
+            if san:
+                self._append_opening_timeline(session, san)
+            return
+        if command is CommandId.NEXT_OPPONENT:
+            await self._play_next_opponent_locked(session)
+            return
+        if command is CommandId.GO_BACK:
+            workspace.go_back_to_previous_decision()
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session, "system", "Moved back", "Replayed the retained line."
+            )
+            return
+        if command is CommandId.RESTART:
+            workspace.restart()
+            session.position_analysis = None
+            session.hint_move_uci = None
+            self._append_timeline(
+                session, "system", "Line restarted", "Returned to the start."
+            )
+            return
+        if command is CommandId.ANALYSE_POSITION:
+            await self._analyse_locked(session)
+            return
+        if command is CommandId.HINT_POLICY_MOVE:
+            decision = _current_decision(workspace)
+            if decision is None or decision.move is None:
+                raise CommandFailure(
+                    "COMMAND_UNAVAILABLE",
+                    "No Rulebook move is available to highlight.",
+                )
+            session.hint_move_uci = decision.move.uci()
+            self._append_timeline(
+                session,
+                "assistant",
+                "Rule Engine hint",
+                f"Highlighted {decision.move_san} from {decision.source_id}.",
+            )
+            return
+        message = self._diagnostic_command_text(session, invocation)
+        self._append_timeline(session, "assistant", "Rule Engine", message)
+
+    def _diagnostic_command_text(
+        self,
+        session: DevelopmentSession,
+        invocation: CommandInvocation,
+    ) -> str:
+        workspace = session.workspace
+        decision = _current_decision(workspace)
+        command = invocation.command
+        if command is CommandId.EXPLAIN_DECISION:
+            if decision is None:
+                return "There is no current Rulebook decision."
+            source = decision.source_id or (
+                decision.frontier_reason.value
+                if decision.frontier_reason is not None
+                else "Rulebook decision"
+            )
+            return f"{source}: {decision.why or decision.trace[-1]}"
+        if command is CommandId.TRACE_DECISION:
+            return "\n".join(decision.trace) if decision else "No decision trace."
+        if command is CommandId.INSPECT_POSITION:
+            legal = [workspace.board.san(move) for move in workspace.board.legal_moves]
+            return (
+                f"FEN: {workspace.board.fen(en_passant='fen')}\n"
+                f"History: {' '.join(workspace.history) or 'start'}\n"
+                f"Turn: {'White' if workspace.board.turn else 'Black'}"
+                f"{' (in check)' if workspace.board.is_check() else ''}\n"
+                f"Legal moves ({len(legal)}): {', '.join(legal)}"
+            )
+        if command is CommandId.INSPECT_OPENING:
+            context = workspace.get_current_opening_context()
+            match = context.primary_match or context.last_known_match
+            if match is None:
+                return "No current or last-known named opening."
+            exact = "current" if context.primary_match else "last known"
+            source = context.move_source.value if context.move_source else "start"
+            return (
+                f"{match.eco} {match.name} ({exact}). "
+                f"Move source: {source}. "
+                f"{len(context.book_continuations)} indexed continuation(s)."
+            )
+        if command is CommandId.LIST_OPENINGS:
+            context = workspace.get_current_opening_context()
+            matches = ", ".join(
+                f"{item.eco} {item.name}" for item in context.current_matches
+            )
+            return matches or "No exact named opening position."
+        if command is CommandId.LIST_DEFENSES:
+            values = workspace.get_reachable_defenses()
+            return (
+                "Book defenses still reachable: " + ", ".join(values)
+                if values
+                else "No named book defenses are currently reachable."
+            )
+        if command is CommandId.INSPECT_BOOK:
+            context = workspace.get_current_opening_context()
+            moves = context.book_continuations
+            alignment = (
+                "The last move followed the index."
+                if context.played_move_in_book
+                else (
+                    "The last move left the indexed route."
+                    if context.played_move_in_book is False
+                    else "No move has been committed."
+                )
+            )
+            return (
+                f"{alignment}\nBook continuations: "
+                + ", ".join(item.san for item in moves)
+                if moves
+                else f"{alignment}\nNo bundled book continuation exists here."
+            )
+        if command is CommandId.INSPECT_BOOK_HISTORY:
+            return (
+                " · ".join(
+                    f"{item.ply}. {item.san}: "
+                    f"{item.context.primary_match.name if item.context.primary_match else 'unnamed'}"
+                    for item in workspace.get_opening_history()
+                )
+                or "Opening history is empty."
+            )
+        if command is CommandId.LIST_RULES:
+            development = (
+                ", ".join(
+                    f"{reference}.develop"
+                    for reference in workspace.author.rulebook.development_order
+                )
+                or "none"
+            )
+            interrupts = ", ".join(workspace.author.rulebook.interrupt_order) or "none"
+            return (
+                f"Development order: {development}\n" f"Interrupt order: {interrupts}"
+            )
+        if command is CommandId.INSPECT_RULE:
+            reference = invocation.rule_id or ""
+            if reference.endswith(".develop"):
+                alias = reference.removesuffix(".develop")
+                piece = workspace.author.rulebook.piece_by_alias.get(alias)
+                if piece and piece.development:
+                    return f"{reference}: move to {piece.development.to_square}. {piece.development.why}"
+            rule = workspace.author.rulebook.interrupt_by_ref.get(reference)
+            if rule:
+                return f"{reference}: {rule.why}"
+            raise CommandFailure("UNKNOWN_RULE", f"Unknown instruction {reference!r}.")
+        if command is CommandId.HINT_POLICY_MOVE:
+            return (
+                f"Hint: {decision.move_san} ({decision.source_id})."
+                if decision and decision.move_san
+                else "No move is available to hint."
+            )
+        if command is CommandId.LIST_COMMANDS:
+            return " · ".join(
+                item.usage
+                for item in self.commands.available(self._command_availability(session))
+            )
+        return "Command completed."
+
+    def _command_availability(
+        self,
+        session: DevelopmentSession,
+    ) -> CommandAvailability:
+        workspace = session.workspace
+        phase = _phase(workspace)
+        decision = _current_decision(workspace)
+        return CommandAvailability(
+            phase=phase,  # type: ignore[arg-type]
+            engine_available=self.evaluations.engine is not None,
+            has_decision=decision is not None,
+            has_decision_move=decision is not None and decision.move is not None,
+            mismatch=(
+                workspace.attempt is not None
+                and workspace.attempt.result.value == "mismatch"
+            ),
+            authorable_attempt=(
+                workspace.attempt is not None
+                and workspace.attempt.result.value in {"mismatch", "frontier"}
+            ),
+            can_back=workspace.can_go_back,
+            can_restart=workspace.can_restart,
+            has_rules=bool(
+                workspace.author.rulebook.development_order
+                or workspace.author.rulebook.interrupt_order
+            ),
+            opponent_available=(
+                phase == "opponent-ready"
+                and session.opponent_mode != "manual"
+                and (
+                    session.opponent_mode == "stored"
+                    and self._stored_reply(session) is not None
+                    or session.opponent_mode == "engine"
+                    and self.evaluations.engine is not None
+                )
+            ),
+        )
+
+    def _stored_reply(self, session: DevelopmentSession):
+        history = tuple(session.workspace.history)
+        return next(
+            (
+                reply
+                for reply in session.workspace.author.rulebook.opponent_replies
+                if reply.after_san == history
+            ),
+            None,
+        )
+
+    def _append_timeline(
+        self,
+        session: DevelopmentSession,
+        kind: str,
+        title: str,
+        message: str,
+    ) -> None:
+        session.timeline.append(
+            TimelineEntrySnapshot(
+                id=session.next_timeline_id,
+                kind=kind,  # type: ignore[arg-type]
+                title=title,
+                message=message,
+            )
+        )
+        session.next_timeline_id += 1
+        if len(session.timeline) > 100:
+            del session.timeline[:-100]
+
+    def _append_opening_timeline(
+        self,
+        session: DevelopmentSession,
+        san: str,
+    ) -> None:
+        context = session.workspace.get_current_opening_context()
+        current = context.primary_match
+        known = current or context.last_known_match
+        if known is not None:
+            identity = f"{known.eco} · {known.name}"
+        else:
+            identity = "No exact named opening"
+        source = context.move_source.value if context.move_source else "unknown"
+        alignment = (
+            "The move follows the bundled opening index."
+            if context.played_move_in_book
+            else "The line is outside a direct indexed continuation."
+        )
+        self._append_timeline(
+            session,
+            "opening",
+            f"Opening after {san}",
+            f"{identity}. Source: {source}. {alignment}",
+        )
+
+    async def _refresh_evaluation(self, session: DevelopmentSession) -> None:
+        if self.evaluations.engine is None:
+            session.evaluation = EvaluationSnapshot(
+                status="off",
+                message="Engine is not configured.",
+            )
+            return
+        workspace = session.workspace
+        if workspace.outcome is not None:
+            return
+        current = await self.evaluations.analyse(
+            workspace.board,
+            session.analysis_profile_id,
+        )
+        if current.status != "ready":
+            session.evaluation = EvaluationSnapshot(
+                status=current.status,
+                message=current.message,
+                engine_name=current.engine_name
+                or self.evaluations.last_engine_name
+                or self.evaluations.engine_identity,
+            )
+            return
+        previous_board: chess.Board | None = None
+        if workspace.attempt is not None:
+            previous_board = workspace.attempt.board_before
+        elif workspace.history:
+            previous_board = replay_san(
+                workspace.author.rulebook.start_fen,
+                tuple(workspace.history[:-1]),
+            )
+        previous = (
+            await self.evaluations.analyse(
+                previous_board,
+                session.analysis_profile_id,
+            )
+            if previous_board is not None
+            else None
+        )
+        previous_cp = (
+            previous.centipawns
+            if previous is not None and previous.status == "ready"
+            else None
+        )
+        change = (
+            current.centipawns - previous_cp
+            if current.centipawns is not None and previous_cp is not None
+            else None
+        )
+        session.evaluation = EvaluationSnapshot(
+            status="ready",
+            centipawns=current.centipawns,
+            mate_in=current.mate_in,
+            previous_centipawns=previous_cp,
+            previous_mate_in=(
+                previous.mate_in
+                if previous is not None and previous.status == "ready"
+                else None
+            ),
+            change_centipawns=change,
+            engine_name=current.engine_name,
+            profile_id=current.profile_id,
+            requested_depth=current.requested_depth,
+            actual_depth=current.actual_depth,
+            selective_depth=current.selective_depth,
+            nodes=current.nodes,
+            nps=current.nps,
+            time_ms=current.time_ms,
+            best_move_uci=current.move_uci,
+            best_move_san=current.move_san,
+        )
 
     def _preview(self, session: DevelopmentSession, build) -> MutationPreviewResponse:
         workspace = session.workspace
@@ -348,7 +1150,8 @@ class SessionManager:
             generated_toml=source,
         )
 
-    def _snapshot(self, session: DevelopmentSession) -> WorkspaceSnapshot:
+    async def _snapshot(self, session: DevelopmentSession) -> WorkspaceSnapshot:
+        await self._refresh_evaluation(session)
         workspace = session.workspace
         rulebook = workspace.author.rulebook
         decision = _current_decision(workspace)
@@ -471,6 +1274,66 @@ class SessionManager:
                 can_back=workspace.can_go_back, can_restart=workspace.can_restart
             ),
             evaluation=session.evaluation,
+            analysis_settings=AnalysisSettingsSnapshot(
+                status=self.evaluations.status,  # type: ignore[arg-type]
+                selected_profile_id=session.analysis_profile_id,
+                engine_name=self.evaluations.last_engine_name
+                or self.evaluations.engine_identity,
+                profiles=[
+                    AnalysisProfileSnapshot(
+                        id=profile.id,
+                        label=profile.label,
+                        depth=profile.depth or 0,
+                        cost_label=profile.cost_label,
+                        cost_description=profile.cost_description,
+                    )
+                    for profile in ANALYSIS_PROFILES
+                ],
+            ),
+            opponent=OpponentSettingsSnapshot(
+                mode=session.opponent_mode,  # type: ignore[arg-type]
+                stored_reply_available=self._stored_reply(session) is not None,
+                engine_available=self.evaluations.engine is not None,
+                last_source=session.last_opponent_source,  # type: ignore[arg-type]
+            ),
+            opening=_opening_summary(workspace),
+            opening_history=[
+                OpeningHistorySnapshot(
+                    ply=entry.ply,
+                    san=entry.san,
+                    opening_name=(
+                        entry.context.primary_match.name
+                        if entry.context.primary_match
+                        else (
+                            entry.context.last_known_match.name
+                            if entry.context.last_known_match
+                            else None
+                        )
+                    ),
+                    move_source=(
+                        entry.context.move_source.value
+                        if entry.context.move_source
+                        else None
+                    ),
+                )
+                for entry in workspace.get_opening_history()
+            ],
+            position_analysis=session.position_analysis,
+            timeline=list(session.timeline),
+            available_commands=[
+                AvailableCommandSnapshot(
+                    id=definition.id.value,
+                    slash=definition.slash,
+                    usage=definition.usage,
+                    description=definition.description,
+                    arguments=[argument.name for argument in definition.arguments],
+                )
+                for definition in self.commands.available(
+                    self._command_availability(session)
+                )
+            ],
+            hint_move_uci=session.hint_move_uci,
+            rulebook_source=workspace.author.store.encode(rulebook),
         )
 
     def _session(self, session_id: str) -> DevelopmentSession:
@@ -606,6 +1469,68 @@ def _current_decision(workspace: FlowWorkspace) -> PolicyDecision | None:
     if workspace.policy_turn is not None:
         return workspace.policy_turn.decision
     return None
+
+
+def _phase(workspace: FlowWorkspace) -> str:
+    if workspace.outcome is not None:
+        return "game-over"
+    if workspace.attempt is not None:
+        return "policy-result"
+    return "policy-ready" if workspace.is_policy_turn else "opponent-ready"
+
+
+def _analysis_profile(profile_id: str):
+    return next(profile for profile in ANALYSIS_PROFILES if profile.id == profile_id)
+
+
+def _analysis_run_snapshot(
+    result: AnalysedMove,
+    profile_id: str,
+    requested_depth: int | None,
+) -> AnalysisRunSnapshot:
+    return AnalysisRunSnapshot(
+        status="ready",
+        centipawns=result.evaluation_cp,
+        mate_in=result.mate_in,
+        move_uci=result.uci,
+        move_san=result.san,
+        engine_name=result.engine_name,
+        profile_id=result.profile_id or profile_id,
+        requested_depth=result.requested_depth or requested_depth,
+        actual_depth=result.actual_depth,
+        selective_depth=result.selective_depth,
+        nodes=result.nodes,
+        nps=result.nps,
+        time_ms=result.time_ms,
+    )
+
+
+def _score_text(centipawns: int | None, mate_in: int | None) -> str:
+    if mate_in is not None:
+        return f"{'+' if mate_in >= 0 else '-'}M{abs(mate_in)}"
+    if centipawns is None:
+        return "no numeric score"
+    return f"{centipawns / 100:+.2f} from White's perspective"
+
+
+def _opening_summary(workspace: FlowWorkspace) -> OpeningSummarySnapshot:
+    context = workspace.get_current_opening_context()
+    primary = context.primary_match
+    tags = {(tag.eco, tag.name) for tag in workspace.author.rulebook.opening_tags}
+    return OpeningSummarySnapshot(
+        record_id=primary.record_id if primary else None,
+        name=primary.name if primary else None,
+        eco=primary.eco if primary else None,
+        last_known_name=(
+            context.last_known_match.name if context.last_known_match else None
+        ),
+        move_source=context.move_source.value if context.move_source else None,
+        book_continuations=[item.san for item in context.book_continuations],
+        reachable_defenses=list(context.reachable_defenses),
+        is_tagged=(
+            (primary.eco, primary.name) in tags if primary is not None else False
+        ),
+    )
 
 
 def _decision_label(decision: PolicyDecision | None) -> str | None:

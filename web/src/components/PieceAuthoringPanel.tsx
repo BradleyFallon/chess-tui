@@ -4,6 +4,7 @@ import type {
   ActionAttemptDraft,
   DevelopmentDraft,
   InterruptDraft,
+  InterruptRule,
   MutationPreview,
   PieceScript,
   WorkspaceSnapshot,
@@ -23,12 +24,13 @@ interface Props {
   onReorderDevelopment: (aliases: string[]) => Promise<void>;
   onReorderInterrupts: (refs: string[]) => Promise<void>;
   onSelectPiece: (alias: string) => void;
+  onOpenDetails: () => void;
 }
 
 export function PieceAuthoringPanel(props: Props) {
   const { workspace, piece, pending } = props;
   return (
-    <aside className="panel authoring-panel" aria-label="Rulebook authoring">
+    <aside className="workspace-panel authoring-panel" aria-label="Rulebook authoring">
       <div className="authoring-scroll">
         <section className="authoring-section">
           <span className="eyebrow">Piece</span>
@@ -66,12 +68,9 @@ export function PieceAuthoringPanel(props: Props) {
         {piece && <RelationshipPanel piece={piece} />}
         <OrderEditor title="Development order" values={workspace.developmentOrder} pending={pending} onSelect={props.onSelectPiece} onChange={props.onReorderDevelopment} />
         <OrderEditor title="Interrupt order" values={workspace.interruptOrder} pending={pending} onSelect={(ref) => props.onSelectPiece(ref.split(".")[0])} onChange={props.onReorderInterrupts} />
-        <details className="policy-details-entry">
-          <summary>Policy details</summary>
-          <p>Rulebook v{workspace.rulebook.version} · {workspace.rulebook.path}</p>
-          <pre>{JSON.stringify(workspace.decision?.trace ?? [], null, 2)}</pre>
-          {workspace.rulebook.warnings.map((warning) => <p key={warning}>{warning}</p>)}
-        </details>
+        <button type="button" onClick={props.onOpenDetails}>
+          Open policy details
+        </button>
       </div>
     </aside>
   );
@@ -140,6 +139,7 @@ function DevelopmentEditor(props: Props & { piece: PieceScript }) {
 
 function InterruptList(props: Props & { piece: PieceScript }) {
   const [adding, setAdding] = useState(false);
+  const [editing, setEditing] = useState<InterruptRule | null>(null);
   return (
     <section className="authoring-section">
       <span className="eyebrow">Interrupting rules</span>
@@ -150,33 +150,66 @@ function InterruptList(props: Props & { piece: PieceScript }) {
           <p>{rule.why}</p>
           <ol>{rule.attempts.map((attempt, index) => <li key={index}>{attempt.kind}: {attempt.value} · {attempt.status}</li>)}</ol>
           <small>{rule.explanation}</small>
+          <button type="button" disabled={props.pending} onClick={() => setEditing(rule)}>Edit</button>
           <button className="danger-button" type="button" disabled={props.pending} onClick={() => void props.onDeleteInterrupt(props.piece.alias, rule.id)}>Delete</button>
         </article>
       ))}
       <button type="button" onClick={() => setAdding(true)}>Add interrupt</button>
       {adding && <InterruptWizard {...props} piece={props.piece} onClose={() => setAdding(false)} />}
+      {editing && (
+        <InterruptWizard
+          {...props}
+          piece={props.piece}
+          existing={editing}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </section>
   );
 }
 
-function InterruptWizard(props: Props & { piece: PieceScript; onClose: () => void }) {
+function InterruptWizard(props: Props & { piece: PieceScript; existing?: InterruptRule; onClose: () => void }) {
   const [step, setStep] = useState(1);
-  const [draft, setDraft] = useState<InterruptDraft>({
+  const [draft, setDraft] = useState<InterruptDraft>(() => ({
     alias: props.piece.alias,
-    id: null,
-    requires: [],
-    afterSan: null,
-    when: null,
-    required: false,
-    attempts: [{ move: props.piece.currentSquare ?? "e4" }],
-    why: "",
-  });
+    id: props.existing?.id ?? null,
+    requires: props.existing?.requires ?? [],
+    afterSan: props.existing?.afterSan ?? null,
+    when: props.existing?.when ?? null,
+    required: props.existing?.required ?? false,
+    attempts: props.existing
+      ? props.existing.attempts.map(attemptToDraft)
+      : [{ move: props.piece.currentSquare ?? "e4" }],
+    why: props.existing?.why ?? "",
+  }));
   const [preview, setPreview] = useState<MutationPreview | null>(null);
   return (
-    <div className="guided-editor interrupt-wizard" role="dialog" aria-label={`Add interrupt for ${props.piece.label}`}>
+    <div className="guided-editor interrupt-wizard" role="dialog" aria-label={`${props.existing ? "Edit" : "Add"} interrupt for ${props.piece.label}`}>
       <h3>Step {step} of 5</h3>
       {step === 1 && (
         <>
+          <label>
+            Rule ID
+            <input
+              value={draft.id ?? ""}
+              placeholder="Generated when saved"
+              onChange={(event) => setDraft({
+                ...draft,
+                id: event.target.value || null,
+              })}
+            />
+          </label>
+          <label>
+            Prerequisites
+            <input
+              value={draft.requires.join(", ")}
+              placeholder="piece.rule, piece.develop"
+              onChange={(event) => setDraft({
+                ...draft,
+                requires: splitList(event.target.value),
+              })}
+            />
+          </label>
           <ConditionBuilder value={draft.when} pieces={props.workspace.pieceScripts} onChange={(when) => setDraft({ ...draft, when, afterSan: null })} />
           <button type="button" onClick={() => setDraft({ ...draft, when: null, afterSan: props.workspace.position.historySan })}>Exact position only</button>
           {draft.afterSan && <small>Exact after: {draft.afterSan.join(" ") || "start"}</small>}
@@ -242,7 +275,7 @@ function RelationshipPanel({ piece }: { piece: PieceScript }) {
       <dl className="piece-facts">
         <div><dt>Attackers</dt><dd>{facts.attackerCount}</dd></div>
         <div><dt>Defenders</dt><dd>{facts.defenderCount}</dd></div>
-        <div><dt>Status</dt><dd>{facts.underDefended ? "Under-defended" : facts.undefended ? "Undefended" : facts.attacked ? "Attacked" : "Quiet"}</dd></div>
+        <div><dt>Status</dt><dd>{facts.undefended ? "Undefended" : facts.underDefended ? "Under-defended" : facts.attacked ? "Attacked" : "Quiet"}</dd></div>
         <div><dt>King pin</dt><dd>{facts.kingPinned ? "Yes" : "No"}</dd></div>
       </dl>
       <h4>Attackers</h4>
@@ -291,3 +324,8 @@ function Review({ preview, pending, onApply }: { preview: MutationPreview; pendi
 
 function splitList(value: string) { return value.split(",").map((item) => item.trim()).filter(Boolean); }
 function moveItem<T>(items: T[], from: number, to: number): T[] { const next = [...items]; const [item] = next.splice(from, 1); next.splice(to, 0, item); return next; }
+function attemptToDraft(attempt: InterruptRule["attempts"][number]): ActionAttemptDraft {
+  if (attempt.kind === "move") return { move: attempt.value };
+  if (attempt.kind === "capture-type") return { captureType: attempt.value as ActionAttemptDraft["captureType"] };
+  return { capture: attempt.kind === "capture-attacker" ? "attacker" : attempt.value };
+}

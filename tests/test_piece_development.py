@@ -1,7 +1,13 @@
 import chess
 import pytest
 
-from chess_tui.flow import CaptureAttempt, MoveAttempt
+from chess_tui.flow import (
+    CaptureAttempt,
+    InterruptRule,
+    MoveAttempt,
+    PieceScript,
+    Rulebook,
+)
 from chess_tui.policy import (
     AttackBalanceCondition,
     AttackedByCondition,
@@ -18,6 +24,7 @@ from chess_tui.policy import (
     parse_condition,
 )
 from chess_tui.policy.actions import ActionResolver, ActionStatus
+from chess_tui.policy.runtime import DecisionSource, PolicyRuntime
 
 
 def ref(value: str) -> StartingPieceRef:
@@ -175,6 +182,40 @@ def test_capture_type_ambiguity_fails_loudly() -> None:
     assert {move.uci() for move in result.candidates} == {"c3b5", "c3d5"}
 
 
+def test_ambiguous_attempt_falls_through_to_later_resolving_attempt() -> None:
+    knight = ref("piece:white:knight:queenside")
+    interrupt = InterruptRule(
+        piece=knight,
+        id="ordered-fallback",
+        requires=(),
+        after_san=None,
+        when=None,
+        required=True,
+        attempts=(
+            CaptureAttempt(target_type="bishop"),
+            MoveAttempt("d2"),
+        ),
+        why="Try a deterministic fallback after an ambiguous capture.",
+    )
+    rulebook = Rulebook(
+        version=4,
+        name="Ambiguous fallback",
+        start_fen="4k3/8/8/8/8/b1b5/8/1N5K w - - 0 1",
+        side="white",
+        development_order=(),
+        interrupt_order=("knight.ordered-fallback",),
+        pieces=(PieceScript("knight", knight, None, (interrupt,)),),
+    )
+    decision = PolicyRuntime(rulebook).resolve(chess.Board(rulebook.start_fen))
+    assert decision.source is DecisionSource.INTERRUPT
+    assert decision.move_san == "Nd2"
+    attempts = decision.interrupt_resolutions[0].attempts
+    assert [attempt.status for attempt in attempts] == [
+        ActionStatus.AMBIGUOUS,
+        ActionStatus.RESOLVED,
+    ]
+
+
 def test_illegal_capture_caused_by_king_pin_is_filtered() -> None:
     board = chess.Board("4r1k1/8/8/8/8/8/4R2b/4K3 w - - 0 1")
     tracker = OriginalPieceTracker(board)
@@ -229,6 +270,7 @@ def test_surviving_history_position_and_boolean_conditions_round_trip() -> None:
         ),
         ({"in_check": "black"}, False),
         ({"last_move": {"piece": "e-pawn", "to": "e4"}}, True),
+        ({"last_move": {"piece": "self", "to": "e4"}}, True),
         ({"all": [{"moved": "self"}, {"empty": "e2"}]}, True),
         ({"any": [{"captured": "self"}, {"occupied": "e4"}]}, True),
         ({"not": {"captured": "self"}}, True),

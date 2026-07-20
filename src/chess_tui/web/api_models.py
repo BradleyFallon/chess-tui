@@ -32,6 +32,14 @@ class SanMoveRequest(ApiModel):
     san: str = Field(min_length=1, max_length=20)
 
 
+class ChatRequest(ApiModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+class OpponentModeRequest(ApiModel):
+    mode: Literal["stored", "engine", "manual"]
+
+
 class ActionAttemptRequest(ApiModel):
     move: str | None = Field(default=None, min_length=2, max_length=2)
     capture: str | None = Field(default=None, min_length=1, max_length=100)
@@ -269,11 +277,102 @@ class NavigationSnapshot(ApiModel):
     can_restart: bool
 
 
+class TimelineEntrySnapshot(ApiModel):
+    id: int
+    kind: Literal[
+        "system",
+        "user",
+        "assistant",
+        "move",
+        "success",
+        "warning",
+        "error",
+        "opening",
+        "analysis",
+    ]
+    title: str
+    message: str
+
+
+class AvailableCommandSnapshot(ApiModel):
+    id: str
+    slash: str
+    usage: str
+    description: str
+    arguments: list[str] = Field(default_factory=list)
+
+
+class AnalysisProfileSnapshot(ApiModel):
+    id: str
+    label: str
+    depth: int
+    cost_label: str
+    cost_description: str
+
+
+class AnalysisSettingsSnapshot(ApiModel):
+    status: Literal["off", "configured", "ready", "error"]
+    selected_profile_id: str
+    engine_name: str | None = None
+    profiles: list[AnalysisProfileSnapshot] = Field(default_factory=list)
+
+
+class OpponentSettingsSnapshot(ApiModel):
+    mode: Literal["stored", "engine", "manual"]
+    stored_reply_available: bool
+    engine_available: bool
+    last_source: Literal["stored", "engine", "manual"] | None = None
+
+
+class OpeningSummarySnapshot(ApiModel):
+    record_id: int | None = None
+    name: str | None = None
+    eco: str | None = None
+    last_known_name: str | None = None
+    move_source: str | None = None
+    book_continuations: list[str] = Field(default_factory=list)
+    reachable_defenses: list[str] = Field(default_factory=list)
+    is_tagged: bool = False
+
+
+class OpeningHistorySnapshot(ApiModel):
+    ply: int
+    san: str
+    opening_name: str | None = None
+    move_source: str | None = None
+
+
 class EvaluationSnapshot(ApiModel):
     status: Literal["off", "ready", "error"] = "off"
     centipawns: int | None = None
     mate_in: int | None = None
+    previous_centipawns: int | None = None
+    previous_mate_in: int | None = None
+    change_centipawns: int | None = None
     message: str | None = None
+    engine_name: str | None = None
+    profile_id: str | None = None
+    requested_depth: int | None = None
+    actual_depth: int | None = None
+    selective_depth: int | None = None
+    nodes: int | None = None
+    nps: int | None = None
+    time_ms: int | None = None
+    best_move_uci: str | None = None
+    best_move_san: str | None = None
+
+
+class EngineLineSnapshot(ApiModel):
+    uci: str
+    san: str
+    centipawns: int | None = None
+    mate_in: int | None = None
+    principal_variation: list[str] = Field(default_factory=list)
+
+
+class PositionAnalysisSnapshot(ApiModel):
+    book_moves: list[str] = Field(default_factory=list)
+    engine_moves: list[EngineLineSnapshot] = Field(default_factory=list)
 
 
 class WorkspaceSnapshot(ApiModel):
@@ -288,6 +387,15 @@ class WorkspaceSnapshot(ApiModel):
     attempt: AttemptSnapshot | None
     navigation: NavigationSnapshot
     evaluation: EvaluationSnapshot = Field(default_factory=EvaluationSnapshot)
+    analysis_settings: AnalysisSettingsSnapshot
+    opponent: OpponentSettingsSnapshot
+    opening: OpeningSummarySnapshot
+    opening_history: list[OpeningHistorySnapshot] = Field(default_factory=list)
+    position_analysis: PositionAnalysisSnapshot | None = None
+    timeline: list[TimelineEntrySnapshot] = Field(default_factory=list)
+    available_commands: list[AvailableCommandSnapshot] = Field(default_factory=list)
+    hint_move_uci: str | None = None
+    rulebook_source: str = ""
     errors: list[str] = Field(default_factory=list)
 
 
@@ -300,12 +408,6 @@ class MutationPreviewResponse(ApiModel):
     generated_toml: str | None = None
 
 
-class AnalysisProfileSnapshot(ApiModel):
-    id: str
-    label: str
-    depth: int
-
-
 class AnalysisRunSnapshot(ApiModel):
     status: Literal["off", "ready", "error"]
     centipawns: int | None = None
@@ -313,3 +415,11 @@ class AnalysisRunSnapshot(ApiModel):
     move_uci: str | None = None
     move_san: str | None = None
     message: str | None = None
+    engine_name: str | None = None
+    profile_id: str | None = None
+    requested_depth: int | None = None
+    actual_depth: int | None = None
+    selective_depth: int | None = None
+    nodes: int | None = None
+    nps: int | None = None
+    time_ms: int | None = None

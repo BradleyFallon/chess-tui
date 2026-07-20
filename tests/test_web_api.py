@@ -5,6 +5,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from chess_tui.web.app import WebAppSettings, create_app
+from chess_tui.engine import FixtureEngineService
 
 
 @pytest.fixture
@@ -27,6 +28,83 @@ def create_session(client: TestClient) -> dict:
     response = client.post("/api/sessions")
     assert response.status_code == 200
     return response.json()
+
+
+def test_configured_engine_analyses_each_move_and_supplies_black_reply(
+    tmp_path: Path,
+) -> None:
+    flows = tmp_path / "flows"
+    flows.mkdir()
+    london = flows / "london.toml"
+    shutil.copy2("flows/london.toml", london)
+    settings = WebAppSettings(
+        project_root=tmp_path,
+        allowed_flow_directory=flows,
+        startup_flow_path=london,
+        frontend_dist=tmp_path / "dist",
+    )
+    engine = FixtureEngineService(session_seed=17)
+    with TestClient(create_app(settings, analysis_engine=engine)) as client:
+        initial = create_session(client)
+        session_id = initial["sessionId"]
+        assert initial["opponent"]["mode"] == "engine"
+        assert initial["evaluation"]["status"] == "ready"
+        assert initial["evaluation"]["engineName"] == "Deterministic fixture"
+
+        after_white = client.post(
+            f"/api/sessions/{session_id}/moves",
+            json={"uci": "d2d4"},
+        ).json()
+        assert after_white["position"]["historySan"] == ["d4"]
+        assert after_white["evaluation"]["status"] == "ready"
+        assert after_white["evaluation"]["previousCentipawns"] is not None
+        assert any(
+            item["title"] == "Opening after d4" for item in after_white["timeline"]
+        )
+
+        after_black = client.post(
+            f"/api/sessions/{session_id}/opponent/next",
+        ).json()
+        assert len(after_black["position"]["historySan"]) == 2
+        assert after_black["opponent"]["lastSource"] == "engine"
+        assert after_black["evaluation"]["status"] == "ready"
+        assert after_black["position"]["turn"] == "white"
+
+        analysed = client.post(
+            f"/api/sessions/{session_id}/chat",
+            json={"text": "/analyse"},
+        ).json()
+        assert len(analysed["positionAnalysis"]["engineMoves"]) == 4
+        assert analysed["positionAnalysis"]["bookMoves"] is not None
+
+        record_id = analysed["opening"]["recordId"]
+        assert record_id is not None
+        tagged = client.post(
+            f"/api/sessions/{session_id}/opening-tags",
+            json={"recordId": record_id},
+        ).json()
+        assert tagged["opening"]["isTagged"] is True
+        assert tagged["opening"]["name"] in {
+            item["name"] for item in tagged["rulebook"]["openingTags"]
+        }
+
+
+def test_chat_hint_and_diagnostic_commands_remain_python_owned(web_client) -> None:
+    client, _ = web_client
+    snapshot = create_session(client)
+    session_id = snapshot["sessionId"]
+    hinted = client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={"text": "/hint"},
+    ).json()
+    assert hinted["hintMoveUci"] == "d2d4"
+    assert hinted["timeline"][-1]["title"] == "Rule Engine hint"
+
+    explained = client.post(
+        f"/api/sessions/{session_id}/chat",
+        json={"text": "/why"},
+    ).json()
+    assert "d-pawn.develop" in explained["timeline"][-1]["message"]
 
 
 def test_snapshot_returns_piece_scripts_opponents_relations_and_v4_decision(

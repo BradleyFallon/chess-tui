@@ -223,7 +223,7 @@ class InCheckCondition:
 
 @dataclass(frozen=True, slots=True)
 class LastMoveCondition:
-    piece: StartingPieceRef
+    piece: PieceSubject
     to_square: str
 
 

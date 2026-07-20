@@ -34,6 +34,34 @@ export function ConditionBuilder({ value, pieces, onChange }: Props) {
 
 function ConditionFields({ value, pieces, onChange }: { value: ConditionExpression; pieces: PieceScript[]; onChange: (value: ConditionExpression) => void }) {
   const refs = ["self", ...pieces.map((piece) => piece.alias)];
+  if ("moved" in value) return <PieceSelect label="Piece" value={value.moved} refs={refs} onChange={(moved) => onChange({ moved })} />;
+  if ("unmoved" in value) return <PieceSelect label="Piece" value={value.unmoved} refs={refs} onChange={(unmoved) => onChange({ unmoved })} />;
+  if ("captured" in value) return <PieceSelect label="Piece" value={value.captured} refs={refs} onChange={(captured) => onChange({ captured })} />;
+  if ("attacked" in value) return <PieceSelect label="Target piece" value={value.attacked} refs={refs} onChange={(attacked) => onChange({ attacked })} />;
+  if ("undefended" in value) return <PieceSelect label="Target piece" value={value.undefended} refs={refs} onChange={(undefended) => onChange({ undefended })} />;
+  if ("under_defended" in value) return <PieceSelect label="Target piece" value={value.under_defended} refs={refs} onChange={(under_defended) => onChange({ under_defended })} />;
+  if ("at" in value) return (
+    <>
+      <PieceSelect label="Piece" value={value.at.piece} refs={refs} onChange={(piece) => onChange({ at: { ...value.at, piece } })} />
+      <SquareInput label="Square" value={value.at.square} onChange={(square) => onChange({ at: { ...value.at, square } })} />
+    </>
+  );
+  if ("occupied" in value) return <SquareInput label="Square" value={value.occupied} onChange={(occupied) => onChange({ occupied })} />;
+  if ("empty" in value) return <SquareInput label="Square" value={value.empty} onChange={(empty) => onChange({ empty })} />;
+  if ("occupied_by" in value) return (
+    <>
+      <SquareInput label="Square" value={value.occupied_by.square} onChange={(square) => onChange({ occupied_by: { ...value.occupied_by, square } })} />
+      <label>Color<select value={value.occupied_by.color} onChange={(event) => onChange({ occupied_by: { ...value.occupied_by, color: event.target.value as "white" | "black" } })}><option value="white">white</option><option value="black">black</option></select></label>
+      <TypeSelect value={value.occupied_by.type} onChange={(type) => onChange({ occupied_by: { ...value.occupied_by, type } })} />
+    </>
+  );
+  if ("in_check" in value) return <label>Side<select value={value.in_check} onChange={(event) => onChange({ in_check: event.target.value as "white" | "black" })}><option value="white">white</option><option value="black">black</option></select></label>;
+  if ("last_move" in value) return (
+    <>
+      <PieceSelect label="Piece" value={value.last_move.piece} refs={refs} onChange={(piece) => onChange({ last_move: { ...value.last_move, piece } })} />
+      <SquareInput label="Destination" value={value.last_move.to} onChange={(to) => onChange({ last_move: { ...value.last_move, to } })} />
+    </>
+  );
   if ("attacked_by" in value) {
     if ("piece" in value.attacked_by) {
       return <PieceSelect label="Attacking piece" value={value.attacked_by.piece} refs={refs} onChange={(piece) => onChange({ attacked_by: { ...value.attacked_by, piece } })} />;
@@ -69,4 +97,8 @@ function PieceSelect({ label, value, refs, onChange }: { label: string; value: s
 
 function TypeSelect({ value, onChange }: { value: PieceType; onChange: (value: PieceType) => void }) {
   return <label>Piece type<select value={value} onChange={(event) => onChange(event.target.value as PieceType)}>{["pawn", "knight", "bishop", "rook", "queen", "king"].map((type) => <option key={type}>{type}</option>)}</select></label>;
+}
+
+function SquareInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  return <label>{label}<input value={value} maxLength={2} pattern="[a-h][1-8]" onChange={(event) => onChange(event.target.value.toLowerCase())} /></label>;
 }

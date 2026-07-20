@@ -322,7 +322,7 @@ class PolicyRuntime:
             attempt_results.append(result)
             if result.status is ActionStatus.AMBIGUOUS:
                 ambiguous = True
-                break
+                continue
             if result.status is ActionStatus.RESOLVED:
                 resolved = result
                 break

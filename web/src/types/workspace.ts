@@ -190,7 +190,79 @@ export interface WorkspaceSnapshot {
     status: "off" | "ready" | "error";
     centipawns: number | null;
     mateIn: number | null;
+    previousCentipawns: number | null;
+    previousMateIn: number | null;
+    changeCentipawns: number | null;
     message: string | null;
+    engineName: string | null;
+    profileId: string | null;
+    requestedDepth: number | null;
+    actualDepth: number | null;
+    selectiveDepth: number | null;
+    nodes: number | null;
+    nps: number | null;
+    timeMs: number | null;
+    bestMoveUci: string | null;
+    bestMoveSan: string | null;
   };
+  analysisSettings: {
+    status: "off" | "configured" | "ready" | "error";
+    selectedProfileId: string;
+    engineName: string | null;
+    profiles: Array<{
+      id: string;
+      label: string;
+      depth: number;
+      costLabel: string;
+      costDescription: string;
+    }>;
+  };
+  opponent: {
+    mode: "stored" | "engine" | "manual";
+    storedReplyAvailable: boolean;
+    engineAvailable: boolean;
+    lastSource: "stored" | "engine" | "manual" | null;
+  };
+  opening: {
+    recordId: number | null;
+    name: string | null;
+    eco: string | null;
+    lastKnownName: string | null;
+    moveSource: string | null;
+    bookContinuations: string[];
+    reachableDefenses: string[];
+    isTagged: boolean;
+  };
+  openingHistory: Array<{
+    ply: number;
+    san: string;
+    openingName: string | null;
+    moveSource: string | null;
+  }>;
+  positionAnalysis: {
+    bookMoves: string[];
+    engineMoves: Array<{
+      uci: string;
+      san: string;
+      centipawns: number | null;
+      mateIn: number | null;
+      principalVariation: string[];
+    }>;
+  } | null;
+  timeline: Array<{
+    id: number;
+    kind: "system" | "user" | "assistant" | "move" | "success" | "warning" | "error" | "opening" | "analysis";
+    title: string;
+    message: string;
+  }>;
+  availableCommands: Array<{
+    id: string;
+    slash: string;
+    usage: string;
+    description: string;
+    arguments: string[];
+  }>;
+  hintMoveUci: string | null;
+  rulebookSource: string;
   errors: string[];
 }

@@ -1,14 +1,83 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { BoardPanel } from "../components/BoardPanel";
+import { EvaluationBar } from "../components/EvaluationBar";
 import { PieceAuthoringPanel } from "../components/PieceAuthoringPanel";
+import { PolicyDetailsDrawer } from "../components/PolicyDetailsDrawer";
+import { StatusFeed } from "../components/StatusFeed";
 import { useWorkspace } from "./WorkspaceContext";
+
+const AUTO_RESPOND_KEY = "chess-flow-development-auto-respond";
 
 export function DevelopPage() {
   const context = useWorkspace();
   const { workspace, loading, pending, error, initialize } = context;
   const [selectedAlias, setSelectedAlias] = useState<string | null>(null);
+  const [detailsOpen, setDetailsOpen] = useState(false);
+  const [autoRespond, setAutoRespond] = useState(
+    () => localStorage.getItem(AUTO_RESPOND_KEY) === "true",
+  );
+  const autoResponsePosition = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (
+      !workspace
+      || !autoRespond
+      || workspace.opponent.mode === "manual"
+      || workspace.position.turn === workspace.rulebook.side
+      || workspace.position.gameOver
+    ) {
+      autoResponsePosition.current = null;
+      return;
+    }
+    if (pending) return;
+    const key = [
+      workspace.position.historySan.join(" "),
+      workspace.opponent.mode,
+    ].join("|");
+    if (autoResponsePosition.current === key) return;
+    autoResponsePosition.current = key;
+    void context.nextOpponent();
+  }, [autoRespond, context, pending, workspace]);
+
+  useEffect(() => {
+    if (
+      !workspace
+      || pending
+      || workspace.opponent.mode === "manual"
+      || workspace.position.turn === workspace.rulebook.side
+      || workspace.position.gameOver
+    ) return;
+    const playOpponentOnEnter = (event: KeyboardEvent) => {
+      if (
+        event.key !== "Enter"
+        || event.repeat
+        || event.metaKey
+        || event.ctrlKey
+        || event.altKey
+      ) return;
+      const target = event.target;
+      const emptyComposer = target instanceof HTMLInputElement
+        && target.dataset.moveComposer === "true"
+        && !target.value.trim();
+      if (
+        (target instanceof HTMLInputElement && !target.disabled && !emptyComposer)
+        || target instanceof HTMLTextAreaElement
+        || target instanceof HTMLButtonElement
+        || (target instanceof HTMLElement && target.isContentEditable)
+      ) return;
+      event.preventDefault();
+      void context.nextOpponent();
+    };
+    window.addEventListener("keydown", playOpponentOnEnter);
+    return () => window.removeEventListener("keydown", playOpponentOnEnter);
+  }, [context, pending, workspace]);
+
+  const changeAutoRespond = (enabled: boolean) => {
+    localStorage.setItem(AUTO_RESPOND_KEY, String(enabled));
+    setAutoRespond(enabled);
+  };
 
   if (loading) return <main className="center-page"><h1>Loading Rulebook…</h1></main>;
   if (!workspace) return (
@@ -34,7 +103,6 @@ export function DevelopPage() {
           <button disabled={pending} onClick={() => void context.analyse()}>Analyze</button>
         </div>
       </header>
-      {error && <div className="global-error" role="alert"><strong>{error.code}</strong><span>{error.message}</span></div>}
       <div className="workspace-grid v4-grid">
         <PieceAuthoringPanel
           key={selected?.alias ?? "none"}
@@ -50,56 +118,45 @@ export function DevelopPage() {
           onReorderDevelopment={context.reorderDevelopment}
           onReorderInterrupts={context.reorderInterrupts}
           onSelectPiece={setSelectedAlias}
+          onOpenDetails={() => setDetailsOpen(true)}
         />
-        <div className="board-and-history">
+        <div className="board-region">
+          <EvaluationBar evaluation={workspace.evaluation} />
           <BoardPanel workspace={workspace} pending={pending} selectedAlias={effectiveAlias} onInspect={setSelectedAlias} onMove={(uci) => void context.move(uci)} />
-          <section className="panel history-panel">
-            <span className="eyebrow">History</span>
+          <section className="workspace-panel history-panel">
+            <div className="section-heading-row">
+              <span className="eyebrow">Move history</span>
+              <span className="turn-label">{workspace.position.turn} to move</span>
+            </div>
             <p>{workspace.position.historySan.join(" ") || "Start position"}</p>
-            <p>Turn: {workspace.position.turn}</p>
-            {workspace.evaluation.status === "ready" && <p>Evaluation: {workspace.evaluation.mateIn !== null ? `M${workspace.evaluation.mateIn}` : `${(workspace.evaluation.centipawns ?? 0) / 100}`}</p>}
           </section>
         </div>
-        <DecisionPanel workspace={workspace} pending={pending} onRetry={context.retry} onContinue={context.continuePolicy} onAccept={context.acceptHere} />
+        <div className="side-region">
+          <StatusFeed
+            workspace={workspace}
+            pending={pending}
+            error={error}
+            autoRespond={autoRespond}
+            onAutoRespondChange={changeAutoRespond}
+            onOpponentModeChange={(mode) => void context.updateOpponentMode(mode)}
+            onAnalysisProfileChange={(profileId) => void context.updateAnalysisProfile(profileId)}
+            onAddOpeningTag={(recordId) => void context.addOpeningTag(recordId)}
+            onRemoveOpeningTag={(recordId) => void context.removeOpeningTag(recordId)}
+            onAnalyse={() => void context.analyse()}
+            onNextOpponent={() => void context.nextOpponent()}
+            onSubmit={(text) => void context.sendChat(text)}
+            onRetry={() => void context.retry()}
+            onContinue={() => void context.continuePolicy()}
+            onAcceptHere={() => void context.acceptHere()}
+          />
+        </div>
       </div>
+      <PolicyDetailsDrawer
+        workspace={workspace}
+        piece={selected}
+        open={detailsOpen}
+        onClose={() => setDetailsOpen(false)}
+      />
     </main>
-  );
-}
-
-function DecisionPanel({ workspace, pending, onRetry, onContinue, onAccept }: {
-  workspace: NonNullable<ReturnType<typeof useWorkspace>["workspace"]>;
-  pending: boolean;
-  onRetry: () => Promise<void>;
-  onContinue: () => Promise<void>;
-  onAccept: () => Promise<void>;
-}) {
-  return (
-    <aside className="panel decision-panel">
-      <span className="eyebrow">Current decision</span>
-      {workspace.decision?.status === "ready" ? (
-        <>
-          <h2>{workspace.decision.moveSan}</h2>
-          <code>{workspace.decision.instructionRef}</code>
-          <p>{workspace.decision.why}</p>
-        </>
-      ) : workspace.decision?.frontier ? (
-        <>
-          <h2>Frontier</h2>
-          <strong>{workspace.decision.frontier.reason}</strong>
-          <p>{workspace.decision.frontier.explanation}</p>
-        </>
-      ) : <p>Choose an opponent move on the board.</p>}
-      {workspace.attempt && (
-        <section className="attempt-card">
-          <h3>{workspace.attempt.result}</h3>
-          <p>You played {workspace.attempt.moveSan}; expected {workspace.attempt.expectedSan ?? "a frontier"}.</p>
-          <button disabled={pending} onClick={() => void onRetry()}>Retry</button>
-          {workspace.attempt.expectedUci && <button disabled={pending} onClick={() => void onContinue()}>Use expected move</button>}
-          <button disabled={pending} onClick={() => void onAccept()}>Accept in this position</button>
-          <p>Add interrupt rule is available from the owning piece for broader behavior.</p>
-        </section>
-      )}
-      <details><summary>Decision trace</summary><ol>{workspace.decision?.trace.map((line) => <li key={line}>{line}</li>)}</ol></details>
-    </aside>
   );
 }

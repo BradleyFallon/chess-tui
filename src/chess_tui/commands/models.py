@@ -70,6 +70,7 @@ class CommandAvailability:
     can_back: bool
     can_restart: bool
     has_rules: bool
+    opponent_available: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)

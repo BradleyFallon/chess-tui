@@ -60,12 +60,26 @@ export const workspaceApi = {
   createSession: (flowPath?: string) => post("/api/sessions", flowPath ? { flowPath } : {}),
   getSession: (id: string) => request<WorkspaceSnapshot>(`/api/sessions/${id}`),
   submitMove: (id: string, uci: string) => post(`/api/sessions/${id}/moves`, { uci }),
+  submitChat: (id: string, text: string) =>
+    post(`/api/sessions/${id}/chat`, { text }),
+  nextOpponent: (id: string) =>
+    post(`/api/sessions/${id}/opponent/next`),
+  updateOpponentMode: (
+    id: string,
+    mode: WorkspaceSnapshot["opponent"]["mode"],
+  ) => put(`/api/sessions/${id}/opponent/mode`, { mode }),
   retry: (id: string) => post(`/api/sessions/${id}/policy/retry`),
   continuePolicy: (id: string) => post(`/api/sessions/${id}/policy/continue`),
   acceptHere: (id: string) => post(`/api/sessions/${id}/attempt/accept-here`),
   back: (id: string) => post(`/api/sessions/${id}/back`),
   restart: (id: string) => post(`/api/sessions/${id}/restart`),
   analyse: (id: string) => post(`/api/sessions/${id}/analysis`),
+  updateAnalysisProfile: (id: string, profileId: string) =>
+    put(`/api/sessions/${id}/analysis/settings`, { profileId }),
+  addOpeningTag: (id: string, recordId: number) =>
+    post(`/api/sessions/${id}/opening-tags`, { recordId }),
+  removeOpeningTag: (id: string, recordId: number) =>
+    remove(`/api/sessions/${id}/opening-tags/${recordId}`),
   previewDevelopment: (id: string, draft: DevelopmentDraft) =>
     preview(`/api/sessions/${id}/development/validate`, draft),
   applyDevelopment: (id: string, draft: DevelopmentDraft) =>

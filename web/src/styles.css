@@ -160,7 +160,7 @@ dd { margin: 0; font-weight: 700; text-transform: capitalize; }
 .chat-message-user { margin-left: auto; border-color: #75643e; background: #292719; }
 .chat-message-assistant, .chat-message-tool { margin-right: auto; }
 .chat-role { margin-bottom: 0.25rem; color: var(--accent); font-size: 0.58rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; }
-.chat-message > p { margin: 0; color: var(--text); font-size: 0.8rem; line-height: 1.4; }
+.chat-message > p { margin: 0; color: var(--text); font-size: 0.8rem; line-height: 1.4; white-space: pre-wrap; }
 .attachment-details { margin-top: 0.55rem; padding: 0.55rem; display: grid; gap: 0.3rem; border: 1px solid #394436; border-radius: 6px; background: #10140f; font-size: 0.72rem; }
 .attachment-details code { overflow-wrap: anywhere; color: #d3cfb7; }
 .attachment-details small { color: var(--muted); }

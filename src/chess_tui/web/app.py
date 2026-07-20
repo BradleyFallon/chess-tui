@@ -18,6 +18,7 @@ from .api_models import (
     AnalysisSettingsRequest,
     ApiErrorEnvelope,
     ApiErrorItem,
+    ChatRequest,
     CreateSessionRequest,
     DevelopmentDraftRequest,
     DevelopmentOrderRequest,
@@ -27,6 +28,8 @@ from .api_models import (
     InterruptOrderRequest,
     MoveRequest,
     MutationPreviewResponse,
+    OpeningTagRequest,
+    OpponentModeRequest,
     SanMoveRequest,
     WorkspaceSnapshot,
 )
@@ -55,13 +58,18 @@ def create_app(
     @asynccontextmanager
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         engine = analysis_engine
+        engine_identity = ""
+        if engine is not None:
+            engine_identity = type(engine).__name__
         if engine is None and config.engine_path is not None:
             engine = StockfishEngineService(config.engine_path)
+            engine_identity = f"Stockfish ({config.engine_path.name})"
         application.state.session_manager = SessionManager(
             project_root=config.project_root,
             allowed_flow_directory=config.allowed_flow_directory,
             startup_flow_path=config.startup_flow_path,
             engine=engine,
+            engine_identity=engine_identity,
         )
         try:
             yield
@@ -155,6 +163,41 @@ def _register_api_routes(application: FastAPI) -> None:
         request: Request, session_id: str, payload: SanMoveRequest
     ) -> WorkspaceSnapshot:
         return await _manager(request).submit_san_move(session_id, payload.san)
+
+    @application.post(
+        "/api/sessions/{session_id}/chat",
+        response_model=WorkspaceSnapshot,
+    )
+    async def submit_chat(
+        request: Request,
+        session_id: str,
+        payload: ChatRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).submit_chat(session_id, payload.text)
+
+    @application.post(
+        "/api/sessions/{session_id}/opponent/next",
+        response_model=WorkspaceSnapshot,
+    )
+    async def next_opponent(
+        request: Request,
+        session_id: str,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).next_opponent(session_id)
+
+    @application.put(
+        "/api/sessions/{session_id}/opponent/mode",
+        response_model=WorkspaceSnapshot,
+    )
+    async def opponent_mode(
+        request: Request,
+        session_id: str,
+        payload: OpponentModeRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).update_opponent_mode(
+            session_id,
+            payload.mode,
+        )
 
     @application.post(
         "/api/sessions/{session_id}/policy/retry", response_model=WorkspaceSnapshot
@@ -269,6 +312,31 @@ def _register_api_routes(application: FastAPI) -> None:
         return await _manager(request).update_analysis_profile(
             session_id, payload.profile_id
         )
+
+    @application.post(
+        "/api/sessions/{session_id}/opening-tags",
+        response_model=WorkspaceSnapshot,
+    )
+    async def add_opening_tag(
+        request: Request,
+        session_id: str,
+        payload: OpeningTagRequest,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).add_opening_tag(
+            session_id,
+            payload.record_id,
+        )
+
+    @application.delete(
+        "/api/sessions/{session_id}/opening-tags/{record_id}",
+        response_model=WorkspaceSnapshot,
+    )
+    async def remove_opening_tag(
+        request: Request,
+        session_id: str,
+        record_id: int,
+    ) -> WorkspaceSnapshot:
+        return await _manager(request).remove_opening_tag(session_id, record_id)
 
     @application.post(
         "/api/sessions/{session_id}/back", response_model=WorkspaceSnapshot
